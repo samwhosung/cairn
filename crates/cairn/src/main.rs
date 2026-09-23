@@ -1,4 +1,4 @@
-//! The cairn client: flies a window over a WoW 1.12.1 install, or renders one shot of it to a PNG.
+//! The cairn client: walks a window through a WoW 1.12.1 install, or renders one shot of it to a PNG.
 #![allow(
     clippy::needless_pass_by_value,
     reason = "Bevy hands systems their parameters by value"
@@ -6,6 +6,7 @@
 
 mod args;
 mod fly;
+mod player;
 mod shot;
 mod view;
 
@@ -57,7 +58,15 @@ fn main() -> AppExit {
                 }),
                 ..WindowPlugin::default()
             }),
-            fly::FlyPlugin { pose: args.pose },
+            world::collision::CollisionPlugin,
+            player::PlayerPlugin {
+                pose: args.pose,
+                mode: if args.start_flying {
+                    player::Mode::Fly
+                } else {
+                    player::Mode::Walk
+                },
+            },
         )),
         args::Mode::Shot(out) => app.add_plugins((
             shot::headless_plugins(),

@@ -7,8 +7,8 @@ use world::TimeOfDay;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH]
-         fly a window over the install at $WOW_DATA
+usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly]
+         walk the install at $WOW_DATA, starting where the camera looks
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] --out FILE.png
          render one frame without a window, once everything in it has loaded
 
@@ -21,8 +21,12 @@ CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
                                           north, 90 west; EL is the height angle above it
 Without one, the camera looks north over Northshire. --size defaults to 1600x900.
 
-In the window: WASD moves, Space and C rise and sink, a held mouse button looks,
-the wheel sets the speed and Ctrl goes faster.";
+Walking: W and S run forward and back, A and D turn, Q and E strafe, Space jumps and
+leaves the water, the wheel zooms to first person. A held left button turns the camera,
+a held right button steers, both run. Num Lock runs on its own, keypad / walks.
+Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, a held
+button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
+where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
 
 const FLAGS: [&str; 10] = [
     "at", "az", "dist", "el", "eye", "look", "map", "out", "size", "time",
@@ -39,6 +43,7 @@ pub struct Args {
     pub map: String,
     pub time: TimeOfDay,
     pub mode: Mode,
+    pub start_flying: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -51,7 +56,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut args = args.into_iter().peekable();
     let shot = args.next_if(|arg| arg == "shot").is_some();
     let mut given = BTreeMap::new();
+    let mut start_flying = false;
     while let Some(arg) = args.next() {
+        if arg == "--fly" && !start_flying {
+            start_flying = true;
+            continue;
+        }
         let flag = arg
             .strip_prefix("--")
             .filter(|flag| FLAGS.contains(flag))
@@ -78,6 +88,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--out is for a shot: cairn shot ...".into()
         });
     }
+    if shot && start_flying {
+        return Err("--fly is for the window".into());
+    }
     if let Some(path) = &out
         && !path
             .extension()
@@ -91,6 +104,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         map,
         time,
         mode: out.map_or(Mode::Window, Mode::Shot),
+        start_flying,
     })
 }
 
@@ -166,9 +180,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_command_flies_over_northshire() {
+    fn a_bare_command_walks_northshire() {
         let args = parsed("").expect("parses");
         assert_eq!(args.mode, Mode::Window);
+        assert!(!args.start_flying);
+        assert_eq!(args.pose.target, HUMAN_START);
         assert_eq!(args.size, DEFAULT_SIZE);
         assert_eq!(args.pose, Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0));
         assert_eq!((args.map.as_str(), args.time.minute), ("Azeroth", 720));
@@ -194,6 +210,14 @@ mod tests {
         assert_eq!(orbit.mode, Mode::Shot(PathBuf::from("a/b.png")));
         let look = parsed("shot --out x.PNG --look 1,0,0 --eye 0,0,0").expect("parses");
         assert_eq!(look.pose, Pose::look(Vec3::ZERO, Vec3::X));
+    }
+
+    #[test]
+    fn the_window_can_start_flying() {
+        let args = parsed("--fly --map 1").expect("parses");
+        assert!(args.start_flying && args.mode == Mode::Window);
+        assert!(parsed("--fly --fly").is_err());
+        assert!(parsed("shot --fly --out a.png").is_err());
     }
 
     #[test]

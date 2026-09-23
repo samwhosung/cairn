@@ -2,7 +2,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseSc
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
-use crate::view::{Pose, camera};
+use crate::view::Pose;
 
 const LOOK_PER_PIXEL: f32 = 0.003;
 const MAX_PITCH: f32 = 1.54;
@@ -11,38 +11,37 @@ const SPEED_PER_NOTCH: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 20.0;
 const BOOST: f32 = 5.0;
 
-pub struct FlyPlugin {
-    pub pose: Pose,
-}
-
-impl Plugin for FlyPlugin {
-    fn build(&self, app: &mut App) {
-        let pose = self.pose;
-        app.add_systems(Startup, move |mut commands: Commands<'_, '_>| {
-            commands.spawn((camera(pose), Fly::new(pose)));
-        })
-        .add_systems(Update, fly.before(world::WorldSystems));
-    }
-}
-
 #[derive(Component)]
-struct Fly {
+pub struct Fly {
     yaw: f32,
     pitch: f32,
     speed: f32,
 }
 
 impl Fly {
-    fn new(pose: Pose) -> Self {
+    pub fn new(pose: Pose) -> Self {
         Self {
             yaw: pose.heading,
             pitch: pose.pitch,
             speed: START_SPEED,
         }
     }
+
+    pub fn look(&mut self, yaw: f32, pitch: f32) {
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-MAX_PITCH, MAX_PITCH);
+    }
+
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
 }
 
-fn fly(
+pub fn fly(
     time: Res<'_, Time>,
     keys: Res<'_, ButtonInput<KeyCode>>,
     buttons: Res<'_, ButtonInput<MouseButton>>,

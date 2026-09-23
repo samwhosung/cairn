@@ -3,13 +3,14 @@ use world::coords::wow_to_bevy;
 
 pub const HUMAN_START: Vec3 = Vec3::new(-8949.95, -132.49, 83.53);
 
-/// `eye` is in WoW's world coordinates; `heading` is radians from north toward west, `pitch`
-/// radians, up positive.
+/// `eye` and `target` are in WoW's world coordinates; `heading` is radians from north toward
+/// west, `pitch` radians, up positive.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
     pub eye: Vec3,
     pub heading: f32,
     pub pitch: f32,
+    pub target: Vec3,
 }
 
 impl Pose {
@@ -20,6 +21,7 @@ impl Pose {
             eye,
             heading: to.y.atan2(to.x),
             pitch: to.z.atan2(to.x.hypot(to.y)),
+            target: at,
         }
     }
 
@@ -32,6 +34,7 @@ impl Pose {
             eye: at + dist * back,
             heading: az,
             pitch: -el,
+            target: at,
         }
     }
 
