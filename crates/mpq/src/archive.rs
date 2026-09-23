@@ -190,7 +190,7 @@ impl Archive {
         for (i, bounds) in offsets.windows(2).enumerate() {
             let len = bounds[1]
                 .checked_sub(bounds[0])
-                .ok_or_else(|| Error::Decompress(format!("{name}: sector {i} offsets reversed")))?
+                .ok_or_else(|| Error::Corrupt(format!("{name}: sector {i} offsets reversed")))?
                 as usize;
             if len > avail {
                 return Err(Error::Corrupt(format!(
@@ -381,6 +381,16 @@ mod tests {
         assert_eq!(bytes_after(10, 100), 0);
         assert_eq!(bytes_after(100, 10), 90);
         assert_eq!(bytes_after(0, 0), 0);
+    }
+
+    #[test]
+    fn reversed_sector_offsets_are_corrupt() {
+        let offsets: Vec<u8> = [12u32, 8].iter().flat_map(|o| o.to_le_bytes()).collect();
+        let (_dir, result) = open(&one_file("a.bin", FLAG_EXISTS | FLAG_COMPRESS, &offsets));
+        assert!(matches!(
+            result.expect("open").read("a.bin"),
+            Err(Error::Corrupt(_))
+        ));
     }
 
     #[test]
