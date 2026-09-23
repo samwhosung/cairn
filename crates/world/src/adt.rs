@@ -9,7 +9,7 @@ use bevy::math::Vec3;
 use bevy::mesh::{Indices, Mesh, MeshVertexAttribute, PrimitiveTopology};
 use bevy::prelude::Handle;
 use bevy::reflect::TypePath;
-use terrain::{ALPHA_MAP_SIZE, ChunkMesh, SHADOW_MAP_SIZE};
+use terrain::{ALPHA_MAP_SIZE, ChunkMesh, Doodad, SHADOW_MAP_SIZE, WmoInstance};
 
 use crate::coords::wow_to_bevy;
 use crate::layers::{self, FALLBACK_LAYER, Levels, RawLayer};
@@ -20,7 +20,8 @@ const MAP_INDICES: MeshVertexAttribute = Mesh::ATTRIBUTE_UV_1;
 /// What the terrain shader reads as "no shadow map".
 const NO_SHADOW: f32 = -1.0;
 
-/// An ADT tile ready to draw: its terrain as one mesh, and the texture arrays its material reads.
+/// An ADT tile ready to draw: its terrain as one mesh, the texture arrays its material reads, and
+/// what it places.
 #[derive(Asset, TypePath)]
 pub struct AdtTile {
     /// `None` when holes cover every chunk.
@@ -28,6 +29,10 @@ pub struct AdtTile {
     pub layer_array: Handle<Image>,
     pub alpha_array: Handle<Image>,
     pub shadow_array: Handle<Image>,
+    /// The chunks as read, for point queries; their alpha maps live only in the array.
+    pub chunks: Vec<ChunkMesh>,
+    pub doodads: Vec<Doodad>,
+    pub wmos: Vec<WmoInstance>,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +127,14 @@ impl AssetLoader for AdtLoader {
             let aabb = mesh.compute_aabb().unwrap_or_default();
             (ctx.add_labeled_asset("mesh".into(), mesh), aabb)
         });
+        let terrain::TileMesh {
+            mut chunks,
+            doodads,
+            wmos,
+        } = tile;
+        for chunk in &mut chunks {
+            chunk.alpha_map = None;
+        }
         Ok(AdtTile {
             mesh,
             layer_array: ctx.add_labeled_asset(
@@ -136,6 +149,9 @@ impl AssetLoader for AdtLoader {
                 "shadow_array".into(),
                 layers::shadow_array(shadow_count, shadow),
             ),
+            chunks,
+            doodads,
+            wmos,
         })
     }
 

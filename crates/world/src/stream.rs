@@ -74,6 +74,15 @@ pub(crate) struct Streamer {
     tiles: HashMap<(u32, u32), Tile>,
 }
 
+impl Streamer {
+    pub(crate) fn arrived(&self) -> impl Iterator<Item = ((u32, u32), &Handle<AdtTile>)> {
+        self.tiles
+            .iter()
+            .filter(|(_, t)| matches!(t.state, TileState::Drawn(_) | TileState::Empty))
+            .map(|(&key, t)| (key, &t.handle))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_terrain(
     mut commands: Commands<'_, '_>,

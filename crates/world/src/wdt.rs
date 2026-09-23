@@ -3,7 +3,7 @@ use std::io::{self, Cursor};
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::reflect::TypePath;
-use wdt::{WdtFile, WdtReader};
+use wdt::{GlobalWmo, WdtFile, WdtReader};
 
 /// A map's WDT as an asset: which of its 64×64 ADT tiles exist.
 #[derive(Asset, TypePath)]
@@ -15,6 +15,11 @@ impl WdtIndex {
         self.0
             .get_tile(tile_x as usize, tile_y as usize)
             .is_some_and(|t| t.has_adt)
+    }
+
+    /// The one building a map without terrain is made of.
+    pub fn global_wmo(&self) -> Option<&GlobalWmo> {
+        self.0.global_wmo()
     }
 }
 

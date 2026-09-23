@@ -132,4 +132,50 @@ fn a_wmo_loads_its_groups_portals_and_doodads() {
             .any(|b| matches!(b, DoodadBase::Interior { .. })),
         "the inn furnishes its rooms"
     );
+    let props = world::prop_placements(m, 0, &Transform::IDENTITY);
+    assert_eq!(
+        props.len(),
+        root.doodad_sets().first().map_or(0, |s| s.count as usize)
+    );
+}
+
+#[test]
+fn a_tile_places_its_doodads_once() {
+    let Some(data) = data_or_skip() else {
+        return;
+    };
+    let chain = Chain::open(&data).expect("open the chain");
+    let tile = terrain::load_tile_mesh(&chain, "Azeroth", 32, 48).expect("Northshire");
+    let mut app = app(&data);
+    let adt: Handle<world::AdtTile> = app
+        .world()
+        .resource::<AssetServer>()
+        .load("mpq://world/maps/azeroth/azeroth_32_48.adt");
+    wait_for(&mut app, &adt);
+    let adts = app.world().resource::<Assets<world::AdtTile>>();
+    let loaded = adts.get(&adt).expect("loaded");
+    assert_eq!(loaded.doodads.len(), tile.doodads.len());
+    assert_eq!(loaded.wmos.len(), tile.wmos.len());
+    let mut ids: Vec<u32> = loaded.doodads.iter().map(|d| d.unique_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        loaded.doodads.len(),
+        "a tile names each doodad once"
+    );
+    assert!(
+        loaded
+            .wmos
+            .iter()
+            .any(|w| w.model.to_ascii_lowercase().contains("nsabbey")),
+        "the abbey stands in Northshire"
+    );
+    assert_eq!(loaded.chunks.len(), tile.chunks.len());
+    let shadowed = loaded
+        .doodads
+        .iter()
+        .filter(|d| terrain::mcsh_shadowed_at(&loaded.chunks, d.position) == Some(true))
+        .count();
+    assert!(shadowed > 0 && shadowed < loaded.doodads.len());
 }

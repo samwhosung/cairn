@@ -14,6 +14,7 @@ mod light;
 mod m2;
 mod map;
 mod model;
+mod placements;
 mod sky;
 mod source;
 mod stream;
@@ -32,6 +33,9 @@ pub use light::SceneLight;
 pub use m2::M2Model;
 pub use map::CurrentMap;
 pub use model::{BillboardInfo, ModelSubmesh};
+pub use placements::{
+    GLOBAL_WMO_ID, PlacedModel, Placement, Placements, PropPlacement, prop_placements,
+};
 pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_url, wmo_url};
 pub use texture::blp_image;
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
@@ -80,6 +84,7 @@ impl Plugin for WorldPlugin {
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
+        .init_resource::<Placements>()
         .add_systems(Startup, atmosphere::load_catalog)
         .add_systems(
             Update,
@@ -87,6 +92,7 @@ impl Plugin for WorldPlugin {
                 atmosphere::resolve_light,
                 stream::stream_terrain,
                 horizon::stream_horizon,
+                placements::track_placements.after(stream::stream_terrain),
             )
                 .in_set(WorldSystems),
         );
