@@ -5,6 +5,7 @@
 )]
 
 mod args;
+mod fixture;
 mod fly;
 mod player;
 mod shot;
@@ -68,14 +69,23 @@ fn main() -> AppExit {
                 },
             },
         )),
-        args::Mode::Shot(out) => app.add_plugins((
-            shot::headless_plugins(),
-            shot::ShotPlugin {
-                pose: args.pose,
-                size: args.size,
-                out,
-            },
-        )),
+        args::Mode::Shot(out) => {
+            app.add_plugins((
+                shot::headless_plugins(),
+                shot::ShotPlugin {
+                    pose: args.pose,
+                    size: args.size,
+                    out,
+                },
+            ));
+            if let Some(display) = args.display {
+                app.add_plugins((
+                    world::collision::CollisionPlugin,
+                    fixture::FixturePlugin(display),
+                ));
+            }
+            &mut app
+        }
     };
     app.insert_resource(map)
         .insert_resource(args.time)

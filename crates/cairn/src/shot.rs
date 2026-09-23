@@ -15,6 +15,7 @@ use bevy::winit::WinitPlugin;
 
 use world::Residency;
 
+use crate::fixture::FixtureAged;
 use crate::view::{Pose, camera};
 
 const IDENTICAL_CAPTURES: u32 = 3;
@@ -112,6 +113,7 @@ fn capture(
     mut commands: Commands<'_, '_>,
     residency: Res<'_, Residency>,
     pipelines: Res<'_, Pipelines>,
+    aged: Option<Res<'_, FixtureAged>>,
     mut shot: ResMut<'_, Shot>,
     mut exit: MessageWriter<'_, AppExit>,
 ) {
@@ -129,7 +131,11 @@ fn capture(
         );
         return;
     }
-    if shot.capturing || !residency.settled() || !pipelines.built.load(Ordering::Relaxed) {
+    if shot.capturing
+        || !residency.settled()
+        || !pipelines.built.load(Ordering::Relaxed)
+        || aged.is_some_and(|a| !a.0)
+    {
         return;
     }
     shot.capturing = true;

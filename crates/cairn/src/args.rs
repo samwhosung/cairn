@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use bevy::math::{UVec2, Vec3};
 use world::TimeOfDay;
 
+use crate::fixture::Fixture;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
@@ -11,6 +12,10 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly]
          walk the install at $WOW_DATA, starting where the camera looks
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] --out FILE.png
          render one frame without a window, once everything in it has loaded
+       cairn shot --display ID [--age S] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
+         stand a CreatureDisplayInfo display on the ground below AT and shoot it S seconds
+         (1 by default) after it appears, from the orbit around the point a yard above its
+         feet; without a camera, a Northshire hillside from 5 yd south, 10 degrees up
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default.
@@ -28,9 +33,10 @@ Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, 
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 10] = [
-    "at", "az", "dist", "el", "eye", "look", "map", "out", "size", "time",
+const FLAGS: [&str; 12] = [
+    "age", "at", "az", "display", "dist", "el", "eye", "look", "map", "out", "size", "time",
 ];
+const NORTHSHIRE_HILLSIDE: Vec3 = Vec3::new(-8960.0, -145.0, 90.0);
 const DEFAULT_SIZE: UVec2 = UVec2::new(1600, 900);
 const DEFAULT_MAP: &str = "Azeroth";
 const NOON: TimeOfDay = TimeOfDay { minute: 12 * 60 };
@@ -44,6 +50,7 @@ pub struct Args {
     pub time: TimeOfDay,
     pub mode: Mode,
     pub start_flying: bool,
+    pub display: Option<Fixture>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -98,6 +105,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     {
         return Err(format!("{} does not end in .png", path.display()));
     }
+    let display = display(&mut given, shot)?;
     Ok(Args {
         pose: pose(&given)?,
         size,
@@ -105,7 +113,55 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         time,
         mode: out.map_or(Mode::Window, Mode::Shot),
         start_flying,
+        display,
     })
+}
+
+fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fixture>, String> {
+    let Some(id) = given.remove("display") else {
+        return if given.contains_key("age") {
+            Err("--age is for a display shot".into())
+        } else {
+            Ok(None)
+        };
+    };
+    if !shot {
+        return Err("--display is for a shot: cairn shot --display ID ...".into());
+    }
+    let display = id
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("--display wants a CreatureDisplayInfo id, not {id}"))?;
+    let age = given
+        .remove("age")
+        .map_or(Ok(1.0), |a| parse_number("age", &a))?;
+    if age < 0.0 {
+        return Err("--age must not be negative".into());
+    }
+    let orbit = ["at", "az", "el", "dist"];
+    let (at, az_deg, el_deg, dist) = if orbit.iter().all(|f| given.contains_key(*f)) {
+        (
+            parse_triple("at", &given["at"])?,
+            parse_number("az", &given["az"])?,
+            parse_number("el", &given["el"])?,
+            parse_number("dist", &given["dist"])?,
+        )
+    } else if given.is_empty() {
+        (NORTHSHIRE_HILLSIDE, 0.0, 10.0, 5.0)
+    } else {
+        return Err("a display shot takes its camera as --at, --az, --el and --dist".into());
+    };
+    if dist <= 0.0 {
+        return Err("--dist must be above 0".into());
+    }
+    Ok(Some(Fixture {
+        display,
+        age,
+        at,
+        az_deg,
+        el_deg,
+        dist,
+    }))
 }
 
 fn pose(given: &BTreeMap<String, String>) -> Result<Pose, String> {
@@ -221,6 +277,29 @@ mod tests {
     }
 
     #[test]
+    fn a_display_shot_takes_its_subject_and_orbit() {
+        let args = parsed("shot --display 3167 --age 2.5 --out a.png").expect("parses");
+        assert_eq!(
+            args.display,
+            Some(Fixture {
+                display: 3167,
+                age: 2.5,
+                at: NORTHSHIRE_HILLSIDE,
+                az_deg: 0.0,
+                el_deg: 10.0,
+                dist: 5.0,
+            })
+        );
+        let args = parsed("shot --display 10913 --at 1,2,3 --az 90 --el 20 --dist 7 --out a.png")
+            .expect("parses");
+        let f = args.display.expect("a display");
+        assert_eq!(
+            (f.age, f.at, f.az_deg, f.el_deg, f.dist),
+            (1.0, Vec3::new(1.0, 2.0, 3.0), 90.0, 20.0, 7.0)
+        );
+    }
+
+    #[test]
     fn mistakes_are_refused() {
         for line in [
             "shot",
@@ -242,6 +321,12 @@ mod tests {
             "--time 12:60",
             "--time 1230",
             "--time noon",
+            "--display 3167",
+            "shot --age 2 --out a.png",
+            "shot --display x --out a.png",
+            "shot --display 1 --age -1 --out a.png",
+            "shot --display 1 --at 0,0,0 --out a.png",
+            "shot --display 1 --at 0,0,0 --az 0 --el 10 --dist 0 --out a.png",
         ] {
             assert!(parsed(line).is_err(), "{line}");
         }
