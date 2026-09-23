@@ -1,0 +1,17 @@
+[package]
+name = "wmo"
+description = "Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wowfile = { path = "../wowfile" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+mpq = { path = "../mpq" }

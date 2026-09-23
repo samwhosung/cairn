@@ -20,6 +20,7 @@ gates enforce the rest.
 
 <!-- crates:start -->
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
+- [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
 - [`wowfile`](crates/wowfile) — Bounds-checked little-endian reads and the chunk walk the WoW file formats share
 - [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
 <!-- crates:end -->
