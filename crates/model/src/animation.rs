@@ -271,12 +271,10 @@ struct EventRecord {
 }
 
 /// Parse every sequence of an M2 into keyframes and events, in file order, skipping zero-length
-/// sequences. Empty when `b` is under `0x40` bytes or not MD20.
-///
-/// Panics on an MD20 `b` shorter than `0x11c` bytes.
+/// sequences. Empty when `b` is too short for the event table's header entry or not MD20.
 #[allow(clippy::too_many_lines)]
 pub fn parse_m2_animations(b: &[u8]) -> Vec<ModelAnimation> {
-    if b.len() < 0x40 || &b[0..4] != b"MD20" {
+    if b.len() < 0x11c || &b[0..4] != b"MD20" {
         return Vec::new();
     }
     let (seq_count, seq_ofs) = (le_u32(b, 0x1c) as usize, le_u32(b, 0x20) as usize);

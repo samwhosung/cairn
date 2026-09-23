@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use m2::parse_m2;
+use wowfile::ByteExt;
 
 use crate::{
     BillboardKind, BoneSpin, Error, ParentArm, le_f32, le_u16, le_u32, parse_m2_animations,
@@ -131,10 +132,8 @@ pub struct StringAnchors {
 }
 
 /// Read the `$WTT`/`$WTB` string anchors from the raw event table; `None` unless both are there.
-///
-/// Panics when `b` is shorter than `0x11c` bytes.
 pub fn parse_m2_string_anchors(b: &[u8]) -> Option<StringAnchors> {
-    let (ev_count, ev_ofs) = (le_u32(b, 0x114) as usize, le_u32(b, 0x118) as usize);
+    let (ev_count, ev_ofs) = (b.u32_at(0x114)? as usize, b.u32_at(0x118)? as usize);
     let (mut top, mut bottom) = (None, None);
     for e in 0..ev_count {
         let erec = ev_ofs + e * 44;
@@ -164,10 +163,8 @@ pub fn parse_m2_string_anchors(b: &[u8]) -> Option<StringAnchors> {
 
 /// The first `$CCH` event marker, the fishing line's anchor on the pole, as `(bone index,
 /// position in raw WoW model space)`; `None` for a model without one.
-///
-/// Panics when `b` is shorter than `0x11c` bytes.
 pub fn parse_m2_cch_marker(b: &[u8]) -> Option<(u16, [f32; 3])> {
-    let (ev_count, ev_ofs) = (le_u32(b, 0x114) as usize, le_u32(b, 0x118) as usize);
+    let (ev_count, ev_ofs) = (b.u32_at(0x114)? as usize, b.u32_at(0x118)? as usize);
     for e in 0..ev_count {
         let erec = ev_ofs + e * 44;
         if erec + 44 > b.len() {
@@ -257,4 +254,22 @@ pub fn m2_bone_spins(bytes: &[u8]) -> HashMap<u16, BoneSpin> {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_input_too_short_for_the_event_table_has_no_markers() {
+        for len in [0, 4, 0x40, 0x117, 0x11b] {
+            let mut b = vec![0u8; len];
+            if len >= 4 {
+                b[..4].copy_from_slice(b"MD20");
+            }
+            assert!(parse_m2_string_anchors(&b).is_none(), "{len}");
+            assert!(parse_m2_cch_marker(&b).is_none(), "{len}");
+            assert!(parse_m2_animations(&b).is_empty(), "{len}");
+        }
+    }
 }
