@@ -1,0 +1,11 @@
+[package]
+name = "wowfile"
+description = "Bounds-checked little-endian reads and the chunk walk the WoW file formats share"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
