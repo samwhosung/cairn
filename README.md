@@ -19,6 +19,7 @@ gates enforce the rest.
 ## Crates
 
 <!-- crates:start -->
+- [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
 <!-- crates:end -->
 
