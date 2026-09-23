@@ -1,0 +1,16 @@
+[package]
+name = "character"
+description = "World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blp = { path = "../blp" }
+dbc = { path = "../dbc" }
+mpq = { path = "../mpq" }
+
+[lints]
+workspace = true
