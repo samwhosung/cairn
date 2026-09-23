@@ -24,7 +24,7 @@ gates enforce the rest.
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`cairn`](crates/cairn) — The client: flies a window over your WoW 1.12.1 install, or renders one shot of it to a PNG
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
-- [`light`](crates/light) — Reads World of Warcraft 1.12.1 lighting tables and samples fog, sun, sky and water colour by place, weather and time
+- [`light`](crates/light) — Reads World of Warcraft 1.12.1 lighting tables into fog, sun, sky and water colour by place, weather and time, and traces the sun and moon through the day
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them

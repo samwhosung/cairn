@@ -1,8 +1,9 @@
-//! Reads the client's lighting tables and samples them into fog, sun, sky and water colours.
+//! The client's lighting: tables sampled into fog, sun, sky and water colour, and the day curves.
 
 mod atmosphere;
 mod bands;
 mod catalog;
+pub mod daynight;
 mod error;
 mod report;
 mod sample;
