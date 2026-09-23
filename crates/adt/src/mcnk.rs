@@ -7,12 +7,12 @@ const HEADER: usize = 128;
 const VERTICES: usize = 145;
 const SHADOW_BYTES: usize = 512;
 
-/// A terrain vertex normal, stored as signed bytes in the order x, z, y.
+/// A terrain vertex normal in world axes: X north, Y west, Z up.
 #[derive(Debug, Clone, Copy)]
 pub struct VertexNormal {
     pub x: i8,
-    pub z: i8,
     pub y: i8,
+    pub z: i8,
 }
 
 impl VertexNormal {
@@ -169,10 +169,10 @@ pub(crate) fn read_mcnk(data: &[u8]) -> Result<McnkChunk, Error> {
             .0
             .iter()
             .take(VERTICES)
-            .map(|&[x, z, y]| VertexNormal {
+            .map(|&[x, y, z]| VertexNormal {
                 x: x as i8,
-                z: z as i8,
                 y: y as i8,
+                z: z as i8,
             })
             .collect(),
     });
@@ -301,6 +301,24 @@ mod tests {
         data.extend([1, 2, 3, 4, 5, 6, 7]);
         let mcnk = read_mcnk(&data).expect("parses");
         assert_eq!(mcnk.alpha.expect("MCAL found").data, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn normals_are_world_axes_in_file_order() {
+        let mut data = vec![0u8; HEADER];
+        data[0x18..0x1C].copy_from_slice(&128u32.to_le_bytes());
+        let bytes: Vec<u8> = (0..VERTICES).flat_map(|_| [127, 0x81, 64]).collect();
+        data.extend(chunk(*b"RNCM", &bytes));
+        let normals = read_mcnk(&data)
+            .expect("parses")
+            .normals
+            .expect("MCNR found");
+        let n = normals.normals[VERTICES - 1];
+        assert_eq!((n.x, n.y, n.z), (127, -127, 64));
+        assert_eq!(
+            n.to_normalized().map(f32::to_bits),
+            [1.0, -1.0, 64.0 / 127.0].map(f32::to_bits)
+        );
     }
 
     #[test]

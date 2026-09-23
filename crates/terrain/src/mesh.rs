@@ -1,6 +1,4 @@
-use adt::{
-    CombinedAlphaMap, MCNK_DO_NOT_FIX_ALPHA, McnkChunk, McshChunk, RootAdt, VertexNormal, parse_adt,
-};
+use adt::{CombinedAlphaMap, MCNK_DO_NOT_FIX_ALPHA, McnkChunk, McshChunk, RootAdt, parse_adt};
 
 use crate::Error;
 use crate::liquid::{LiquidMesh, build_liquid_mesh};
@@ -194,7 +192,7 @@ fn chunk_mesh(root: &RootAdt, mcnk: &McnkChunk) -> Option<ChunkMesh> {
     let mut push = |idx: u32, position: [f32; 3], uv: [f32; 2]| {
         positions.push(position);
         if let Some(mcnr) = mcnr {
-            normals.push(world_normal(mcnr.normals[idx as usize]));
+            normals.push(mcnr.normals[idx as usize].to_normalized());
         }
         uvs.push(uv);
     };
@@ -293,11 +291,6 @@ fn shadow_texels(mcsh: &McshChunk) -> Vec<u8> {
         }
     }
     out
-}
-
-/// The normal's `x, z, y` fields are, in file order, world X, Y and Z.
-fn world_normal(n: VertexNormal) -> [f32; 3] {
-    [n.x, n.z, n.y].map(|v| f32::from(v) / 127.0)
 }
 
 pub(crate) fn is_hole(holes: u16, row: u32, col: u32) -> bool {

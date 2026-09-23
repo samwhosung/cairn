@@ -113,3 +113,50 @@ fn a_river_mouth_carries_two_liquids() {
         assert_ne!(a.tile_flags, b.tile_flags);
     }
 }
+
+#[test]
+fn a_sloped_chunks_normals_agree_with_its_heights() {
+    let Some(chain) = chain_or_skip() else {
+        return;
+    };
+    let tile = read(&chain, "World\\Maps\\Azeroth\\Azeroth_33_46.adt");
+    let cell = 1600.0f32 / 3.0 / 128.0;
+    let cosine = |a: [f32; 3], b: [f32; 3]| {
+        let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        f64::from(dot / (len(a) * len(b)))
+    };
+    let (mut vertices, mut as_read, mut z_as_y) = (0, 0.0, 0.0);
+    for chunk in &tile.mcnk_chunks {
+        let (Some(heights), Some(mcnr)) = (&chunk.heights, &chunk.normals) else {
+            continue;
+        };
+        let h = |r: usize, c: usize| heights.heights[r * 17 + c];
+        let (lo, hi) = heights
+            .heights
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        if hi - lo < 20.0 {
+            continue;
+        }
+        for r in 1..8 {
+            for c in 1..8 {
+                let (north, south) = (h(r - 1, c), h(r + 1, c));
+                let (west, east) = (h(r, c - 1), h(r, c + 1));
+                let from_heights = [
+                    (south - north) / (2.0 * cell),
+                    (east - west) / (2.0 * cell),
+                    1.0,
+                ];
+                let [x, y, z] = mcnr.normals[r * 17 + c].to_normalized();
+                as_read += cosine(from_heights, [x, y, z]);
+                z_as_y += cosine(from_heights, [x, z, y]);
+                vertices += 1;
+            }
+        }
+    }
+    assert!(vertices > 1000, "{vertices}");
+    let (as_read, z_as_y) = (as_read / f64::from(vertices), z_as_y / f64::from(vertices));
+    assert!(as_read > 0.98, "{as_read}");
+    assert!(z_as_y < 0.5, "{z_as_y}");
+}
