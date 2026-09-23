@@ -8,7 +8,7 @@ use bevy::asset::io::{
     AssetReader, AssetReaderError, AssetReaderFuture, AssetSourceBuilder, ErasedAssetReader,
     PathStream, Reader, VecReader,
 };
-use bevy::prelude::App;
+use bevy::prelude::{App, Resource};
 use bevy::tasks::ConditionalSendFuture;
 use mpq::{Chain, ChainError};
 
@@ -17,17 +17,28 @@ pub const MPQ_SOURCE: &str = "mpq";
 
 const SAMPLER_MARKER: char = '@';
 
-/// Registers the `mpq://` source over the patch chain in `data`, the install's `Data` directory.
-/// Call it before adding `AssetPlugin` (part of `DefaultPlugins`), which builds the sources.
-pub fn register_source(app: &mut App, data: &Path) -> Result<(), ChainError> {
+/// The install's patch chain, shared by the asset source and the systems that read whole files.
+#[derive(Resource, Clone)]
+pub struct Install(pub Arc<Chain>);
+
+impl Install {
+    /// Opens the patch chain in `data`, the install's `Data` directory.
+    pub fn open(data: &Path) -> Result<Self, ChainError> {
+        Ok(Self(Arc::new(Chain::open(data)?)))
+    }
+}
+
+/// Registers the `mpq://` source over `install` and keeps `install` as a resource. Call it before
+/// adding `AssetPlugin` (part of `DefaultPlugins`), which builds the sources.
+pub fn register_source(app: &mut App, install: &Install) {
     let reader = MpqReader {
-        chain: Arc::new(Chain::open(data)?),
+        chain: install.0.clone(),
     };
     app.register_asset_source(
         MPQ_SOURCE,
         AssetSourceBuilder::new(move || -> Box<dyn ErasedAssetReader> { Box::new(reader.clone()) }),
     );
-    Ok(())
+    app.insert_resource(install.clone());
 }
 
 #[derive(Clone)]

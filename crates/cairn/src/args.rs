@@ -2,14 +2,18 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use bevy::math::{UVec2, Vec3};
+use world::TimeOfDay;
 
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--size WxH]
+usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH]
          fly a window over the install at $WOW_DATA
-       cairn shot [CAMERA] [--size WxH] --out FILE.png
+       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] --out FILE.png
          render one frame without a window, once everything in it has loaded
+
+MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
+of day the world is lit for, 12:00 by default.
 
 CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
   --eye X,Y,Z --look X,Y,Z                stand at the eye, look at the point
@@ -20,14 +24,20 @@ Without one, the camera looks north over Northshire. --size defaults to 1600x900
 In the window: WASD moves, Space and C rise and sink, a held mouse button looks,
 the wheel sets the speed and Ctrl goes faster.";
 
-const FLAGS: [&str; 8] = ["at", "az", "dist", "el", "eye", "look", "out", "size"];
+const FLAGS: [&str; 10] = [
+    "at", "az", "dist", "el", "eye", "look", "map", "out", "size", "time",
+];
 const DEFAULT_SIZE: UVec2 = UVec2::new(1600, 900);
+const DEFAULT_MAP: &str = "Azeroth";
+const NOON: TimeOfDay = TimeOfDay { minute: 12 * 60 };
 const MAX_SIDE: u32 = 8192;
 
 #[derive(Debug, PartialEq)]
 pub struct Args {
     pub pose: Pose,
     pub size: UVec2,
+    pub map: String,
+    pub time: TimeOfDay,
     pub mode: Mode,
 }
 
@@ -54,6 +64,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let size = given
         .remove("size")
         .map_or(Ok(DEFAULT_SIZE), |size| parse_size(&size))?;
+    let map = given
+        .remove("map")
+        .unwrap_or_else(|| DEFAULT_MAP.to_owned());
+    let time = given
+        .remove("time")
+        .map_or(Ok(NOON), |time| parse_time(&time))?;
     let out = given.remove("out").map(PathBuf::from);
     if out.is_some() != shot {
         return Err(if shot {
@@ -72,6 +88,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     Ok(Args {
         pose: pose(&given)?,
         size,
+        map,
+        time,
         mode: out.map_or(Mode::Window, Mode::Shot),
     })
 }
@@ -122,6 +140,15 @@ fn parse_triple(flag: &str, value: &str) -> Result<Vec3, String> {
     Ok(Vec3::new(x, y, z))
 }
 
+fn parse_time(value: &str) -> Result<TimeOfDay, String> {
+    let field = |s: &str, below: u32| s.parse::<u32>().ok().filter(|n| *n < below);
+    value
+        .split_once(':')
+        .and_then(|(h, m)| Some(field(h, 24)? * 60 + field(m, 60)?))
+        .map(|minute| TimeOfDay { minute })
+        .ok_or_else(|| format!("--time wants HH:MM, 00:00 to 23:59, not {value}"))
+}
+
 fn parse_size(value: &str) -> Result<UVec2, String> {
     let side = |s: &str| s.parse::<u32>().ok().filter(|n| (1..=MAX_SIDE).contains(n));
     value
@@ -144,6 +171,15 @@ mod tests {
         assert_eq!(args.mode, Mode::Window);
         assert_eq!(args.size, DEFAULT_SIZE);
         assert_eq!(args.pose, Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0));
+        assert_eq!((args.map.as_str(), args.time.minute), ("Azeroth", 720));
+    }
+
+    #[test]
+    fn the_map_and_the_hour_are_taken_as_given() {
+        let args = parsed("shot --map 1 --time 06:30 --out a.png").expect("parses");
+        assert_eq!((args.map.as_str(), args.time.minute), ("1", 390));
+        let args = parsed("--time 23:59 --map Kalimdor").expect("parses");
+        assert_eq!((args.map.as_str(), args.time.minute), ("Kalimdor", 1439));
     }
 
     #[test]
@@ -178,6 +214,10 @@ mod tests {
             "--size 1600x900 --size 800x600",
             "--fov 90",
             "--eye",
+            "--time 24:00",
+            "--time 12:60",
+            "--time 1230",
+            "--time noon",
         ] {
             assert!(parsed(line).is_err(), "{line}");
         }

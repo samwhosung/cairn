@@ -64,7 +64,8 @@ fn textures_load_through_the_mpq_source() {
     };
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    world::register_source(&mut app, &data).expect("open the chain");
+    let install = world::Install::open(&data).expect("open the chain");
+    world::register_source(&mut app, &install);
     app.add_plugins(AssetPlugin::default())
         .init_asset::<Image>()
         .add_plugins(world::LoadersPlugin);

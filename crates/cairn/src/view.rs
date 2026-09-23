@@ -1,9 +1,4 @@
-use std::f32::consts::FRAC_PI_4;
-
-use bevy::camera::{PerspectiveProjection, Projection};
-use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
-use bevy::render::view::Msaa;
 use world::coords::wow_to_bevy;
 
 pub const HUMAN_START: Vec3 = Vec3::new(-8949.95, -132.49, 83.53);
@@ -47,21 +42,8 @@ impl Pose {
     }
 }
 
-/// The world camera at `pose`. It does not tonemap, so shaded colors reach the target as they
-/// are, and it does not multisample, like the 1.12.1 client by default.
 pub fn camera(pose: Pose) -> impl Bundle {
-    (
-        Camera3d::default(),
-        Projection::from(PerspectiveProjection {
-            fov: FRAC_PI_4,
-            near: 0.1,
-            far: 3000.0,
-            ..PerspectiveProjection::default()
-        }),
-        Tonemapping::None,
-        Msaa::Off,
-        pose.transform(),
-    )
+    world::world_camera(pose.transform())
 }
 
 #[cfg(test)]

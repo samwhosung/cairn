@@ -6,13 +6,13 @@
 
 mod args;
 mod fly;
-mod ground;
 mod shot;
 mod view;
 
 use std::path::Path;
 
 use bevy::prelude::*;
+use world::{CurrentMap, Install};
 
 fn main() -> AppExit {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -31,11 +31,22 @@ fn main() -> AppExit {
         eprintln!("cairn: set WOW_DATA to the Data directory of a WoW 1.12.1 install");
         return AppExit::from_code(2);
     };
+    let install = match Install::open(Path::new(&data)) {
+        Ok(install) => install,
+        Err(e) => {
+            eprintln!("cairn: {e}");
+            return AppExit::error();
+        }
+    };
+    let map = match CurrentMap::find(&install.0, &args.map) {
+        Ok(map) => map,
+        Err(e) => {
+            eprintln!("cairn: {e}");
+            return AppExit::from_code(2);
+        }
+    };
     let mut app = App::new();
-    if let Err(e) = world::register_source(&mut app, Path::new(&data)) {
-        eprintln!("cairn: {e}");
-        return AppExit::error();
-    }
+    world::register_source(&mut app, &install);
     match args.mode {
         args::Mode::Window => app.add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -57,7 +68,8 @@ fn main() -> AppExit {
             },
         )),
     };
-    app.init_resource::<shot::ShotWaitsFor>()
-        .add_plugins((world::LoadersPlugin, ground::GrassFieldPlugin))
+    app.insert_resource(map)
+        .insert_resource(args.time)
+        .add_plugins((world::LoadersPlugin, world::WorldPlugin))
         .run()
 }

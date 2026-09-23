@@ -10,7 +10,7 @@ use bevy::render::render_resource::TextureFormat;
 use mpq::Chain;
 use terrain::ChunkMesh;
 use world::coords::wow_to_bevy;
-use world::{AdtTile, WdtIndex};
+use world::{AdtTile, CurrentMap, WdtIndex};
 
 fn data_or_skip() -> Option<PathBuf> {
     let data = std::env::var_os("WOW_DATA").map(PathBuf::from);
@@ -23,7 +23,8 @@ fn data_or_skip() -> Option<PathBuf> {
 fn app_without_gpu(data: &Path) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    world::register_source(&mut app, data).expect("open the chain");
+    let install = world::Install::open(data).expect("open the chain");
+    world::register_source(&mut app, &install);
     app.add_plugins(AssetPlugin::default())
         .init_asset::<Image>()
         .init_asset::<Mesh>()
@@ -150,4 +151,22 @@ fn the_tile_index_is_the_wdt_crates() {
             assert_eq!(index.has_tile(x, y), has, "{map} {x}_{y}");
         }
     }
+}
+
+#[test]
+fn maps_are_found_by_id_or_directory() {
+    let Some(data) = data_or_skip() else {
+        return;
+    };
+    let chain = Chain::open(&data).expect("open the chain");
+    let map = |name| CurrentMap::find(&chain, name);
+    let kalimdor = CurrentMap {
+        id: 1,
+        directory: "Kalimdor".into(),
+    };
+    assert_eq!(map("1"), Ok(kalimdor.clone()));
+    assert_eq!(map("kalimdor"), Ok(kalimdor));
+    assert_eq!(map("Azeroth").map(|m| m.id), Ok(0));
+    assert!(map("NoSuchMap").is_err());
+    assert!(map("4000").is_err());
 }

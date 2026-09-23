@@ -6,8 +6,8 @@ an editor that agents drive, and a server that scales from one player to a crowd
 It uses the look, the movement and the assets of World of Warcraft 1.12.1, read at runtime from
 your own copy of the game. No game data is included here, and none ever will be.
 
-**Status:** just started. `WOW_DATA=<your install>/Data cargo run -p cairn` flies a window over a
-stand-in field of grass; `-- --help` shows the cameras and the headless shot.
+**Status:** just started. `WOW_DATA=<your install>/Data cargo run -p cairn` flies a window over the
+terrain, lit by the hour; `-- --help` shows the maps, the cameras and the headless shot.
 
 ## Working on it
 
@@ -32,7 +32,7 @@ gates enforce the rest.
 - [`wdl`](crates/wdl) — Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
 - [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
-- [`world`](crates/world) — Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, textures, map tiles and WoW's axes
+- [`world`](crates/world) — World of Warcraft 1.12.1 in Bevy: its files as assets, its world drawn as the client draws it
 - [`wowfile`](crates/wowfile) — Bounds-checked little-endian reads and the chunk walk the WoW file formats share
 - [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
 <!-- crates:end -->

@@ -1,2 +1,6 @@
 [files]
 extend-exclude = ["LICENSE-*"]
+
+# A grid index along z, beside `ix`.
+[default.extend-identifiers]
+iz = "iz"

@@ -1,6 +1,6 @@
 [package]
 name = "world"
-description = "Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, textures, map tiles and WoW's axes"
+description = "World of Warcraft 1.12.1 in Bevy: its files as assets, its world drawn as the client draws it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,9 @@ publish.workspace = true
 [dependencies]
 bevy.workspace = true
 blp = { path = "../blp" }
+dbc = { path = "../dbc" }
 image = { version = "0.25", default-features = false }
+light = { path = "../light" }
 mpq = { path = "../mpq" }
 terrain = { path = "../terrain" }
 wdt = { path = "../wdt" }

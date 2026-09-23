@@ -21,7 +21,7 @@ impl Plugin for FlyPlugin {
         app.add_systems(Startup, move |mut commands: Commands<'_, '_>| {
             commands.spawn((camera(pose), Fly::new(pose)));
         })
-        .add_systems(Update, fly);
+        .add_systems(Update, fly.before(world::WorldSystems));
     }
 }
 
@@ -115,7 +115,7 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
                 100,
             )))
-            .add_systems(Update, fly);
+            .add_systems(Update, fly.before(world::WorldSystems));
         let camera = app
             .world_mut()
             .spawn((pose.transform(), Fly::new(pose)))

@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use bevy::app::{PluginGroupBuilder, ScheduleRunnerPlugin};
-use bevy::asset::{LoadState, UntypedHandle};
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::render_resource::{CachedPipelineState, PipelineCache, TextureFormat};
@@ -14,13 +13,12 @@ use bevy::shader::PipelineCacheError;
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 
+use world::Residency;
+
 use crate::view::{Pose, camera};
 
 const IDENTICAL_CAPTURES: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(120);
-
-#[derive(Resource, Default)]
-pub struct ShotWaitsFor(pub Vec<UntypedHandle>);
 
 pub fn headless_plugins() -> PluginGroupBuilder {
     DefaultPlugins
@@ -112,8 +110,7 @@ fn watch_pipelines(cache: Res<'_, PipelineCache>, pipelines: Res<'_, Pipelines>)
 
 fn capture(
     mut commands: Commands<'_, '_>,
-    server: Res<'_, AssetServer>,
-    waits_for: Res<'_, ShotWaitsFor>,
+    residency: Res<'_, Residency>,
     pipelines: Res<'_, Pipelines>,
     mut shot: ResMut<'_, Shot>,
     mut exit: MessageWriter<'_, AppExit>,
@@ -132,17 +129,7 @@ fn capture(
         );
         return;
     }
-    for handle in &waits_for.0 {
-        if let LoadState::Failed(error) = server.load_state(handle) {
-            fail(&mut exit, &error.to_string());
-            return;
-        }
-    }
-    let loaded = waits_for
-        .0
-        .iter()
-        .all(|h| server.is_loaded_with_dependencies(h));
-    if shot.capturing || !loaded || !pipelines.built.load(Ordering::Relaxed) {
+    if shot.capturing || !residency.settled() || !pipelines.built.load(Ordering::Relaxed) {
         return;
     }
     shot.capturing = true;
