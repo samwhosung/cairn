@@ -1,0 +1,18 @@
+[package]
+name = "blp"
+description = "Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+texpresso = "2"
+wowfile = { path = "../wowfile" }
+
+[dev-dependencies]
+mpq = { path = "../mpq" }
+
+[lints]
+workspace = true
