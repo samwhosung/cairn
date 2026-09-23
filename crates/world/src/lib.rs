@@ -11,7 +11,9 @@ mod decode;
 mod horizon;
 mod layers;
 mod light;
+mod m2;
 mod map;
+mod model;
 mod sky;
 mod source;
 mod stream;
@@ -19,6 +21,7 @@ mod terrain;
 mod texture;
 mod view;
 mod wdt;
+mod wmo;
 
 use bevy::asset::AssetApp;
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
@@ -26,20 +29,28 @@ use bevy::prelude::*;
 
 pub use adt::AdtTile;
 pub use light::SceneLight;
+pub use m2::M2Model;
 pub use map::CurrentMap;
+pub use model::{BillboardInfo, ModelSubmesh};
 pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_url, wmo_url};
 pub use texture::blp_image;
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
 pub use wdt::WdtIndex;
+pub use wmo::{DoodadBase, WmoGroupNav, WmoModel};
 
-/// Registers the loaders for BLP textures and for WDT and ADT map files. Add it after
-/// `DefaultPlugins`: their render plugin says whether the GPU takes BC textures when it finishes,
-/// and textures decode to RGBA8 without that answer.
+/// Registers the loaders for BLP textures, WDT and ADT map files, and M2 and WMO models. Add it
+/// after `DefaultPlugins`: their render plugin says whether the GPU takes BC textures when it
+/// finishes, and textures decode to RGBA8 without that answer.
 pub struct LoadersPlugin;
 
 impl Plugin for LoadersPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset::<AdtTile>().init_asset::<WdtIndex>();
+        app.init_asset::<AdtTile>()
+            .init_asset::<WdtIndex>()
+            .init_asset::<M2Model>()
+            .init_asset::<WmoModel>()
+            .register_asset_loader(m2::M2Loader)
+            .register_asset_loader(wmo::WmoLoader);
     }
 
     fn finish(&self, app: &mut App) {

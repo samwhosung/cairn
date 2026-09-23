@@ -13,6 +13,7 @@ blp = { path = "../blp" }
 dbc = { path = "../dbc" }
 image = { version = "0.25", default-features = false }
 light = { path = "../light" }
+model = { path = "../model" }
 mpq = { path = "../mpq" }
 terrain = { path = "../terrain" }
 wdl = { path = "../wdl" }
