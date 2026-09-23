@@ -207,6 +207,7 @@ impl Archive {
             }
             let raw = read_at(file, pos + bounds[0], len)?;
             let want = (size - out.len()).min(self.sector_size);
+            let before = out.len();
             if len >= want {
                 // A sector that would not shrink is stored as is.
                 out.extend_from_slice(&raw[..want]);
@@ -215,6 +216,12 @@ impl Archive {
                 decompress(CODEC_IMPLODE, &raw, want, name, &mut out)?;
             } else {
                 decompress(raw[0], &raw[1..], want, name, &mut out)?;
+            }
+            if out.len() - before != want {
+                return Err(Error::Decompress(format!(
+                    "{name}: sector {i} inflated to {} of {want} bytes",
+                    out.len() - before
+                )));
             }
         }
         Ok(out)
@@ -405,6 +412,37 @@ mod tests {
         assert_eq!(out.len(), SECTOR_SIZE + 100);
         assert!(out[..SECTOR_SIZE].iter().all(|&b| b == 0));
         assert!(out[SECTOR_SIZE..].iter().all(|&b| b == 7));
+    }
+
+    #[test]
+    fn a_sector_that_inflates_short_is_refused() {
+        let zlib = |raw: &[u8]| {
+            let mut encoder = ZlibEncoder::new(vec![CODEC_ZLIB], Compression::default());
+            encoder.write_all(raw).expect("compress");
+            encoder.finish().expect("compress")
+        };
+        let short = zlib(&[0; 10]);
+        let tail = zlib(&[7; 100]);
+        let table_len = 12;
+        let mut data = Vec::new();
+        for offset in [
+            table_len,
+            table_len + short.len(),
+            table_len + short.len() + tail.len(),
+        ] {
+            data.extend_from_slice(&(offset as u32).to_le_bytes());
+        }
+        data.extend_from_slice(&short);
+        data.extend_from_slice(&tail);
+        let file = Entry {
+            unpacked_size: (SECTOR_SIZE + 100) as u32,
+            ..Entry::new("a.bin", FLAG_EXISTS | FLAG_COMPRESS, &data)
+        };
+        let (_dir, result) = open(&archive(&[file]));
+        assert!(matches!(
+            result.expect("open").read("a.bin"),
+            Err(Error::Decompress(_))
+        ));
     }
 
     #[test]
