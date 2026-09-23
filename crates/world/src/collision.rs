@@ -88,7 +88,6 @@ impl Plugin for CollisionPlugin {
             .init_resource::<stream::CollisionStreamer>()
             .init_resource::<CollisionResidency>()
             .init_resource::<liquid::WaterIndex>()
-            .init_resource::<crate::submersion::Underwater>()
             .add_systems(
                 Update,
                 (
@@ -97,7 +96,6 @@ impl Plugin for CollisionPlugin {
                     stream::spawn_placement_colliders,
                     weld::flush_welds,
                     liquid::maintain_water_index,
-                    crate::submersion::detect_submersion,
                     stream::publish_residency,
                 )
                     .chain()

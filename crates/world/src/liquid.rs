@@ -1,5 +1,5 @@
 //! The world's liquids: the animated surfaces of lakes, rivers, the sea, buildings' pools, magma
-//! and slime, and where they are.
+//! and slime, where they are, and what the camera's eye is under.
 
 mod frames;
 mod query;
@@ -29,13 +29,23 @@ pub enum LiquidClock {
 #[derive(Component)]
 pub struct FoamPatch;
 
+pub(crate) use crate::submersion::{SubmergedEye, SubmersionVerdict, Underwater};
+
 pub(crate) struct LiquidPlugin;
 
 impl Plugin for LiquidPlugin {
     fn build(&self, app: &mut App) {
         surface::plugin(app);
         app.init_resource::<WaterIndex>()
+            .init_resource::<Underwater>()
+            .init_resource::<SubmergedEye>()
             .add_systems(Startup, surface::setup_liquid)
-            .add_systems(PreUpdate, spatial::maintain_water_index);
+            .add_systems(PreUpdate, spatial::maintain_water_index)
+            .add_systems(
+                Update,
+                crate::submersion::detect_submersion
+                    .in_set(SubmersionVerdict)
+                    .after(crate::portal::compute_wmo_pvs),
+            );
     }
 }

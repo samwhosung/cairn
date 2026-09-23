@@ -1,9 +1,10 @@
 use bevy::prelude::*;
-use light::{Atmosphere, LightCatalog, Submersion, daynight};
+use light::{Atmosphere, LightCatalog, daynight};
 
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::light::{Fog, SceneLight};
 use crate::room::{CameraRoom, RoomCrossfade};
+use crate::submersion::{SubmergedEye, Underwater};
 use crate::view::{FARCLIP, WorldCamera};
 use crate::{CurrentMap, Install, TimeOfDay};
 
@@ -27,6 +28,8 @@ pub(crate) fn resolve_light(
     room: Res<'_, CameraRoom>,
     mut crossfade: ResMut<'_, RoomCrossfade>,
     camera: Query<'_, '_, &Transform, With<WorldCamera>>,
+    underwater: Res<'_, Underwater>,
+    submerged: Res<'_, SubmergedEye>,
     mut light: ResMut<'_, SceneLight>,
     mut clear: ResMut<'_, ClearColor>,
 ) {
@@ -41,12 +44,19 @@ pub(crate) fn resolve_light(
             eye,
             time.half_minutes(),
             stormy,
-            Submersion::Dry,
+            underwater.0,
             ghost,
         )
     });
     let mut resolved = scene_light(&atmosphere, time.minute);
-    resolved.room_fog = crossfade.blend(room.fog, resolved.room_fog, FARCLIP, clock.delta_secs());
+    if let Some((ambient, diffuse)) = underwater.0.ocean_depth_factors(submerged.eye_z) {
+        resolved.ambient = resolved.ambient.map(|c| c * ambient);
+        resolved.diffuse = resolved.diffuse.map(|c| c * diffuse);
+    }
+    if !underwater.0.any() {
+        let scene = resolved.room_fog;
+        resolved.room_fog = crossfade.blend(room.fog, scene, FARCLIP, clock.delta_secs());
+    }
     if *light != resolved {
         *light = resolved;
     }
@@ -115,6 +125,8 @@ fn water(colors: [[f32; 3]; 2], alphas: [f32; 2]) -> [[f32; 4]; 2] {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use light::Submersion;
+
     use super::*;
     use crate::light::rows;
 

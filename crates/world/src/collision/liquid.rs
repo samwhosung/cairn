@@ -280,27 +280,6 @@ impl Liquids<'_, '_> {
             .min_by(f32::total_cmp)
     }
 
-    /// Every liquid surface whose footprint covers a WoW XY, with its kind and height there, for
-    /// a subject holding `claim`.
-    pub fn surfaces_at(&self, wow: [f32; 3], claim: LiquidClaim) -> Vec<LiquidHit> {
-        if !claim.admits_terrain() {
-            return Vec::new();
-        }
-        self.index
-            .cells
-            .get(&cell_of(wow[0], wow[1]))
-            .into_iter()
-            .flatten()
-            .filter_map(|&e| self.surfaces.get(e).ok())
-            .filter_map(|s| {
-                s.surface_z_at(wow[0], wow[1]).map(|surface_z| LiquidHit {
-                    surface_z,
-                    kind: s.kind,
-                })
-            })
-            .collect()
-    }
-
     /// The nearest point of each sound class's wet footprints, by their boxes, within `radius` of
     /// a WoW position: one per class `nibble & 3`.
     pub fn nearest_per_class(&self, wow: [f32; 3], radius: f32) -> [Option<NearestLiquid>; 4] {

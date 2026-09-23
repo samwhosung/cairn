@@ -15,6 +15,7 @@ use bevy::transform::TransformSystems;
 use crate::light::SceneLight;
 use crate::sky_order::{SKY_VERTEX_SHADER, sky_pipeline_state};
 use crate::skybox::ReplacedByPaintedSky;
+use crate::submersion::{SubmersionVerdict, Underwater};
 use crate::view::WorldCamera;
 
 pub type SkyMaterial = ExtendedMaterial<StandardMaterial, SkyExtension>;
@@ -72,10 +73,28 @@ impl Plugin for SkyPlugin {
         embedded_asset!(app, "sky_vertex.wgsl");
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
             .add_systems(Startup, spawn_dome)
+            .add_systems(Update, hide_when_submerged.after(SubmersionVerdict))
             .add_systems(
                 PostUpdate,
                 (follow_camera.after(TransformSystems::Propagate), paint_dome),
             );
+    }
+}
+
+/// Under a liquid the client draws no sky at all; the clear colour, the submerged fog, shows.
+fn hide_when_submerged(
+    underwater: Res<'_, Underwater>,
+    mut dome: Query<'_, '_, &mut Visibility, With<Dome>>,
+) {
+    let want = if underwater.0.any() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for mut vis in &mut dome {
+        if *vis != want {
+            *vis = want;
+        }
     }
 }
 

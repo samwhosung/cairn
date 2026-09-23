@@ -3,27 +3,29 @@
 use bevy::camera::Projection;
 use bevy::prelude::*;
 use light::Submersion;
-use terrain::LiquidKind;
 
-use crate::collision::{LiquidClaim, Liquids};
 use crate::coords::bevy_to_wow;
-use crate::portal::CameraInteriorClaim;
+use crate::liquid::{LiquidClaim, LiquidGrid, submersion_claim_at};
+use crate::portal::{CameraInteriorClaim, WmoPortalInstance};
 use crate::view::WorldCamera;
-
-const WATER_SUBMERSION_MARGIN: f32 = 0.01;
+use crate::wmo::WmoModel;
 
 /// The liquid the eye is under, `Dry` when none.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Underwater(pub Submersion);
 
-fn submersion_of(kind: LiquidKind) -> Submersion {
-    match kind {
-        LiquidKind::Still | LiquidKind::Rapids => Submersion::Water,
-        LiquidKind::Ocean => Submersion::Ocean,
-        LiquidKind::Magma => Submersion::Magma,
-        LiquidKind::Slime => Submersion::Slime,
-    }
+/// The submerged eye's distances, beside [`Underwater`].
+#[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
+pub struct SubmergedEye {
+    /// Yards from the probe up to the surface over it; 0 when dry.
+    pub depth: f32,
+    /// The eye's own WoW Z: the ocean darkens by it.
+    pub eye_z: f32,
 }
+
+/// Where [`Underwater`] is written each frame; what reads it orders itself after.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubmersionVerdict;
 
 fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> f32 {
     let half_h = (fov * 0.5).tan() * near;
@@ -37,42 +39,51 @@ fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> 
     drop
 }
 
+/// The eye's claim: the room the portal flood seeds it in, or the open world.
+fn camera_claim(
+    claim: &CameraInteriorClaim,
+    instances: &Query<'_, '_, &WmoPortalInstance>,
+    wmos: &Assets<WmoModel>,
+) -> LiquidClaim {
+    let Some(room) = claim.0 else {
+        return LiquidClaim::Outdoors;
+    };
+    let nav = instances
+        .get(room.instance)
+        .ok()
+        .and_then(|inst| wmos.get(&inst.handle))
+        .map_or(&[][..], |m| m.rooms.group_nav.as_slice());
+    LiquidClaim::inside(room, nav)
+}
+
+/// The eye is tested at the lowest corner of the near rectangle, or at the eye when that is
+/// lower, against every liquid surface its claim admits.
 pub(crate) fn detect_submersion(
-    mut underwater: ResMut<'_, Underwater>,
     camera: Query<'_, '_, (&Transform, &Projection), With<WorldCamera>>,
-    liquids: Liquids<'_, '_>,
-    eye_claim: Option<Res<'_, CameraInteriorClaim>>,
+    grids: Query<'_, '_, &LiquidGrid>,
+    claim: Res<'_, CameraInteriorClaim>,
+    instances: Query<'_, '_, &WmoPortalInstance>,
+    wmos: Res<'_, Assets<WmoModel>>,
+    mut underwater: ResMut<'_, Underwater>,
+    mut eye: ResMut<'_, SubmergedEye>,
 ) {
     let Ok((cam, projection)) = camera.single() else {
         return;
     };
-    let claim = if eye_claim.is_some_and(|c| c.0.is_some()) {
-        LiquidClaim::Inside
-    } else {
-        LiquidClaim::Outdoors
-    };
-    let eye = bevy_to_wow(cam.translation);
-    let near_plane_bottom_z = match projection {
+    let claim = camera_claim(&claim, &instances, &wmos);
+    let at = bevy_to_wow(cam.translation);
+    let probe_z = match projection {
         Projection::Perspective(p) => {
-            eye[2] + lowest_near_corner_drop(cam.rotation, p.fov, p.aspect_ratio, p.near)
+            at[2] + lowest_near_corner_drop(cam.rotation, p.fov, p.aspect_ratio, p.near)
         }
-        _ => eye[2],
+        _ => at[2],
     };
-    let verdict = liquids
-        .surfaces_at([eye[0], eye[1], near_plane_bottom_z], claim)
-        .into_iter()
-        .filter_map(|hit| {
-            let eps = if hit.kind.is_fullbright() {
-                0.0
-            } else {
-                WATER_SUBMERSION_MARGIN
-            };
-            (near_plane_bottom_z < hit.surface_z + eps)
-                .then_some((hit.surface_z, submersion_of(hit.kind)))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map_or(Submersion::Dry, |(_, s)| s);
-    underwater.set_if_neq(Underwater(verdict));
+    let verdict = submersion_claim_at(grids.iter(), [at[0], at[1], probe_z], claim);
+    underwater.set_if_neq(Underwater(verdict.map(|(s, _)| s).unwrap_or_default()));
+    eye.set_if_neq(SubmergedEye {
+        depth: verdict.map_or(0.0, |(_, z)| (z - probe_z).max(0.0)),
+        eye_z: at[2],
+    });
 }
 
 #[cfg(test)]

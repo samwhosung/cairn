@@ -138,7 +138,9 @@ impl Plugin for WorldPlugin {
         .add_systems(
             Update,
             (
-                atmosphere::resolve_light.after(portal::compute_wmo_pvs),
+                atmosphere::resolve_light
+                    .after(portal::compute_wmo_pvs)
+                    .after(submersion::SubmersionVerdict),
                 stream::stream_terrain,
                 horizon::stream_horizon,
                 (
