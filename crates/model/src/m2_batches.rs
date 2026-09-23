@@ -246,6 +246,8 @@ pub fn parse_m2_render_submeshes(
         }
         let color_tint: Option<[f32; 4]> = match &rgb_anim {
             Some(_) => None,
+            // The client applies no M2Color to a Mod or Mod2x batch.
+            None if matches!(blend, ModelBlend::Mod | ModelBlend::Mod2x) => None,
             None => model
                 .color_rgb_tracks
                 .get(batch.color_index as usize)
