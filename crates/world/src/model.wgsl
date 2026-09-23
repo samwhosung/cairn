@@ -561,6 +561,12 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     lit_rgb = albedo * primary;
 #endif
     var rgb = select(lit_rgb, albedo * inst_tint, is_emissive);
+    let is_mod = has_marker(MODULATE_BIT);
+    let is_mod2x = has_marker(MODULATE_2X_BIT);
+    // The client draws an M2 Mod or Mod2x batch from the bare texel.
+    if ((is_mod || is_mod2x) && !is_wmo()) {
+        rgb = base.rgb;
+    }
 
     var fog_color = wow_light.fog_color;
     var fog_span = wow_light.fog_params.xy;
@@ -586,8 +592,6 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     if (has_marker(ADDITIVE_BIT)) {
         out_rgb = out_rgb * faded_alpha;
     }
-    let is_mod = has_marker(MODULATE_BIT);
-    let is_mod2x = has_marker(MODULATE_2X_BIT);
     if (is_mod || is_mod2x) {
         let identity = select(vec3<f32>(1.0), vec3<f32>(0.5), is_mod2x);
         out_rgb = mix(identity, out_rgb, obj_fade);
