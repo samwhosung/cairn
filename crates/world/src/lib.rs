@@ -8,9 +8,11 @@ mod adt;
 mod atmosphere;
 pub mod coords;
 mod decode;
+mod horizon;
 mod layers;
 mod light;
 mod map;
+mod sky;
 mod source;
 mod stream;
 mod terrain;
@@ -51,8 +53,9 @@ impl Plugin for LoadersPlugin {
     }
 }
 
-/// Draws the world around the [`WorldCamera`]: terrain to the far clip, lit by the [`SceneLight`].
-/// Needs [`LoadersPlugin`] and the [`Install`], [`CurrentMap`] and [`TimeOfDay`] resources.
+/// Draws the world around the [`WorldCamera`]: terrain to the far clip, the WDL horizon past it and
+/// the sky behind, lit by the [`SceneLight`]. Needs [`LoadersPlugin`] and the [`Install`],
+/// [`CurrentMap`] and [`TimeOfDay`] resources.
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -61,13 +64,20 @@ impl Plugin for WorldPlugin {
             decode::DecodePlugin,
             light::LightBufferPlugin,
             terrain::TerrainMaterialPlugin,
+            horizon::HorizonPlugin,
+            sky::SkyPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
         .add_systems(Startup, atmosphere::load_catalog)
         .add_systems(
             Update,
-            (atmosphere::resolve_light, stream::stream_terrain).in_set(WorldSystems),
+            (
+                atmosphere::resolve_light,
+                stream::stream_terrain,
+                horizon::stream_horizon,
+            )
+                .in_set(WorldSystems),
         );
     }
 }
@@ -90,14 +100,15 @@ impl TimeOfDay {
 }
 
 /// Whether everything around the camera has arrived: every terrain tile the far clip reaches is
-/// drawn or known to be missing.
+/// drawn or known to be missing, and the horizon ring is up.
 #[derive(Resource, Default, Debug)]
 pub struct Residency {
     terrain: bool,
+    horizon: bool,
 }
 
 impl Residency {
     pub fn settled(&self) -> bool {
-        self.terrain
+        self.terrain && self.horizon
     }
 }

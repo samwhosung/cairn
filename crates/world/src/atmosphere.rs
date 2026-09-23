@@ -62,6 +62,9 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
         fog_color: atmosphere.fog_color,
         fog_start: atmosphere.fog_start_frac * fog_end,
         fog_end,
+        sky: atmosphere.sky,
+        sky_warp: daynight::sky_warp(minute, atmosphere.highlight_sky),
+        visible_sun: wow_to_bevy(daynight::celestial_sun_direction(minute)).normalize(),
     }
 }
 

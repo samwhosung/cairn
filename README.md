@@ -7,7 +7,8 @@ It uses the look, the movement and the assets of World of Warcraft 1.12.1, read 
 your own copy of the game. No game data is included here, and none ever will be.
 
 **Status:** just started. `WOW_DATA=<your install>/Data cargo run -p cairn` flies a window over the
-terrain, lit by the hour; `-- --help` shows the maps, the cameras and the headless shot.
+terrain, lit by the hour under its sky and horizon; `-- --help` shows the maps, the cameras and the
+headless shot.
 
 ## Working on it
 

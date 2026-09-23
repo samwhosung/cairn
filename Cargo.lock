@@ -4216,6 +4216,7 @@ dependencies = [
  "light",
  "mpq",
  "terrain",
+ "wdl",
  "wdt",
 ]
 

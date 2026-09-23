@@ -15,6 +15,7 @@ image = { version = "0.25", default-features = false }
 light = { path = "../light" }
 mpq = { path = "../mpq" }
 terrain = { path = "../terrain" }
+wdl = { path = "../wdl" }
 wdt = { path = "../wdt" }
 
 [lints]

@@ -34,6 +34,12 @@ pub struct SceneLight {
     /// Yards; negative in a storm, which fogs the camera's own spot.
     pub fog_start: f32,
     pub fog_end: f32,
+    /// The sky dome's colours, zenith first.
+    pub sky: [[f32; 3]; 5],
+    /// How strongly dawn and dusk warp the dome, `0..=1`.
+    pub sky_warp: f32,
+    /// The direction to the visible sun, in Bevy's axes.
+    pub visible_sun: Vec3,
 }
 
 /// The storage buffer the world materials bind. It is rewritten in place each frame, so no
@@ -126,6 +132,7 @@ mod tests {
             fog_color: [0.3, 0.4, 0.5],
             fog_start: 87.5,
             fog_end: 350.0,
+            ..SceneLight::default()
         };
         let rows = rows(&light);
         assert_eq!(rows[0], [0.1, 0.2, 0.3, 0.0]);
