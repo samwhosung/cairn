@@ -6,7 +6,8 @@ an editor that agents drive, and a server that scales from one player to a crowd
 It uses the look, the movement and the assets of World of Warcraft 1.12.1, read at runtime from
 your own copy of the game. No game data is included here, and none ever will be.
 
-**Status:** just started. Nothing runs yet.
+**Status:** just started. `WOW_DATA=<your install>/Data cargo run -p cairn` flies a window over a
+stand-in field of grass; `-- --help` shows the cameras and the headless shot.
 
 ## Working on it
 
@@ -21,6 +22,7 @@ gates enforce the rest.
 <!-- crates:start -->
 - [`adt`](crates/adt) — Reads World of Warcraft 1.12.1 ADT terrain tiles: heights, textures, liquids and placements
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
+- [`cairn`](crates/cairn) — The client: flies a window over your WoW 1.12.1 install, or renders one shot of it to a PNG
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them

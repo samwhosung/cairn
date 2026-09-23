@@ -1,0 +1,15 @@
+[package]
+name = "cairn"
+description = "The client: flies a window over your WoW 1.12.1 install, or renders one shot of it to a PNG"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy.workspace = true
+world = { path = "../world" }
+
+[lints]
+workspace = true
