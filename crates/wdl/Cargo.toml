@@ -1,0 +1,19 @@
+[package]
+name = "wdl"
+description = "Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wdt = { path = "../wdt" }
+wowfile = { path = "../wowfile" }
+
+[dev-dependencies]
+mpq = { path = "../mpq" }
+terrain = { path = "../terrain" }
+
+[lints]
+workspace = true

@@ -29,6 +29,7 @@ gates enforce the rest.
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`terrain`](crates/terrain) — Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them
+- [`wdl`](crates/wdl) — Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
 - [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
 - [`world`](crates/world) — Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, BLP textures and WoW's axes
