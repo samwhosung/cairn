@@ -121,6 +121,7 @@ impl Plugin for ShotPlugin {
             })
             .init_resource::<ReadyToShoot>()
             .insert_resource(world::CloudClock::Held)
+            .insert_resource(world::liquid::LiquidClock::Frozen)
             .add_systems(Update, capture);
         if let AgedBy::World { after_loading } = self.aged_by {
             app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))

@@ -35,6 +35,8 @@ const FOG_COLOR: usize = 4;
 const FOG_PARAMS: usize = 5;
 const SH_FIRST: usize = 6;
 const SH_C16: usize = 12;
+const WATER_RIVER: usize = 13;
+const WATER_OCEAN: usize = 15;
 const GRADE: usize = 17;
 const WMO_FOG_COLOR: usize = 18;
 const WMO_FOG_PARAMS: usize = 19;
@@ -93,6 +95,10 @@ pub struct SceneLight {
     pub cloud_glow_dir: Vec3,
     /// How strongly that body lights them, `0..=1`.
     pub cloud_glow: f32,
+    /// River and lake water, shallow and deep, alpha in `w`.
+    pub water_river: [[f32; 4]; 2],
+    /// Ocean water, shallow and deep, alpha in `w`.
+    pub water_ocean: [[f32; 4]; 2],
 }
 
 /// A fog's colour, and where it starts and is full, in yards.
@@ -190,6 +196,8 @@ pub(crate) fn rows(light: &SceneLight) -> [[f32; 4]; HEADER_ROWS] {
         rows[GRADE][1 + ch] = sun[ch].w;
     }
     rows[GRADE][0] = light.night_glow;
+    rows[WATER_RIVER..WATER_RIVER + 2].copy_from_slice(&light.water_river);
+    rows[WATER_OCEAN..WATER_OCEAN + 2].copy_from_slice(&light.water_ocean);
     rows[WMO_FOG_COLOR] = rgb(light.room_fog.color, ON);
     rows[WMO_FOG_PARAMS] = [light.room_fog.start, light.room_fog.end, 0.0, 0.0];
     rows
@@ -285,6 +293,8 @@ mod tests {
                 end: 80.0,
             },
             night_glow: 0.25,
+            water_river: [[0.1, 0.2, 0.3, 0.5], [0.4, 0.5, 0.6, 1.0]],
+            water_ocean: [[0.7, 0.8, 0.9, 0.75], [0.3, 0.2, 0.1, 1.0]],
             ..SceneLight::default()
         };
         let rows = rows(&light);
@@ -298,7 +308,10 @@ mod tests {
         assert_eq!(rows[17][0], 0.25);
         assert_eq!(rows[18], [0.6, 0.5, 0.4, 1.0]);
         assert_eq!(rows[19], [20.0, 80.0, 0.0, 0.0]);
-        assert!(rows[13..17].iter().flatten().all(|&v| v == 0.0));
+        assert_eq!(rows[13], [0.1, 0.2, 0.3, 0.5]);
+        assert_eq!(rows[14], [0.4, 0.5, 0.6, 1.0]);
+        assert_eq!(rows[15], [0.7, 0.8, 0.9, 0.75]);
+        assert_eq!(rows[16], [0.3, 0.2, 0.1, 1.0]);
         assert_eq!(rows[20], [0.0; 4]);
     }
 

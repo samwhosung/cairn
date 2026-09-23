@@ -7,6 +7,7 @@ use terrain::CHUNK_SIZE;
 use crate::adt::AdtTile;
 use crate::coords::bevy_to_wow;
 use crate::light::LightBuffer;
+use crate::liquid::{LiquidAssets, spawn_adt_liquids};
 use crate::source::MPQ_SOURCE;
 use crate::terrain::{TerrainMaterial, terrain_material};
 use crate::view::{FARCLIP, WorldCamera};
@@ -57,8 +58,9 @@ impl Window {
 
 enum TileState {
     Loading,
-    Drawn(Entity),
-    /// Holes cover the whole tile.
+    /// Its terrain and its liquid surfaces.
+    Drawn(Vec<Entity>),
+    /// Holes cover the whole tile and it holds no liquid.
     Empty,
     Failed,
 }
@@ -99,11 +101,13 @@ pub(crate) fn stream_terrain(
     wdts: Res<'_, Assets<WdtIndex>>,
     adts: Res<'_, Assets<AdtTile>>,
     light: Option<Res<'_, LightBuffer>>,
+    liquids: Option<Res<'_, LiquidAssets>>,
+    mut meshes: ResMut<'_, Assets<Mesh>>,
     mut materials: ResMut<'_, Assets<TerrainMaterial>>,
     mut streamer: ResMut<'_, Streamer>,
     mut residency: ResMut<'_, Residency>,
 ) {
-    let (Ok(camera), Some(light)) = (camera.single(), light) else {
+    let (Ok(camera), Some(light), Some(liquids)) = (camera.single(), light, liquids) else {
         return;
     };
     let dir = map.directory.to_ascii_lowercase();
@@ -122,8 +126,10 @@ pub(crate) fn stream_terrain(
     let window = Window::at(FARCLIP, x, y);
     streamer.tiles.retain(|&key, tile| {
         let keep = window.keeps(key);
-        if !keep && let TileState::Drawn(entity) = tile.state {
-            commands.entity(entity).despawn();
+        if !keep && let TileState::Drawn(entities) = &tile.state {
+            for &e in entities {
+                commands.entity(e).despawn();
+            }
         }
         keep
     });
@@ -144,20 +150,29 @@ pub(crate) fn stream_terrain(
             continue;
         }
         if let Some(adt) = adts.get(&tile.handle) {
-            tile.state = match &adt.mesh {
-                Some((mesh, aabb)) => {
-                    let material = materials.add(terrain_material(adt, &light.0));
-                    let entity = commands
+            let mut entities = spawn_adt_liquids(
+                &mut commands,
+                &mut meshes,
+                &liquids,
+                adt.chunks.iter().flat_map(|c| &c.liquids),
+            );
+            if let Some((mesh, aabb)) = &adt.mesh {
+                let material = materials.add(terrain_material(adt, &light.0));
+                entities.push(
+                    commands
                         .spawn((
                             Mesh3d(mesh.clone()),
                             MeshMaterial3d(material),
                             *aabb,
                             Transform::IDENTITY,
                         ))
-                        .id();
-                    TileState::Drawn(entity)
-                }
-                None => TileState::Empty,
+                        .id(),
+                );
+            }
+            tile.state = if entities.is_empty() {
+                TileState::Empty
+            } else {
+                TileState::Drawn(entities)
             };
         } else if let LoadState::Failed(e) = server.load_state(&tile.handle) {
             warn!("a terrain tile failed to load: {e}");

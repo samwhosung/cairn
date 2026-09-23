@@ -16,6 +16,7 @@ use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::doodad_anim::{DrawBounds, MaterialLoops, RigBuilder};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
+use crate::liquid::{LiquidAssets, spawn_wmo_liquids};
 use crate::m2::M2Model;
 use crate::model::{ModelSubmesh, skinned_submesh_mesh, submesh_mesh};
 use crate::model_material::{
@@ -111,6 +112,7 @@ pub(crate) fn furnish(
     assets: (Res<'_, Assets<M2Model>>, Res<'_, Assets<WmoModel>>),
     ground: (Res<'_, Streamer>, Res<'_, Assets<AdtTile>>),
     light: Option<Res<'_, LightBuffer>>,
+    liquids: Option<Res<'_, LiquidAssets>>,
     mut meshes: ResMut<'_, Assets<Mesh>>,
     mut materials: ResMut<'_, Assets<ModelMaterial>>,
     mut cache: ResMut<'_, ModelMaterials>,
@@ -175,6 +177,7 @@ pub(crate) fn furnish(
         light: &light.0,
         loops: &mut loops,
         now,
+        liquids: liquids.as_deref(),
     };
     for f in by_id.values_mut().filter(|f| !f.spawned) {
         f.spawned = true;
@@ -291,6 +294,7 @@ struct Spawner<'a, 'w, 's, 'l> {
     light: &'a Buffer,
     loops: &'a mut MaterialLoops<'l>,
     now: f32,
+    liquids: Option<&'a LiquidAssets>,
 }
 
 struct PropSite<'a> {
@@ -549,6 +553,17 @@ impl Spawner<'_, '_, '_, '_> {
                 });
             }
             out.push(entity);
+        }
+        if let Some(liquids) = self.liquids {
+            out.extend(spawn_wmo_liquids(
+                self.commands,
+                self.meshes,
+                liquids,
+                &m.rooms,
+                &m.material_diff_colors,
+                *transform,
+                instance,
+            ));
         }
         for (i, l) in m.lights.iter().enumerate() {
             if !l.is_omni() {

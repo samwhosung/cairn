@@ -19,6 +19,7 @@ mod horizon;
 pub mod interior;
 mod layers;
 mod light;
+pub mod liquid;
 mod m2;
 mod map;
 mod mat_anim_table;
@@ -118,6 +119,7 @@ impl Plugin for WorldPlugin {
             clouds::CloudsPlugin,
             celestial::CelestialPlugin,
             skybox::SkyboxPlugin,
+            liquid::LiquidPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()

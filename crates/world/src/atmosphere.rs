@@ -100,7 +100,16 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
             moon
         },
         cloud_glow: daynight::cloud_glow_track(minute),
+        water_river: water(atmosphere.water_river, atmosphere.water_river_alpha),
+        water_ocean: water(atmosphere.water_ocean, atmosphere.water_ocean_alpha),
     }
+}
+
+fn water(colors: [[f32; 3]; 2], alphas: [f32; 2]) -> [[f32; 4]; 2] {
+    std::array::from_fn(|i| {
+        let [r, g, b] = colors[i];
+        [r, g, b, alphas[i]]
+    })
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
 use crate::doodad_anim::MatAnim;
+use crate::liquid::LiquidGrid;
 use crate::model_material::ModelMaterial;
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::view::{FARCLIP, WorldCamera};
@@ -112,11 +113,43 @@ type Part<'a> = (
     Option<&'a MatAnim>,
 );
 
+type Pool<'a> = (&'a WmoGroupVis, &'a mut Visibility, &'a mut MeshTag);
+
+/// A building's pool draws once the flood has reached its group, from then on; it fogs with its
+/// room while the room is on the interior fog chain.
+fn apply_pool_visibility(
+    instances: &Query<'_, '_, &WmoPortalInstance>,
+    pools: &mut Query<'_, '_, Pool<'_>, (With<LiquidGrid>, Without<ModelPart>)>,
+) {
+    for (room, mut vis, mut tag) in pools {
+        let inst = instances.get(room.instance).ok();
+        let visited = inst.is_none_or(|inst| {
+            room.groups
+                .iter()
+                .any(|&g| inst.liquid_visited.get(g as usize).copied().unwrap_or(true))
+        });
+        let want = if visited {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *vis != want {
+            *vis = want;
+        }
+        let bits = with_interior_fog(tag.0, inst.is_some_and(|i| room.interior_fogged_by(i)));
+        if tag.0 != bits {
+            tag.0 = bits;
+        }
+    }
+}
+
 pub(crate) fn apply_model_visibility(
     camera: Query<'_, '_, &GlobalTransform, With<WorldCamera>>,
     instances: Query<'_, '_, &WmoPortalInstance>,
     mut parts: Query<'_, '_, Part<'_>>,
+    mut pools: Query<'_, '_, Pool<'_>, (With<LiquidGrid>, Without<ModelPart>)>,
 ) {
+    apply_pool_visibility(&instances, &mut pools);
     let Ok(cam) = camera.single() else {
         return;
     };
