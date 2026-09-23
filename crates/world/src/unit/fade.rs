@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 use model::ModelBlend;
 
+use crate::liquid::FarSide;
 use crate::model_material::{BatchLook, ModelMaterial, ModelMaterials, Variant};
 use crate::visibility::{translucent, with_alpha};
 
@@ -67,6 +68,7 @@ pub(crate) struct PrimeTwin(Entity);
 pub(crate) struct PrimeOf(Entity);
 
 pub(crate) fn apply_unit_alpha(
+    side: Res<'_, FarSide>,
     mut units: Query<'_, '_, (Entity, &mut UnitAlpha)>,
     children: Query<'_, '_, &Children>,
     mut parts: Query<
@@ -104,6 +106,7 @@ pub(crate) fn apply_unit_alpha(
             if tag.0 != bits {
                 tag.0 = bits;
             }
+            let want = side.resolve(part, want);
             if material.0 != *want {
                 material.0 = want.clone();
             }

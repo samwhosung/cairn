@@ -2,12 +2,14 @@
 //! and slime, where they are, and what the camera's eye is under.
 
 mod frames;
+mod interleave;
 mod query;
 mod spatial;
 mod surface;
 
 use bevy::prelude::*;
 
+pub(crate) use interleave::FarSide;
 pub use query::{
     LiquidClaim, LiquidGrid, LiquidHit, LiquidSource, WmoPool, liquid_at, submersion_claim_at,
     surfaces_at, water_surface_at, wet_footprint,
@@ -39,13 +41,20 @@ impl Plugin for LiquidPlugin {
         app.init_resource::<WaterIndex>()
             .init_resource::<Underwater>()
             .init_resource::<SubmergedEye>()
+            .init_resource::<FarSide>()
             .add_systems(Startup, surface::setup_liquid)
             .add_systems(PreUpdate, spatial::maintain_water_index)
             .add_systems(
                 Update,
-                crate::submersion::detect_submersion
-                    .in_set(SubmersionVerdict)
-                    .after(crate::portal::compute_wmo_pvs),
+                (
+                    crate::submersion::detect_submersion
+                        .in_set(SubmersionVerdict)
+                        .after(crate::portal::compute_wmo_pvs),
+                    interleave::classify_water_side
+                        .after(SubmersionVerdict)
+                        .after(crate::unit::UnitSystems)
+                        .before(crate::visibility::apply_model_visibility),
+                ),
             );
     }
 }

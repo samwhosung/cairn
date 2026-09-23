@@ -5,7 +5,7 @@ use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
 use crate::doodad_anim::MatAnim;
-use crate::liquid::LiquidGrid;
+use crate::liquid::{FarSide, LiquidGrid};
 use crate::model_material::ModelMaterial;
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::view::{FARCLIP, WorldCamera};
@@ -102,6 +102,7 @@ pub(crate) struct DoodadFade {
 }
 
 type Part<'a> = (
+    Entity,
     &'a ModelPart,
     &'a GlobalTransform,
     &'a mut Visibility,
@@ -146,6 +147,7 @@ fn apply_pool_visibility(
 pub(crate) fn apply_model_visibility(
     camera: Query<'_, '_, &GlobalTransform, With<WorldCamera>>,
     instances: Query<'_, '_, &WmoPortalInstance>,
+    side: Res<'_, FarSide>,
     mut parts: Query<'_, '_, Part<'_>>,
     mut pools: Query<'_, '_, Pool<'_>, (With<LiquidGrid>, Without<ModelPart>)>,
 ) {
@@ -154,7 +156,7 @@ pub(crate) fn apply_model_visibility(
         return;
     };
     let (cam_pos, cam_fwd) = (cam.translation(), *cam.forward());
-    for (_, xf, mut vis, fade, mut tag, mut material, aabb, group_vis, mat) in &mut parts {
+    for (entity, _, xf, mut vis, fade, mut tag, mut material, aabb, group_vis, mat) in &mut parts {
         let (center, radius) = match aabb {
             Some(a) => (
                 xf.transform_point(Vec3::from(a.center)),
@@ -191,11 +193,14 @@ pub(crate) fn apply_model_visibility(
             tag.0 = bits;
         }
         if let Some(f) = fade {
-            let want = if fade_alpha < 1.0 {
-                &f.blend
-            } else {
-                &f.cutout
-            };
+            let want = side.resolve(
+                entity,
+                if fade_alpha < 1.0 {
+                    &f.blend
+                } else {
+                    &f.cutout
+                },
+            );
             if material.0 != *want {
                 material.0 = want.clone();
             }

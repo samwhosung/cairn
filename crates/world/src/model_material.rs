@@ -38,8 +38,14 @@ const MODULATE: u16 = 1 << 7;
 const MODULATE_2X: u16 = 1 << 8;
 const DEPTH_PRIME: u16 = 1 << 9;
 const TWIN_CUTOUT: u16 = 1 << 10;
+const FAR_SIDE: u16 = 1 << 11;
 const ENV_MAP: u16 = 1 << 12;
 const SKY_DEPTH: u16 = 1 << 13;
+
+/// The far side of the water draws before the water pass: a batch there drops this far under its
+/// own place in the sort, less a fraction so every batch-order step keeps one pipeline.
+const FAR_SIDE_BIAS: f32 = -4.0e4;
+const FAR_KEY_PULL: f32 = 0.99;
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +58,7 @@ pub struct ModelKey {
     modulate2x: bool,
     depth_prime: bool,
     sky_depth: bool,
+    far_side: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
@@ -66,6 +73,7 @@ impl From<&ModelExtension> for ModelKey {
             modulate2x: markers & MODULATE_2X != 0,
             depth_prime: markers & DEPTH_PRIME != 0,
             sky_depth: markers & SKY_DEPTH != 0,
+            far_side: markers & FAR_SIDE != 0,
         }
     }
 }
@@ -132,6 +140,9 @@ impl MaterialExtension for ModelExtension {
             ds.depth_write_enabled = !key.no_depth_write || key.fade;
             if key.no_depth_test {
                 ds.depth_compare = CompareFunction::Always;
+            }
+            if key.far_side {
+                ds.bias.constant = 0;
             }
         }
         if key.sky_depth {
@@ -407,6 +418,15 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
             light: light.clone(),
         },
     }
+}
+
+/// A transparent batch's twin for the far side of the water: the same look, drawn in the far
+/// band. The band is a sort key only; the rasterizer keeps its bias at zero.
+pub(crate) fn far_twin_of(near: &ModelMaterial) -> ModelMaterial {
+    let mut far = near.clone();
+    far.base.depth_bias += FAR_SIDE_BIAS - FAR_KEY_PULL;
+    far.extension.clutter_fade.z = f32::from(far.extension.clutter_fade.z as u16 | FAR_SIDE);
+    far
 }
 
 fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
