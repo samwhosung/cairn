@@ -1,0 +1,18 @@
+[package]
+name = "model"
+description = "The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blp = { path = "../blp" }
+m2 = { path = "../m2" }
+mpq = { path = "../mpq" }
+wmo = { path = "../wmo" }
+wowfile = { path = "../wowfile" }
+
+[lints]
+workspace = true

@@ -25,6 +25,7 @@ gates enforce the rest.
 - [`cairn`](crates/cairn) — The client: flies a window over your WoW 1.12.1 install, or renders one shot of it to a PNG
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
+- [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`terrain`](crates/terrain) — Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
