@@ -9,6 +9,19 @@ rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 publish = false
 
+# Bevy's defaults would also build audio, UI, glTF, gamepads, picking and more that nothing here uses.
+[workspace.dependencies]
+bevy = { version = "0.18.1", default-features = false, features = [
+  "async_executor",
+  "multi_threaded",
+  "bevy_asset",
+  "bevy_log",
+  "bevy_winit",
+  "x11",
+  "bevy_pbr",
+  "png",
+] }
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }

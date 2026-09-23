@@ -26,6 +26,7 @@ gates enforce the rest.
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
 - [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
+- [`world`](crates/world) — Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, BLP textures and WoW's axes
 - [`wowfile`](crates/wowfile) — Bounds-checked little-endian reads and the chunk walk the WoW file formats share
 - [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
 <!-- crates:end -->
