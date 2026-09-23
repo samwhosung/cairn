@@ -24,7 +24,7 @@ pub enum ParsedWmo {
 pub fn parse_wmo(bytes: &[u8]) -> Result<ParsedWmo, Error> {
     for (magic, payload) in chunks(bytes) {
         match &magic {
-            b"PGOM" => return group::parse_group(payload).map(ParsedWmo::Group),
+            b"PGOM" => return Ok(ParsedWmo::Group(group::parse_group(payload))),
             b"DHOM" => return root::parse_root(bytes).map(ParsedWmo::Root),
             _ => {}
         }

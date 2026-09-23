@@ -1,6 +1,5 @@
 use wowfile::{ByteExt, chunks};
 
-use crate::Error;
 use crate::liquid::{WmoLiquid, parse_mliq};
 use crate::record::{f32_le, u16_le, u32_le, whole_records};
 
@@ -60,7 +59,7 @@ pub struct MopyEntry {
 
 const MOGP_HEADER_SIZE: usize = 68;
 
-pub(crate) fn parse_group(mogp: &[u8]) -> Result<WmoGroup, Error> {
+pub(crate) fn parse_group(mogp: &[u8]) -> WmoGroup {
     let mut g = WmoGroup {
         flags: mogp.u32_at(8).unwrap_or(0),
         group_liquid: mogp.u32_at(0x34).unwrap_or(0xf),
@@ -74,7 +73,7 @@ pub(crate) fn parse_group(mogp: &[u8]) -> Result<WmoGroup, Error> {
         liquid: None,
     };
     let Some(sub_chunks) = mogp.get(MOGP_HEADER_SIZE..) else {
-        return Ok(g);
+        return g;
     };
     // A repeated sub-chunk appends: some shipped groups carry a second `MOTV`.
     for (magic, s) in chunks(sub_chunks) {
@@ -103,11 +102,11 @@ pub(crate) fn parse_group(mogp: &[u8]) -> Result<WmoGroup, Error> {
             b"YPOM" => g.material_info.extend(
                 whole_records(s).map(|&[flags, material_id]| MopyEntry { flags, material_id }),
             ),
-            b"QILM" => g.liquid = parse_mliq(s)?,
+            b"QILM" => g.liquid = parse_mliq(s),
             _ => {}
         }
     }
-    Ok(g)
+    g
 }
 
 fn vec3(c: &[u8; 12]) -> Vec3 {

@@ -123,10 +123,10 @@ fn liquid_grid_past_the_payload_is_no_liquid() {
 }
 
 #[test]
-fn liquid_header_cut_after_the_grid_size_is_an_error() {
+fn liquid_header_cut_after_the_grid_size_is_no_liquid() {
     let mliq = mliq_header(2, 2, 1, 1);
-    let b = group_with_liquid(&mliq[..20]);
-    assert_eq!(parse_wmo(&b), Err(Error::Truncated("MLIQ")));
+    let g = group(&group_with_liquid(&mliq[..20]));
+    assert!(g.liquid.is_none());
 }
 
 #[test]
