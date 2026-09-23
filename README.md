@@ -32,7 +32,7 @@ gates enforce the rest.
 - [`wdl`](crates/wdl) — Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
 - [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
-- [`world`](crates/world) — Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, BLP textures and WoW's axes
+- [`world`](crates/world) — Brings World of Warcraft 1.12.1 files into Bevy: the mpq:// asset source, textures, map tiles and WoW's axes
 - [`wowfile`](crates/wowfile) — Bounds-checked little-endian reads and the chunk walk the WoW file formats share
 - [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
 <!-- crates:end -->

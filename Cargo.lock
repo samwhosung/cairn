@@ -4211,7 +4211,10 @@ version = "0.0.0"
 dependencies = [
  "bevy",
  "blp",
+ "image",
  "mpq",
+ "terrain",
+ "wdt",
 ]
 
 [[package]]
