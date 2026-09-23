@@ -205,6 +205,7 @@ pub fn drive_step(
     } else {
         SWIM_SPEED
     };
+    player.swim_stroke_speed = if dir == Vec3::ZERO { 0.0 } else { speed };
     // A momentary miss of the surface sample holds the swimmer at its own depth for the frame.
     let surface = surface_y.unwrap_or(player.pos.y);
     let out = swim_step(player, time, world, capsule, dir * speed, surface, |feet| {

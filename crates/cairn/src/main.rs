@@ -14,6 +14,7 @@ mod view;
 use std::path::Path;
 
 use bevy::prelude::*;
+use world::unit::{BodySkin, CharacterLook, CharacterTables};
 use world::{CurrentMap, Install};
 
 fn main() -> AppExit {
@@ -48,6 +49,20 @@ fn main() -> AppExit {
         }
     };
     let mut app = App::new();
+    if args.mode == args::Mode::Window {
+        let tables = match CharacterTables::load(&install) {
+            Ok(tables) => tables,
+            Err(e) => {
+                eprintln!("cairn: the install's character tables: {e}");
+                return AppExit::error();
+            }
+        };
+        if let Err(e) = check_look_offered(&tables, args.look) {
+            eprintln!("cairn: {e}");
+            return AppExit::from_code(2);
+        }
+        app.insert_resource(tables);
+    }
     world::register_source(&mut app, &install);
     match args.mode {
         args::Mode::Window => app.add_plugins((
@@ -67,6 +82,7 @@ fn main() -> AppExit {
                 } else {
                     player::Mode::Walk
                 },
+                look: character_look(args.look),
             },
         )),
         args::Mode::Shot(out) => {
@@ -91,4 +107,42 @@ fn main() -> AppExit {
         .insert_resource(args.time)
         .add_plugins((world::LoadersPlugin, world::WorldPlugin))
         .run()
+}
+
+fn character_look(look: args::Look) -> CharacterLook {
+    CharacterLook {
+        race: look.race,
+        sex: look.sex,
+        skin: look.skin,
+        face: look.face,
+        hair_style: look.hair,
+        hair_color: look.hair_color,
+        facial_hair: look.facial_hair,
+        body: BodySkin::Composite,
+        equipment: [0; 10],
+    }
+}
+
+fn check_look_offered(tables: &CharacterTables, look: args::Look) -> Result<(), String> {
+    let sex = if look.sex == 0 { "male" } else { "female" };
+    let who = format!("a {} {sex}", look.race_name());
+    let ranges = tables
+        .create
+        .ranges(look.race, look.sex)
+        .ok_or_else(|| format!("the install offers no {who}"))?;
+    for (flag, value, count) in [
+        ("skin", look.skin, ranges.skin),
+        ("face", look.face, ranges.face),
+        ("hair", look.hair, ranges.hair_style),
+        ("hair-color", look.hair_color, ranges.hair_color),
+        ("facial-hair", look.facial_hair, ranges.facial_hair),
+    ] {
+        if value >= count.max(1) {
+            return Err(format!(
+                "--{flag} {value} is not offered to {who}, who has 0 to {}",
+                count.saturating_sub(1)
+            ));
+        }
+    }
+    Ok(())
 }

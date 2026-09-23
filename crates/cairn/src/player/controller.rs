@@ -5,18 +5,19 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use world::WorldCamera;
 use world::collision::{CollisionResidency, Liquids, WorldCollision};
+use world::unit::{UnitAlpha, UnitMotion};
 
 use super::camera::{
     self, CameraControl, CameraPivot, CameraRig, FollowInput, Subject, model_pivot_height,
 };
 use super::camera_dynamics::{CameraOptions, DynamicsInput, SubjectState};
-use super::flags::{self, BACKWARD, SWIMMING, WALK_MODE};
+use super::flags::{self, BACKWARD, FORWARD, SWIMMING, WALK_MODE};
 use super::input::{self, Binding, Keys};
 use super::state::{
     CAPSULE_HEIGHT, CAPSULE_RADIUS, MOUSELOOK_PITCH_CLAMP, Player, RUN_BACK_RATIO, RUN_SPEED,
     TURN_RATE, TURN_RATE_MOVING, WALK_RATIO,
 };
-use super::{PlayerCapsule, StandIn, mover, swim};
+use super::{PlayerBody, PlayerCapsule, mover, swim};
 
 /// Wheel pixels per notch, for trackpads.
 const PIXELS_PER_NOTCH: f32 = 20.0;
@@ -43,9 +44,11 @@ pub type BodyQuery<'w, 's> = Query<
     's,
     (
         &'static mut Transform,
-        &'static MeshMaterial3d<StandardMaterial>,
+        &'static mut UnitMotion,
+        &'static mut UnitAlpha,
+        Option<&'static CameraPivot>,
     ),
-    (With<StandIn>, Without<WorldCamera>),
+    (With<PlayerBody>, Without<WorldCamera>),
 >;
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -75,7 +78,6 @@ pub fn control(
     mut rig: ResMut<'_, CameraControl>,
     mut camera: CameraQuery<'_, '_>,
     mut body: BodyQuery<'_, '_>,
-    mut materials: ResMut<'_, Assets<StandardMaterial>>,
     mut settle: Local<'_, SettleClock>,
 ) {
     let Ok((mut cam_t, mut cam)) = camera.single_mut() else {
@@ -221,7 +223,7 @@ pub fn control(
         launch_y,
     );
     player.move_flags = frame.live;
-    super::gait::drive_body_heading(
+    let anim_flags = super::gait::drive_body_heading(
         &mut player,
         frame.pose,
         dt,
@@ -232,14 +234,11 @@ pub fn control(
         TURN_RATE,
     );
 
+    let pivot = body.single().ok().and_then(|(.., pivot)| pivot.copied());
     let subject = Subject {
         feet: player.pos,
         head: player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS),
-        pivot_target: Some(model_pivot_height(
-            CameraPivot::HUMAN_MALE,
-            1.0,
-            frame.live & SWIMMING != 0,
-        )),
+        pivot_target: pivot.map(|p| model_pivot_height(p, 1.0, frame.live & SWIMMING != 0)),
         turn_delta,
     };
     let follow = FollowInput {
@@ -257,16 +256,24 @@ pub fn control(
         &follow,
         &dynamics,
     );
-    if let Ok((mut t, material)) = body.single_mut() {
-        t.translation = player.pos + Vec3::Y * (CAPSULE_HEIGHT * 0.5);
-        t.rotation = if swimming {
+    if let Ok((mut t, mut motion, mut alpha, _)) = body.single_mut() {
+        t.translation = player.pos;
+        let stroking = frame.live & SWIMMING != 0 && frame.live & (FORWARD | BACKWARD) != 0;
+        t.rotation = if stroking {
             Quat::from_rotation_y(player.model_yaw) * Quat::from_rotation_x(swim_pitch)
         } else {
             Quat::from_rotation_y(player.model_yaw)
         };
-        if let Some(m) = materials.get_mut(&material.0) {
-            m.base_color.set_alpha(rig.self_fade_alpha);
-        }
+        *motion = UnitMotion {
+            speed: if swimming {
+                player.swim_stroke_speed
+            } else {
+                player.horiz_vel.length()
+            },
+            vertical_speed: player.vel_y,
+            flags: anim_flags,
+        };
+        alpha.alpha = rig.self_fade_alpha;
     }
 }
 

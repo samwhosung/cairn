@@ -23,11 +23,27 @@ pub struct CameraPivot {
 }
 
 impl CameraPivot {
-    pub const HUMAN_MALE: Self = Self {
-        height_local: 1.900_269_2,
-        swim_drop_local: 0.388_257_2,
+    /// No pivot of its own: the camera sits at the floor.
+    pub const FLOOR: Self = Self {
+        height_local: 0.0,
+        swim_drop_local: 0.0,
     };
+
+    pub fn of(model: Option<&world::M2Model>) -> Self {
+        model
+            .and_then(|m| m.bounds.as_ref())
+            .map_or(Self::FLOOR, |b| Self {
+                height_local: b.pivot_z.map_or_else(
+                    || PIVOT_SHARE_OF_BOX * (b.bbox_max[2] - b.bbox_min[2]).max(0.0),
+                    |z| z + PIVOT_ABOVE_ATTACHMENT,
+                ),
+                swim_drop_local: b.swim_pivot_drop,
+            })
+    }
 }
+
+const PIVOT_ABOVE_ATTACHMENT: f32 = 0.0972;
+const PIVOT_SHARE_OF_BOX: f32 = 0.9;
 
 pub fn model_pivot_height(pivot: CameraPivot, scale: f32, swimming: bool) -> f32 {
     let local = if swimming {
@@ -131,7 +147,10 @@ mod tests {
         assert_eq!(model_pivot_height(p, 1.0, false), 2.0);
         assert_eq!(model_pivot_height(p, 0.01, false), CAM_PIVOT_FLOOR);
         assert_eq!(model_pivot_height(p, 100.0, false), CAM_PIVOT_CEIL);
-        let human = CameraPivot::HUMAN_MALE;
+        let human = CameraPivot {
+            height_local: 1.900_269_2,
+            swim_drop_local: 0.388_257_2,
+        };
         assert!((model_pivot_height(human, 1.0, false) - 1.900_269_2).abs() < 1e-5);
         assert!((model_pivot_height(human, 1.0, true) - 1.512_012).abs() < 1e-5);
     }

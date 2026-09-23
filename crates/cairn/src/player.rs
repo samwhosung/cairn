@@ -1,6 +1,7 @@
 //! Walking the world as the client walks it: the body, its movement and swimming, and the follow
 //! camera.
 
+mod body;
 mod camera;
 mod camera_channel;
 mod camera_dynamics;
@@ -20,10 +21,13 @@ mod swim;
 use avian3d::prelude::Collider;
 use bevy::prelude::*;
 use world::coords::wow_to_bevy;
+use world::unit::{CharacterLook, UnitAlpha, UnitMotion, UnitSystems};
 use world::{WorldCamera, WorldSystems};
 
 use crate::fly::{Fly, fly};
 use crate::view::Pose;
+pub use body::PlayerBody;
+use body::PlayerLook;
 use camera::{CameraControl, CameraRig, LOGIN_PITCH};
 use camera_dynamics::CameraOptions;
 use state::{CAPSULE_HEIGHT, CAPSULE_RADIUS, Player};
@@ -37,20 +41,19 @@ pub enum Mode {
 #[derive(Resource)]
 pub struct PlayerCapsule(pub Collider);
 
-#[derive(Component)]
-pub struct StandIn;
-
-/// Walks a body standing at the pose's target, facing its heading, or flies the pose's camera
-/// when `mode` is [`Mode::Fly`].
+/// Walks a character of `look` standing at the pose's target, facing its heading, or flies the
+/// pose's camera when `mode` is [`Mode::Fly`].
 pub struct PlayerPlugin {
     pub pose: Pose,
     pub mode: Mode,
+    pub look: CharacterLook,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         let (pose, mode) = (self.pose, self.mode);
         app.insert_resource(mode)
+            .insert_resource(PlayerLook(self.look.clone()))
             .insert_resource(Player {
                 pos: wow_to_bevy(pose.target.to_array()),
                 face_yaw: pose.heading,
@@ -74,39 +77,21 @@ impl Plugin for PlayerPlugin {
                     Fly::new(pose),
                 ));
             })
-            .add_systems(Startup, spawn_stand_in)
+            .add_systems(Startup, body::spawn_body)
             .add_systems(
                 Update,
                 (
+                    body::dress_body,
+                    body::pivot_on_model,
                     switch_mode,
                     controller::control.run_if(resource_equals(Mode::Walk)),
                     fly.run_if(resource_equals(Mode::Fly)),
                 )
                     .chain()
-                    .before(WorldSystems),
+                    .before(WorldSystems)
+                    .before(UnitSystems),
             );
     }
-}
-
-fn spawn_stand_in(
-    mut commands: Commands<'_, '_>,
-    mut meshes: ResMut<'_, Assets<Mesh>>,
-    mut materials: ResMut<'_, Assets<StandardMaterial>>,
-) {
-    commands.spawn((
-        StandIn,
-        Mesh3d(meshes.add(Capsule3d::new(
-            CAPSULE_RADIUS,
-            CAPSULE_HEIGHT - 2.0 * CAPSULE_RADIUS,
-        ))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.6, 0.7),
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            ..StandardMaterial::default()
-        })),
-        Transform::default(),
-    ));
 }
 
 fn switch_mode(
@@ -114,8 +99,7 @@ fn switch_mode(
     mut mode: ResMut<'_, Mode>,
     mut player: ResMut<'_, Player>,
     mut camera: Query<'_, '_, (&Transform, &mut CameraRig, &mut Fly), With<WorldCamera>>,
-    body: Query<'_, '_, &MeshMaterial3d<StandardMaterial>, With<StandIn>>,
-    mut materials: ResMut<'_, Assets<StandardMaterial>>,
+    mut body: Query<'_, '_, (&mut UnitMotion, &mut UnitAlpha), With<PlayerBody>>,
 ) {
     let chord = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
         && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -128,10 +112,9 @@ fn switch_mode(
         Mode::Walk if toggled => {
             let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
             fly.look(yaw, pitch);
-            for material in &body {
-                if let Some(m) = materials.get_mut(&material.0) {
-                    m.base_color.set_alpha(1.0);
-                }
+            for (mut motion, mut alpha) in &mut body {
+                *motion = UnitMotion::default();
+                alpha.alpha = 1.0;
             }
             *mode = Mode::Fly;
         }

@@ -8,7 +8,7 @@ use crate::fixture::Fixture;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly]
+usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly] [LOOK]
          walk the install at $WOW_DATA, starting where the camera looks
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] --out FILE.png
          render one frame without a window, once everything in it has loaded
@@ -26,6 +26,11 @@ CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
                                           north, 90 west; EL is the height angle above it
 Without one, the camera looks north over Northshire. --size defaults to 1600x900.
 
+LOOK, the character walked as: --race human|orc|dwarf|nightelf|undead|tauren|gnome|troll
+(or 1..8), --sex male|female, and --skin, --face, --hair, --hair-color, --facial-hair,
+each counted from 0 as character creation offers them. A Human male by default, every
+choice 0.
+
 Walking: W and S run forward and back, A and D turn, Q and E strafe, Space jumps and
 leaves the water, the wheel zooms to first person. A held left button turns the camera,
 a held right button steers, both run. Num Lock runs on its own, keypad / walks.
@@ -33,8 +38,30 @@ Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, 
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 12] = [
-    "age", "at", "az", "display", "dist", "el", "eye", "look", "map", "out", "size", "time",
+const FLAGS: [&str; 19] = [
+    "age",
+    "at",
+    "az",
+    "display",
+    "dist",
+    "el",
+    "eye",
+    "face",
+    "facial-hair",
+    "hair",
+    "hair-color",
+    "look",
+    "map",
+    "out",
+    "race",
+    "sex",
+    "size",
+    "skin",
+    "time",
+];
+/// The playable races by their `ChrRaces` id, 1 first.
+const RACES: [&str; 8] = [
+    "human", "orc", "dwarf", "nightelf", "undead", "tauren", "gnome", "troll",
 ];
 const NORTHSHIRE_HILLSIDE: Vec3 = Vec3::new(-8960.0, -145.0, 90.0);
 const DEFAULT_SIZE: UVec2 = UVec2::new(1600, 900);
@@ -51,6 +78,44 @@ pub struct Args {
     pub mode: Mode,
     pub start_flying: bool,
     pub display: Option<Fixture>,
+    pub look: Look,
+}
+
+/// The character walked as: a `ChrRaces` id, 0 male or 1 female, and the five customization
+/// choices, each an index into what character creation offers the race and sex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Look {
+    pub race: u8,
+    pub sex: u8,
+    pub skin: u8,
+    pub face: u8,
+    pub hair: u8,
+    pub hair_color: u8,
+    pub facial_hair: u8,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self {
+            race: 1,
+            sex: 0,
+            skin: 0,
+            face: 0,
+            hair: 0,
+            hair_color: 0,
+            facial_hair: 0,
+        }
+    }
+}
+
+impl Look {
+    /// The race's name as `--race` takes it.
+    pub fn race_name(self) -> &'static str {
+        RACES
+            .get(usize::from(self.race).wrapping_sub(1))
+            .copied()
+            .unwrap_or("unknown")
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -106,6 +171,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         return Err(format!("{} does not end in .png", path.display()));
     }
     let display = display(&mut given, shot)?;
+    let look = look(&mut given, shot)?;
     Ok(Args {
         pose: pose(&given)?,
         size,
@@ -114,7 +180,62 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         mode: out.map_or(Mode::Window, Mode::Shot),
         start_flying,
         display,
+        look,
     })
+}
+
+fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String> {
+    let mut look = Look::default();
+    let flags = [
+        "race",
+        "sex",
+        "skin",
+        "face",
+        "hair",
+        "hair-color",
+        "facial-hair",
+    ];
+    if shot && let Some(flag) = flags.iter().find(|f| given.contains_key(**f)) {
+        return Err(format!("--{flag} is for the window"));
+    }
+    if let Some(race) = given.remove("race") {
+        let name = race.trim().to_ascii_lowercase();
+        look.race = match RACES.iter().position(|r| *r == name) {
+            Some(i) => u8::try_from(i + 1).unwrap_or(1),
+            None => name
+                .parse::<u8>()
+                .ok()
+                .filter(|r| (1..=8).contains(r))
+                .ok_or_else(|| {
+                    format!(
+                        "--race wants one of {} or 1..8, not {race}",
+                        RACES.join(", ")
+                    )
+                })?,
+        };
+    }
+    if let Some(sex) = given.remove("sex") {
+        look.sex = match sex.trim().to_ascii_lowercase().as_str() {
+            "male" | "0" => 0,
+            "female" | "1" => 1,
+            _ => return Err(format!("--sex wants male or female, not {sex}")),
+        };
+    }
+    for (flag, dial) in [
+        ("skin", &mut look.skin),
+        ("face", &mut look.face),
+        ("hair", &mut look.hair),
+        ("hair-color", &mut look.hair_color),
+        ("facial-hair", &mut look.facial_hair),
+    ] {
+        if let Some(value) = given.remove(flag) {
+            *dial = value
+                .trim()
+                .parse::<u8>()
+                .map_err(|_| format!("--{flag} wants a choice counted from 0, not {value}"))?;
+        }
+    }
+    Ok(look)
 }
 
 fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fixture>, String> {
@@ -277,6 +398,29 @@ mod tests {
     }
 
     #[test]
+    fn the_walker_is_a_human_male_unless_told() {
+        assert_eq!(parsed("").expect("parses").look, Look::default());
+        let args = parsed(
+            "--race Tauren --sex female --skin 3 --hair 2 --hair-color 1 --face 4 --facial-hair 5",
+        )
+        .expect("parses");
+        assert_eq!(
+            args.look,
+            Look {
+                race: 6,
+                sex: 1,
+                skin: 3,
+                face: 4,
+                hair: 2,
+                hair_color: 1,
+                facial_hair: 5,
+            }
+        );
+        assert_eq!(args.look.race_name(), "tauren");
+        assert_eq!(parsed("--race 8 --sex 0").expect("parses").look.race, 8);
+    }
+
+    #[test]
     fn a_display_shot_takes_its_subject_and_orbit() {
         let args = parsed("shot --display 3167 --age 2.5 --out a.png").expect("parses");
         assert_eq!(
@@ -321,6 +465,12 @@ mod tests {
             "--time 12:60",
             "--time 1230",
             "--time noon",
+            "--race elf",
+            "--race 9",
+            "--sex other",
+            "--hair -1",
+            "--skin 256",
+            "shot --race orc --out a.png",
             "--display 3167",
             "shot --age 2 --out a.png",
             "shot --display x --out a.png",

@@ -95,6 +95,9 @@ pub struct Player {
     pub collision_height: f32,
     /// The liquid surface over the feet as the last step left it, Bevy Y.
     pub liquid_surface: Option<f32>,
+    /// The swim stroke's speed, yd/s: the swim or swim-back speed whatever the pitch, 0 with no
+    /// stroke. Stale out of the water.
+    pub swim_stroke_speed: f32,
 }
 
 impl Default for Player {
@@ -125,6 +128,7 @@ impl Default for Player {
             move_flags: 0,
             collision_height: DEFAULT_COLLISION_HEIGHT,
             liquid_surface: None,
+            swim_stroke_speed: 0.0,
         }
     }
 }

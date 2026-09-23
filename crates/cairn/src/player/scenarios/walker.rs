@@ -14,6 +14,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::transform::TransformPlugin;
 use world::collision::{CollisionPlugin, Liquids, WorldCollision};
 use world::coords::{bevy_to_wow, wow_to_bevy};
+use world::unit::CharacterLook;
 use world::{CurrentMap, Install};
 
 use crate::player::state::Player;
@@ -59,6 +60,7 @@ impl Walker {
                 PlayerPlugin {
                     pose: Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0),
                     mode: Mode::Walk,
+                    look: CharacterLook::naked(1, 0),
                 },
             ));
         app.finish();
