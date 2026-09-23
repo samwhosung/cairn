@@ -3309,6 +3309,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "terrain"
+version = "0.0.0"
+dependencies = [
+ "adt",
+ "mpq",
+ "wdt",
+]
+
+[[package]]
 name = "texpresso"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

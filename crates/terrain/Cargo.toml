@@ -1,0 +1,16 @@
+[package]
+name = "terrain"
+description = "Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+adt = { path = "../adt" }
+mpq = { path = "../mpq" }
+wdt = { path = "../wdt" }
+
+[lints]
+workspace = true
