@@ -12,6 +12,8 @@ mod flags;
 mod gait;
 mod input;
 mod mover;
+#[cfg(test)]
+mod scenarios;
 mod state;
 mod swim;
 
