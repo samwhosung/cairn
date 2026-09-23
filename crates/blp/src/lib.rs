@@ -148,6 +148,9 @@ pub fn decode_level(texels: BlpTexels, width: u32, height: u32, bytes: &[u8]) ->
         return bytes.to_vec();
     };
     let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
     let blocks = pad_to(bytes, codec.compressed_size(w, h));
     let mut out = vec![0u8; w * h * 4];
     codec.decompress(&blocks, w, h, &mut out);

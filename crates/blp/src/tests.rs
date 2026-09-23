@@ -285,3 +285,18 @@ fn palettized_is_bgra_with_packed_alpha() {
     let decoded = decode(&b).expect("decodes");
     assert_eq!(decoded.mips[0].rgba, [3, 2, 1, 0x55, 7, 6, 5, 0xAA]);
 }
+
+#[test]
+fn a_zero_width_dxt_texture_decodes_to_no_pixels() {
+    let mut spec = Spec {
+        compression: 2,
+        width: 0,
+        height: 4,
+        ..Spec::default()
+    };
+    spec.offsets[0] = PIXELS_AT;
+    spec.sizes[0] = 8;
+    let decoded = decode(&spec.file(&[0; 8])).expect("decodes");
+    assert!(decoded.mips[0].rgba.is_empty());
+    assert!(decode_level(BlpTexels::Bc1, 0, 4, &[0; 8]).is_empty());
+}
