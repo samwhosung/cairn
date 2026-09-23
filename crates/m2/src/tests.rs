@@ -316,6 +316,31 @@ fn hostile_track_record_counts_walk_only_what_the_file_holds() {
 }
 
 #[test]
+fn tracks_sharing_one_array_decode_no_more_than_the_file_holds() {
+    let (records, keys) = (200u32, 1000u32);
+    let mut b = empty_header();
+    let table = b.len() as u32;
+    let times = table + records * 0x1c;
+    let values = times + keys * 4;
+    for _ in 0..records {
+        b.extend(m2track(1, 0xffff, (keys, times), (keys, values)));
+    }
+    b.extend(vec![0u8; (keys * 6) as usize]);
+    set_arr(&mut b, 0x64, records, table);
+    let fmt = parse(&b).expect("parses");
+    let tracks = &fmt.model().transparency_tracks;
+    assert_eq!(tracks.len(), records as usize);
+    assert_eq!(tracks[0].keys.len(), keys as usize);
+    let decoded: usize = tracks.iter().map(|t| t.keys.len() * 6).sum();
+    assert!(
+        decoded <= b.len(),
+        "{decoded} bytes decoded from a {}-byte file",
+        b.len()
+    );
+    assert!(tracks.last().is_some_and(|t| t.keys.is_empty()));
+}
+
+#[test]
 fn truncated_vertex_record_errs_cleanly() {
     let mut b = empty_header();
     set_arr(&mut b, OFS_VERTICES, 1, HEADER_LEN as u32);

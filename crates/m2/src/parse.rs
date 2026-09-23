@@ -10,7 +10,7 @@ use crate::model::{
     M2Format, M2Material, M2Model, M2PlayableAnim, M2RawData, M2RenderFlags, M2Texture,
     M2TextureTransform, M2TextureType, M2Vertex,
 };
-use crate::track::{track_fix16, track_quat, track_vec3_timed};
+use crate::track::{Budget, track_fix16, track_quat, track_vec3_timed};
 
 const GLOBAL_SEQUENCES: usize = 0x14;
 const ANIMATION_LOOKUP: usize = 0x24;
@@ -82,7 +82,8 @@ fn whole_records<T>(b: &[u8], a: CountOffset, size: usize, read: impl Fn(usize) 
 }
 
 /// Parses an MD20 model, version 256 to 263, from the start of the cursor's buffer whatever
-/// its position.
+/// its position. Its colour, transparency and texture tracks decode at most as many bytes as the
+/// file holds; past that they read as keyless.
 pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     let b: &[u8] = cursor.get_ref();
     if b.len() < 8 || &b[0..4] != b"MD20" {
@@ -123,17 +124,19 @@ pub fn parse_m2(cursor: &mut Cursor<&[u8]>) -> Result<M2Format> {
     })?;
     let texture_lookup_table = u16s(b, array(TEXTURE_LOOKUP))?;
 
+    let budget = Budget::of(b);
     let colors = array(COLORS);
-    let color_alpha_tracks = whole_records(b, colors, 0x38, |o| track_fix16(b, o + 0x1c));
-    let color_rgb_tracks = whole_records(b, colors, 0x38, |o| track_vec3_timed(b, o));
-    let transparency_tracks = whole_records(b, array(TRANSPARENCY), 0x1c, |o| track_fix16(b, o));
+    let color_alpha_tracks = whole_records(b, colors, 0x38, |o| track_fix16(b, o + 0x1c, &budget));
+    let color_rgb_tracks = whole_records(b, colors, 0x38, |o| track_vec3_timed(b, o, &budget));
+    let transparency_tracks =
+        whole_records(b, array(TRANSPARENCY), 0x1c, |o| track_fix16(b, o, &budget));
     let texture_unit_lookup = u16s(b, array(TEXTURE_UNIT_LOOKUP))?;
     let transparency_lookup = u16s(b, array(TRANSPARENCY_LOOKUP))?;
     let texture_transforms =
         whole_records(b, array(TEXTURE_TRANSFORMS), 0x54, |o| M2TextureTransform {
-            translation: track_vec3_timed(b, o),
-            rotation: track_quat(b, o + 0x1c),
-            scaling: track_vec3_timed(b, o + 0x38),
+            translation: track_vec3_timed(b, o, &budget),
+            rotation: track_quat(b, o + 0x1c, &budget),
+            scaling: track_vec3_timed(b, o + 0x38, &budget),
         });
     let texture_transform_lookup = u16s(b, array(TEXTURE_TRANSFORM_LOOKUP))?;
     let global_sequences = whole_records(b, array(GLOBAL_SEQUENCES), 4, |o| {

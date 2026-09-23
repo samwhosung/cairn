@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use wowfile::ByteExt;
 
 use crate::parse::rd_vec3;
@@ -45,12 +47,31 @@ impl<V: Copy + PartialEq> M2Track<V> {
     }
 }
 
+/// The bytes a file's tracks may still decode, from the file's length down, so that tracks
+/// sharing one array cannot multiply it. Shipped models decode under two thirds of theirs.
+pub(crate) struct Budget(Cell<usize>);
+
+impl Budget {
+    pub(crate) fn of(file: &[u8]) -> Self {
+        Self(Cell::new(file.len()))
+    }
+
+    fn entries(&self, size: usize) -> usize {
+        self.0.get() / size
+    }
+
+    fn spend(&self, bytes: usize) {
+        self.0.set(self.0.get() - bytes);
+    }
+}
+
 /// Reads the track whose 28-byte header is at `track_ofs`. Anything out of range reads as no
-/// keys or no ranges: shipped models rely on that.
+/// keys or no ranges: shipped models rely on that. Reading stops where `budget` runs out.
 fn track_read<V>(
     b: &[u8],
     track_ofs: usize,
     val_size: usize,
+    budget: &Budget,
     read_val: impl Fn(&[u8], usize) -> Option<V>,
 ) -> M2Track<V> {
     let (Some(interp), Some(gseq)) = (b.u16_at(track_ofs), b.u16_at(track_ofs + 2)) else {
@@ -65,11 +86,14 @@ fn track_read<V>(
     };
     let n = tn.min(vn) as usize;
     let (to, vo) = (to as usize, vo as usize);
-    let keys = (0..n)
+    let keys: Vec<_> = (0..n)
+        .take(budget.entries(4 + val_size))
         .map_while(|i| b.u32_at(to + i * 4).zip(read_val(b, vo + i * val_size)))
         .collect();
-    let ranges = match b.u32_at(track_ofs + 0x04).zip(b.u32_at(track_ofs + 0x08)) {
+    budget.spend(keys.len() * (4 + val_size));
+    let ranges: Vec<_> = match b.u32_at(track_ofs + 0x04).zip(b.u32_at(track_ofs + 0x08)) {
         Some((rn, ro)) => (0..rn as usize)
+            .take(budget.entries(8))
             .map_while(|i| {
                 let e = ro as usize + i * 8;
                 b.u32_at(e).zip(b.u32_at(e + 4))
@@ -77,6 +101,7 @@ fn track_read<V>(
             .collect(),
         None => Vec::new(),
     };
+    budget.spend(ranges.len() * 8);
     M2Track {
         interp,
         gseq,
@@ -87,18 +112,18 @@ fn track_read<V>(
 
 /// The key is signed: the client culls a batch at alpha `<= 0`, and shipped models author
 /// `0x8001`, -1.0, to hide one.
-pub(crate) fn track_fix16(b: &[u8], track_ofs: usize) -> M2ScalarTrack {
-    track_read(b, track_ofs, 2, |b, o| {
+pub(crate) fn track_fix16(b: &[u8], track_ofs: usize, budget: &Budget) -> M2ScalarTrack {
+    track_read(b, track_ofs, 2, budget, |b, o| {
         b.u16_at(o).map(|v| f32::from(v as i16) / 32767.0)
     })
 }
 
-pub(crate) fn track_vec3_timed(b: &[u8], track_ofs: usize) -> M2Vec3Track {
-    track_read(b, track_ofs, 12, rd_vec3)
+pub(crate) fn track_vec3_timed(b: &[u8], track_ofs: usize, budget: &Budget) -> M2Vec3Track {
+    track_read(b, track_ofs, 12, budget, rd_vec3)
 }
 
-pub(crate) fn track_quat(b: &[u8], track_ofs: usize) -> M2QuatTrack {
-    track_read(b, track_ofs, 16, |b, o| {
+pub(crate) fn track_quat(b: &[u8], track_ofs: usize, budget: &Budget) -> M2QuatTrack {
+    track_read(b, track_ofs, 16, budget, |b, o| {
         Some([
             b.f32_at(o)?,
             b.f32_at(o + 4)?,
@@ -210,10 +235,14 @@ fn rd_spline<V>(
     })
 }
 
-pub(crate) fn track_spline_vec3(b: &[u8], track_ofs: usize) -> M2Vec3SplineTrack {
-    track_read(b, track_ofs, 0x24, |b, o| rd_spline(b, o, 12, rd_vec3))
+pub(crate) fn track_spline_vec3(b: &[u8], track_ofs: usize, budget: &Budget) -> M2Vec3SplineTrack {
+    track_read(b, track_ofs, 0x24, budget, |b, o| {
+        rd_spline(b, o, 12, rd_vec3)
+    })
 }
 
-pub(crate) fn track_spline_f32(b: &[u8], track_ofs: usize) -> M2ScalarSplineTrack {
-    track_read(b, track_ofs, 0xc, |b, o| rd_spline(b, o, 4, <[u8]>::f32_at))
+pub(crate) fn track_spline_f32(b: &[u8], track_ofs: usize, budget: &Budget) -> M2ScalarSplineTrack {
+    track_read(b, track_ofs, 0xc, budget, |b, o| {
+        rd_spline(b, o, 4, <[u8]>::f32_at)
+    })
 }

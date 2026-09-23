@@ -2,7 +2,7 @@ use wowfile::ByteExt;
 
 use crate::model::M2Camera;
 use crate::parse::{bytes_from, rd_vec3};
-use crate::track::{track_spline_f32, track_spline_vec3};
+use crate::track::{Budget, track_spline_f32, track_spline_vec3};
 
 const CAMERAS: usize = 0x124;
 const CAMERA_LOOKUP: usize = 0x12c;
@@ -10,11 +10,13 @@ const CAMERA_SIZE: usize = 0x7c;
 
 /// Reads an MD20 file's cameras without parsing the rest of the model. Never fails: a table cut
 /// short yields the whole records that fit, and a file too short for the header yields none.
+/// Their tracks decode at most as many bytes as the file holds.
 pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
     let (Some(count), Some(ofs)) = (b.u32_at(CAMERAS), b.u32_at(CAMERAS + 4)) else {
         return Vec::new();
     };
     let ofs = ofs as usize;
+    let budget = Budget::of(b);
     bytes_from(b, ofs)
         .as_chunks::<CAMERA_SIZE>()
         .0
@@ -31,11 +33,11 @@ pub fn parse_cameras(b: &[u8]) -> Vec<M2Camera> {
                 fov: f32_at(0x04),
                 far_clip: f32_at(0x08),
                 near_clip: f32_at(0x0c),
-                positions: track_spline_vec3(b, rec + 0x10),
+                positions: track_spline_vec3(b, rec + 0x10, &budget),
                 position_base: vec3_at(0x2c),
-                target: track_spline_vec3(b, rec + 0x38),
+                target: track_spline_vec3(b, rec + 0x38, &budget),
                 target_base: vec3_at(0x54),
-                roll: track_spline_f32(b, rec + 0x60),
+                roll: track_spline_f32(b, rec + 0x60, &budget),
             }
         })
         .collect()
