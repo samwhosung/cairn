@@ -1,0 +1,17 @@
+[package]
+name = "wdt"
+description = "Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wowfile = { path = "../wowfile" }
+
+[dev-dependencies]
+mpq = { path = "../mpq" }
+
+[lints]
+workspace = true
