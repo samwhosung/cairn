@@ -21,6 +21,14 @@ bevy = { version = "0.18.1", default-features = false, features = [
   "bevy_pbr",
   "png",
 ] }
+# Collision queries only: the scene, picking, gizmo and mesh-collider features would pull in Bevy
+# features nothing here uses.
+avian3d = { version = "0.6.1", default-features = false, features = [
+  "3d",
+  "f32",
+  "parry-f32",
+  "parallel",
+] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

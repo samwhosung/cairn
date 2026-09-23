@@ -21,13 +21,13 @@ const RELEASE_HYSTERESIS_CHUNKS: i32 = 1;
 
 /// The client's chunk window: `1 + farclip / chunk` chunks resident and two more requested.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Window {
+pub(crate) struct Window {
     focus: (i32, i32),
     reach: i32,
 }
 
 impl Window {
-    fn at(farclip: f32, wow_x: f32, wow_y: f32) -> Self {
+    pub(crate) fn at(farclip: f32, wow_x: f32, wow_y: f32) -> Self {
         let (cx, cy) = wdt::world_to_chunk(wow_x, wow_y);
         let inner = 1 + (farclip / CHUNK_SIZE).trunc() as i32;
         Self {
@@ -44,12 +44,12 @@ impl Window {
         ((lo(fx), lo(fy)), (hi(fx), hi(fy)))
     }
 
-    fn tiles(self) -> impl Iterator<Item = (u32, u32)> {
+    pub(crate) fn tiles(self) -> impl Iterator<Item = (u32, u32)> {
         let ((x0, y0), (x1, y1)) = self.tile_range(0);
         (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
     }
 
-    fn keeps(self, (x, y): (u32, u32)) -> bool {
+    pub(crate) fn keeps(self, (x, y): (u32, u32)) -> bool {
         let ((x0, y0), (x1, y1)) = self.tile_range(RELEASE_HYSTERESIS_CHUNKS);
         (x0..=x1).contains(&x) && (y0..=y1).contains(&y)
     }

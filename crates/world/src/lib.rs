@@ -7,6 +7,7 @@
 mod adt;
 mod atmosphere;
 mod billboard;
+pub mod collision;
 pub mod coords;
 mod decode;
 mod ground;
