@@ -6,21 +6,29 @@
 
 mod adt;
 mod atmosphere;
+mod billboard;
 pub mod coords;
 mod decode;
+mod ground;
 mod horizon;
 mod layers;
 mod light;
 mod m2;
 mod map;
 mod model;
+mod model_material;
+mod models;
 mod placements;
+mod portal;
+mod probes;
+mod sh;
 mod sky;
 mod source;
 mod stream;
 mod terrain;
 mod texture;
 mod view;
+mod visibility;
 mod wdt;
 mod wmo;
 
@@ -68,9 +76,10 @@ impl Plugin for LoadersPlugin {
     }
 }
 
-/// Draws the world around the [`WorldCamera`]: terrain to the far clip, the WDL horizon past it and
-/// the sky behind, lit by the [`SceneLight`]. Needs [`LoadersPlugin`] and the [`Install`],
-/// [`CurrentMap`] and [`TimeOfDay`] resources.
+/// Draws the world around the [`WorldCamera`]: terrain to the far clip with the doodads and
+/// buildings the map places on it, the WDL horizon past it and the sky behind, lit by the
+/// [`SceneLight`]. Needs [`LoadersPlugin`] and the [`Install`], [`CurrentMap`] and [`TimeOfDay`]
+/// resources.
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -79,12 +88,15 @@ impl Plugin for WorldPlugin {
             decode::DecodePlugin,
             light::LightBufferPlugin,
             terrain::TerrainMaterialPlugin,
+            model_material::ModelMaterialPlugin,
+            probes::ProbePlugin,
             horizon::HorizonPlugin,
             sky::SkyPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()
+        .init_resource::<models::Furnished>()
         .add_systems(Startup, atmosphere::load_catalog)
         .add_systems(
             Update,
@@ -92,9 +104,22 @@ impl Plugin for WorldPlugin {
                 atmosphere::resolve_light,
                 stream::stream_terrain,
                 horizon::stream_horizon,
-                placements::track_placements.after(stream::stream_terrain),
+                (
+                    placements::track_placements,
+                    models::furnish,
+                    portal::compute_wmo_pvs,
+                    visibility::apply_model_visibility,
+                )
+                    .chain()
+                    .after(stream::stream_terrain),
             )
                 .in_set(WorldSystems),
+        )
+        .add_systems(
+            PostUpdate,
+            billboard::face_billboards
+                .after(bevy::transform::TransformSystems::Propagate)
+                .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
         );
     }
 }
@@ -117,15 +142,17 @@ impl TimeOfDay {
 }
 
 /// Whether everything around the camera has arrived: every terrain tile the far clip reaches is
-/// drawn or known to be missing, and the horizon ring is up.
+/// drawn or known to be missing, every model it places is drawn with its textures, and the
+/// horizon ring is up.
 #[derive(Resource, Default, Debug)]
 pub struct Residency {
     terrain: bool,
+    models: bool,
     horizon: bool,
 }
 
 impl Residency {
     pub fn settled(&self) -> bool {
-        self.terrain && self.horizon
+        self.terrain && self.models && self.horizon
     }
 }

@@ -65,6 +65,7 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
         sky: atmosphere.sky,
         sky_warp: daynight::sky_warp(minute, atmosphere.highlight_sky),
         visible_sun: wow_to_bevy(daynight::celestial_sun_direction(minute)).normalize(),
+        night_glow: daynight::sidn_night_fraction(minute),
     }
 }
 
@@ -92,8 +93,8 @@ mod tests {
             let v = |byte: u8| f32::from(byte) / 255.0;
             [v(r), v(g), v(b), w]
         };
-        assert_eq!(rows[0], rgbw([104, 130, 154], 0.0));
-        assert_eq!(rows[1], rgbw([255, 136, 0], 0.0));
+        assert_eq!(rows[0], rgbw([104, 130, 154], 1.0));
+        assert_eq!(rows[1], rgbw([255, 136, 0], 1.0));
         assert_eq!(rows[3], rgbw([255, 247, 222], 20.0));
         assert_eq!(rows[4], rgbw([77, 120, 143], 1.0));
         assert_eq!(rows[5], [0.25 * 350.0, 350.0, 0.0, 350.0]);

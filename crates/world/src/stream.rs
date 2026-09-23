@@ -75,6 +75,13 @@ pub(crate) struct Streamer {
 }
 
 impl Streamer {
+    pub(crate) fn pending_or_arrived(&self, tile: (u32, u32)) -> Option<&Handle<AdtTile>> {
+        self.tiles
+            .get(&tile)
+            .filter(|t| !matches!(t.state, TileState::Failed))
+            .map(|t| &t.handle)
+    }
+
     pub(crate) fn arrived(&self) -> impl Iterator<Item = ((u32, u32), &Handle<AdtTile>)> {
         self.tiles
             .iter()
