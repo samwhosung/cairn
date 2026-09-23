@@ -2197,6 +2197,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "light"
+version = "0.0.0"
+dependencies = [
+ "dbc",
+ "mpq",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
