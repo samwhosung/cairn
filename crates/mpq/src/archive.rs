@@ -73,11 +73,6 @@ impl Archive {
             return Err(Error::NotMpq);
         }
         let sector_shift = u16::from_le_bytes([header[14], header[15]]);
-        if sector_shift > MAX_SECTOR_SHIFT {
-            return Err(Error::Corrupt(format!(
-                "sector size shift {sector_shift} is too large"
-            )));
-        }
         let hash_pos = header_pos + u64::from(word(16));
         let hash_table = read_table(&mut file, file_len, hash_pos, word(24), "(hash table)")?
             .into_iter()
@@ -95,7 +90,7 @@ impl Archive {
         Ok(Self {
             path,
             header_pos,
-            sector_size: 512 << sector_shift,
+            sector_size: sector_size(sector_shift)?,
             hash_table,
             block_table,
         })
@@ -226,6 +221,19 @@ impl Archive {
         }
         Ok(out)
     }
+}
+
+fn sector_size(shift: u16) -> Result<usize, Error> {
+    if shift > MAX_SECTOR_SHIFT {
+        return Err(Error::Corrupt(format!(
+            "sector size shift {shift} is too large"
+        )));
+    }
+    usize::try_from(512u64 << shift).map_err(|_| {
+        Error::Corrupt(format!(
+            "sector size shift {shift} is too large for this platform"
+        ))
+    })
 }
 
 fn find_header(file: &mut File, file_len: u64) -> Result<u64, Error> {
@@ -412,6 +420,21 @@ mod tests {
         assert_eq!(out.len(), SECTOR_SIZE + 100);
         assert!(out[..SECTOR_SIZE].iter().all(|&b| b == 0));
         assert!(out[SECTOR_SIZE..].iter().all(|&b| b == 7));
+    }
+
+    #[test]
+    fn sector_sizes_never_wrap() {
+        assert_eq!(sector_size(3).ok(), Some(4096));
+        assert!(matches!(
+            sector_size(MAX_SECTOR_SHIFT + 1),
+            Err(Error::Corrupt(_))
+        ));
+        let largest = sector_size(MAX_SECTOR_SHIFT);
+        if usize::BITS > 32 {
+            assert_eq!(largest.ok(), Some(512 << MAX_SECTOR_SHIFT));
+        } else {
+            assert!(matches!(largest, Err(Error::Corrupt(_))));
+        }
     }
 
     #[test]
