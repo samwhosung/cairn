@@ -56,9 +56,17 @@ struct Shot {
 /// A frame drawn while a pipeline still waits for its shaders silently lacks that pipeline's
 /// draws.
 #[derive(Resource, Clone, Default)]
-struct Pipelines {
-    built: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
+pub(crate) struct Pipelines {
+    pub(crate) built: Arc<AtomicBool>,
+    pub(crate) failed: Arc<AtomicBool>,
+}
+
+pub(crate) fn watch_pipelines(app: &mut App) -> Pipelines {
+    let pipelines = Pipelines::default();
+    app.sub_app_mut(RenderApp)
+        .insert_resource(pipelines.clone())
+        .add_systems(Render, update_pipelines.in_set(RenderSystems::Cleanup));
+    pipelines
 }
 
 impl Plugin for ShotPlugin {
@@ -71,10 +79,7 @@ impl Plugin for ShotPlugin {
         );
         let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let (pose, view_target) = (self.pose, target.clone());
-        let pipelines = Pipelines::default();
-        app.sub_app_mut(RenderApp)
-            .insert_resource(pipelines.clone())
-            .add_systems(Render, watch_pipelines.in_set(RenderSystems::Cleanup));
+        let pipelines = watch_pipelines(app);
         app.insert_resource(pipelines)
             .insert_resource(Shot {
                 out: self.out.clone(),
@@ -94,7 +99,7 @@ impl Plugin for ShotPlugin {
     }
 }
 
-fn watch_pipelines(cache: Res<'_, PipelineCache>, pipelines: Res<'_, Pipelines>) {
+fn update_pipelines(cache: Res<'_, PipelineCache>, pipelines: Res<'_, Pipelines>) {
     let failed = cache.pipelines().any(|pipeline| {
         matches!(
             pipeline.state,
@@ -168,7 +173,7 @@ fn compare(
     }
 }
 
-fn write_png(image: &Image, out: &Path) -> Result<(), String> {
+pub(crate) fn write_png(image: &Image, out: &Path) -> Result<(), String> {
     let pixels = image
         .clone()
         .try_into_dynamic()

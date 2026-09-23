@@ -1,0 +1,254 @@
+//! Pictures of the walker from its own follow camera: the window's plugins drawn headless into an
+//! image, the body walked by scripted keys at a fixed step, and a PNG taken with the clocks held.
+//! They need a GPU as well as the install, so they run only when asked for, writing into the
+//! directory `CAIRN_PICTURES` names.
+
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use bevy::camera::RenderTarget;
+use bevy::ecs::system::RunSystemOnce;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
+use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::time::TimeUpdateStrategy;
+use world::collision::{CollisionPlugin, WorldCollision};
+use world::coords::wow_to_bevy;
+use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
+use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
+
+use crate::player::camera::{CameraControl, CameraRig};
+use crate::player::state::Player;
+use crate::player::{Mode, PlayerBody, PlayerPlugin};
+use crate::shot::{Pipelines, headless_plugins, watch_pipelines, write_png};
+use crate::view::Pose;
+
+const STEP: Duration = Duration::from_nanos(16_666_667);
+const SIZE: UVec2 = UVec2::new(1280, 720);
+const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
+const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
+
+const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
+const EAST: f32 = 270.0;
+
+struct Painter {
+    app: App,
+    target: Handle<Image>,
+    out: PathBuf,
+}
+
+impl Painter {
+    /// Headings in degrees: 0 north, 90 west.
+    fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
+        let (Some(data), Some(out)) = (
+            std::env::var_os("WOW_DATA"),
+            std::env::var_os("CAIRN_PICTURES"),
+        ) else {
+            eprintln!("skipped: set WOW_DATA and CAIRN_PICTURES");
+            return None;
+        };
+        let install = Install::open(&PathBuf::from(data)).expect("open the install");
+        let map = CurrentMap::find(&install.0, "Azeroth").expect("the map");
+        let tables = CharacterTables::load(&install).expect("the character tables");
+        let mut app = App::new();
+        world::register_source(&mut app, &install);
+        app.add_plugins(headless_plugins())
+            .insert_resource(map)
+            .insert_resource(tables)
+            .insert_resource(TimeOfDay { minute: 12 * 60 })
+            .insert_resource(TimeUpdateStrategy::ManualDuration(STEP))
+            .add_plugins((
+                CollisionPlugin,
+                PlayerPlugin {
+                    pose: Pose::orbit(Vec3::new(xy[0], xy[1], 500.0), heading_deg, 12.0, 16.0),
+                    mode: Mode::Walk,
+                    look,
+                },
+                world::LoadersPlugin,
+                world::WorldPlugin,
+            ));
+        let pipelines = watch_pipelines(&mut app);
+        app.insert_resource(pipelines);
+        app.finish();
+        app.cleanup();
+        let target =
+            app.world_mut()
+                .resource_mut::<Assets<Image>>()
+                .add(Image::new_target_texture(
+                    SIZE.x,
+                    SIZE.y,
+                    TextureFormat::Rgba8UnormSrgb,
+                    None,
+                ));
+        let mut painter = Self {
+            app,
+            target,
+            out: PathBuf::from(out),
+        };
+        painter.app.update();
+        let camera = painter
+            .app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldCamera>>()
+            .single(painter.app.world())
+            .expect("the follow camera");
+        let view = RenderTarget::Image(painter.target.clone().into());
+        painter.app.world_mut().entity_mut(camera).insert(view);
+        painter.put_on_ground(xy);
+        painter.settle();
+        Some(painter)
+    }
+
+    fn put_on_ground(&mut self, xy: [f32; 2]) {
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        while self.app.world().resource::<Player>().settling {
+            assert!(Instant::now() < deadline, "the collision never settled");
+            self.app.update();
+            std::thread::sleep(STEP);
+        }
+        let from = wow_to_bevy([xy[0], xy[1], 500.0]);
+        let ground = self
+            .app
+            .world_mut()
+            .run_system_once(move |c: WorldCollision<'_, '_>| {
+                c.ray_body(from, Dir3::NEG_Y, 2000.0)
+                    .map(|h| from.y - h.distance)
+            })
+            .expect("the system runs")
+            .expect("ground under the start");
+        let mut player = self.app.world_mut().resource_mut::<Player>();
+        player.pos = Vec3::new(from.x, ground, from.z);
+        player.vel_y = 0.0;
+        player.horiz_vel = Vec3::ZERO;
+        player.airborne_since = None;
+        player.settling = true;
+    }
+
+    fn settle(&mut self) {
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        while !self.arrived() {
+            assert!(Instant::now() < deadline, "the world never arrived");
+            self.app.update();
+            std::thread::sleep(STEP);
+        }
+    }
+
+    fn arrived(&mut self) -> bool {
+        let world = self.app.world_mut();
+        let pipelines = world.resource::<Pipelines>();
+        assert!(
+            !pipelines.failed.load(Ordering::Relaxed),
+            "a render pipeline failed"
+        );
+        if world.resource::<Player>().settling
+            || !world.resource::<Residency>().settled()
+            || !pipelines.built.load(Ordering::Relaxed)
+        {
+            return false;
+        }
+        let Ok(body) = world
+            .query_filtered::<&UnitBody, (With<PlayerBody>, With<BodyDressed>)>()
+            .single(world)
+        else {
+            return false;
+        };
+        let images = world.resource::<Assets<Image>>();
+        body.character.iter().all(|c| {
+            [&c.body, &c.hair, &c.skin_extra]
+                .into_iter()
+                .flatten()
+                .all(|h| images.contains(h))
+        })
+    }
+
+    fn key(&mut self, key_code: KeyCode, state: ButtonState) {
+        self.app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Unidentified(NativeKey::Unidentified),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+
+    fn orbit(&mut self, yaw_by: f32, distance: f32) {
+        let mut control = self.app.world_mut().resource_mut::<CameraControl>();
+        control.distance = distance;
+        control.target_distance = distance;
+        let world = self.app.world_mut();
+        let mut rig = world
+            .query_filtered::<&mut CameraRig, With<WorldCamera>>()
+            .single_mut(world)
+            .expect("the follow camera");
+        rig.yaw += yaw_by;
+    }
+
+    fn run(&mut self, frames: usize) {
+        for _ in 0..frames {
+            self.app.update();
+        }
+    }
+
+    fn wait(&mut self, secs: f32) {
+        self.run((secs / STEP.as_secs_f32()).round() as usize);
+    }
+
+    fn shoot(&mut self, name: &str) {
+        self.app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        self.run(FRAMES_TO_REACH_THE_IMAGE);
+        let shot: Arc<Mutex<Option<Image>>> = Arc::default();
+        let into = shot.clone();
+        self.app
+            .world_mut()
+            .spawn(Screenshot::image(self.target.clone()))
+            .observe(move |captured: On<'_, '_, ScreenshotCaptured>| {
+                *into.lock().expect("the shot") = Some(captured.image.clone());
+            });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while shot.lock().expect("the shot").is_none() {
+            assert!(Instant::now() < deadline, "no frame came back");
+            self.app.update();
+        }
+        let image = shot.lock().expect("the shot").take().expect("a frame");
+        let path = self.out.join(format!("{name}.png"));
+        write_png(&image, &path).expect("the picture writes");
+        eprintln!("wrote {}", path.display());
+        self.app
+            .world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .unpause();
+    }
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_stands_runs_and_jumps_in_goldshire() {
+    let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    p.wait(2.0);
+    p.shoot("goldshire-1-standing");
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    p.wait(1.5);
+    p.shoot("goldshire-2-running");
+    p.key(KeyCode::Space, ButtonState::Pressed);
+    p.run(1);
+    p.key(KeyCode::Space, ButtonState::Released);
+    p.wait(0.25);
+    p.shoot("goldshire-3-jumping");
+    p.wait(1.0);
+    p.key(KeyCode::KeyW, ButtonState::Released);
+    p.wait(0.5);
+    p.shoot("goldshire-4-landed");
+    p.orbit(std::f32::consts::PI, 4.0);
+    p.wait(1.0);
+    p.shoot("goldshire-5-face");
+    p.orbit(0.0, 1.2);
+    p.wait(1.0);
+    p.shoot("goldshire-6-fading");
+}
