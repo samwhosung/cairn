@@ -526,12 +526,12 @@ impl Spawner<'_, '_, '_, '_> {
             .spawn(WmoPortalInstance::new(
                 handle.clone(),
                 transform,
-                m.group_nav.len(),
+                m.rooms.group_nav.len(),
                 name_set,
             ))
             .id();
         out.push(instance);
-        let has_portals = !m.portal_refs.is_empty() && !m.portal_infos.is_empty();
+        let has_portals = m.rooms.has_portals();
         let placed = Placed {
             model: handle.id().untyped(),
             transform,

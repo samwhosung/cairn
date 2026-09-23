@@ -78,7 +78,7 @@ fn resolve(
         .filter_map(|inst| {
             let model = wmos.get(&inst.handle)?;
             let sky = model.skybox.as_deref()?;
-            let mut groups = model.group_nav.iter().zip(&inst.visible);
+            let mut groups = model.rooms.group_nav.iter().zip(&inst.visible);
             groups
                 .any(|(nav, &visible)| visible && nav.flags & GROUP_SHOWS_SKYBOX != 0)
                 .then(|| sky.to_owned())

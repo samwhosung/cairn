@@ -12,7 +12,7 @@ use crate::ground::terrain_wow_z_under;
 use crate::room::{CameraRoom, RoomFog, select_room_fog};
 use crate::stream::Streamer;
 use crate::view::WorldCamera;
-use crate::wmo::{Triangle, WmoGroupNav, WmoModel};
+use crate::wmo::{Triangle, WmoGroupNav, WmoModel, WmoRooms};
 
 pub(crate) const EXTERIOR: u32 = 0x8;
 /// An indoor group lit as outdoors.
@@ -113,8 +113,9 @@ pub(crate) fn compute_wmo_pvs(
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
         };
-        let groups = model.group_nav.len();
-        if model.portal_refs.is_empty() || model.portal_infos.is_empty() {
+        let rooms = &model.rooms;
+        let groups = rooms.group_nav.len();
+        if !rooms.has_portals() {
             let (visible, fog) = (vec![true; groups], vec![false; groups]);
             if inst.visible != visible || inst.interior_fog != fog {
                 inst.visible = visible;
@@ -127,7 +128,7 @@ pub(crate) fn compute_wmo_pvs(
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye_world));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
         let pvs = compute_pvs(
-            model,
+            rooms,
             eye_local,
             terrain_local,
             &clip_from_world,
@@ -139,7 +140,7 @@ pub(crate) fn compute_wmo_pvs(
         if inst.interior_fog != pvs.interior_fog {
             inst.interior_fog = pvs.interior_fog;
         }
-        if !found.indoors && pvs.seeds.indoors(&model.group_nav) {
+        if !found.indoors && pvs.seeds.indoors(&rooms.group_nav) {
             found = CameraRoom {
                 indoors: true,
                 fog: room_fog(model, pvs.seeds, eye_local),
@@ -147,7 +148,7 @@ pub(crate) fn compute_wmo_pvs(
         }
         if claim.is_none()
             && let Some(gi) = pvs.seeds.in_group
-            && model
+            && rooms
                 .group_nav
                 .get(gi)
                 .is_some_and(|n| n.flags & EXTERIOR == 0)
@@ -172,7 +173,7 @@ fn room_fog(model: &WmoModel, seeds: DownRaySeeds, eye_local: [f32; 3]) -> Optio
     [seeds.in_group, seeds.across]
         .into_iter()
         .flatten()
-        .find_map(|g| model.group_nav.get(g).filter(|n| truly_interior(n)))
+        .find_map(|g| model.rooms.group_nav.get(g).filter(|n| truly_interior(n)))
         .and_then(|n| select_room_fog(&model.fogs, n.fog_indices, eye_local))
 }
 
@@ -213,7 +214,7 @@ impl Step {
 }
 
 struct Flood<'a> {
-    model: &'a WmoModel,
+    rooms: &'a WmoRooms,
     eye_local: [f32; 3],
     clip_from_world: &'a Mat4,
     world_from_local: &'a Affine3A,
@@ -226,7 +227,7 @@ struct Flood<'a> {
 
 impl Flood<'_> {
     fn walk(&mut self, stack: &mut Vec<Step>, record_windows: bool) {
-        let nav = &self.model.group_nav;
+        let nav = &self.rooms.group_nav;
         while let Some(step) = stack.pop() {
             self.iters += 1;
             let g = step.group;
@@ -240,13 +241,13 @@ impl Flood<'_> {
                 continue;
             }
             let start = nav[g].ref_start as usize;
-            let end = (start + nav[g].ref_count as usize).min(self.model.portal_refs.len());
-            for r in &self.model.portal_refs[start.min(end)..end] {
+            let end = (start + nav[g].ref_count as usize).min(self.rooms.portal_refs.len());
+            for r in &self.rooms.portal_refs[start.min(end)..end] {
                 let neighbour = r.group as usize;
                 if r.group == u16::MAX || Some(neighbour) == step.came_from {
                     continue;
                 }
-                let Some(info) = self.model.portal_infos.get(r.portal as usize) else {
+                let Some(info) = self.rooms.portal_infos.get(r.portal as usize) else {
                     continue;
                 };
                 let e = self.eye_local;
@@ -260,11 +261,11 @@ impl Flood<'_> {
                 if d < 0.0 {
                     continue;
                 }
-                let prect = if eye_on_portal(&self.model.portal_vertices, info, e) {
+                let prect = if eye_on_portal(&self.rooms.portal_vertices, info, e) {
                     FULL_SCREEN
                 } else {
                     let Some(p) = portal_screen_rect(
-                        &self.model.portal_vertices,
+                        &self.rooms.portal_vertices,
                         info,
                         self.clip_from_world,
                         self.world_from_local,
@@ -299,7 +300,7 @@ impl Flood<'_> {
         for rect in std::mem::take(&mut self.windows) {
             let frustum = window_frustum(rect, self.clip_from_world);
             let mut roots: Vec<Step> = self
-                .model
+                .rooms
                 .group_nav
                 .iter()
                 .enumerate()
@@ -315,7 +316,7 @@ impl Flood<'_> {
 
     fn add_callback_groups(&mut self) {
         let base = Frustum::from_clip_from_world(self.clip_from_world);
-        for (gi, g) in self.model.group_nav.iter().enumerate() {
+        for (gi, g) in self.rooms.group_nav.iter().enumerate() {
             if self.visible[gi] || g.flags & CALLBACK_PASS == 0 {
                 continue;
             }
@@ -326,25 +327,25 @@ impl Flood<'_> {
 }
 
 fn compute_pvs(
-    model: &WmoModel,
+    rooms: &WmoRooms,
     eye_local: [f32; 3],
     terrain_z: Option<f32>,
     clip_from_world: &Mat4,
     world_from_local: &Affine3A,
 ) -> GroupPvs {
-    let nav = &model.group_nav;
+    let nav = &rooms.group_nav;
     let mut flood = Flood {
-        model,
+        rooms,
         eye_local,
         clip_from_world,
         world_from_local,
         visible: vec![false; nav.len()],
         interior_fog: vec![false; nav.len()],
         windows: Vec::new(),
-        portal_pushed: vec![false; model.portal_infos.len()],
+        portal_pushed: vec![false; rooms.portal_infos.len()],
         iters: 0,
     };
-    let seeds = down_ray_seeds(model, eye_local, terrain_z);
+    let seeds = down_ray_seeds(rooms, eye_local, terrain_z);
     let mut stack = seed_steps(nav, seeds);
     flood.walk(&mut stack, seeds.indoors(nav));
     flood.walk_windows();
@@ -523,11 +524,11 @@ impl DownRaySeeds {
 }
 
 pub(crate) fn down_ray_seeds(
-    model: &WmoModel,
+    rooms: &WmoRooms,
     eye: [f32; 3],
     terrain_z: Option<f32>,
 ) -> DownRaySeeds {
-    let nav = &model.group_nav;
+    let nav = &rooms.group_nav;
     let in_column = |g: &WmoGroupNav| {
         eye[0] >= g.bbox_min[0]
             && eye[0] <= g.bbox_max[0]
@@ -552,16 +553,16 @@ pub(crate) fn down_ray_seeds(
         }
         best
     };
-    let (mut best_z, mut best) = highest_face(&model.group_collision_tris);
+    let (mut best_z, mut best) = highest_face(&rooms.group_collision_tris);
     let mut across = None;
     for (gi, g) in nav.iter().enumerate() {
         if !in_column(g) {
             continue;
         }
         let start = g.ref_start as usize;
-        let end = (start + g.ref_count as usize).min(model.portal_refs.len());
-        for r in &model.portal_refs[start.min(end)..end] {
-            let Some(info) = model.portal_infos.get(r.portal as usize) else {
+        let end = (start + g.ref_count as usize).min(rooms.portal_refs.len());
+        for r in &rooms.portal_refs[start.min(end)..end] {
+            let Some(info) = rooms.portal_infos.get(r.portal as usize) else {
                 continue;
             };
             let [nx, ny, nz, d] = info.plane;
@@ -580,7 +581,7 @@ pub(crate) fn down_ray_seeds(
             if z < best_z - NEAREST_TIE_EPS {
                 continue;
             }
-            let Some(verts) = portal_poly(&model.portal_vertices, info) else {
+            let Some(verts) = portal_poly(&rooms.portal_vertices, info) else {
                 continue;
             };
             let (u, v) = projection_axes(info.plane);
@@ -607,7 +608,7 @@ pub(crate) fn down_ray_seeds(
         if terrain_z.is_some_and(|tz| tz <= eye[2]) {
             return DownRaySeeds::default();
         }
-        let (fb_z, fb) = highest_face(&model.group_camera_only_tris);
+        let (fb_z, fb) = highest_face(&rooms.group_camera_only_tris);
         let named = fb.filter(|&g| {
             eye[2] - fb_z <= MAX_FLOOR_DROP && nav.get(g).is_some_and(|n| n.flags & EXTERIOR == 0)
         });

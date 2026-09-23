@@ -99,9 +99,13 @@ fn eye_or_camera(
 
 fn keys(model: &WmoModel, inst: &WmoPortalInstance, group: usize) -> WmoInteriorKeys {
     WmoInteriorKeys {
-        wmo_id: model.wmo_id,
+        wmo_id: model.rooms.wmo_id,
         name_set: u32::from(inst.name_set),
-        group_area_id: model.group_nav.get(group).map_or(0, |g| g.wmo_group_id),
+        group_area_id: model
+            .rooms
+            .group_nav
+            .get(group)
+            .map_or(0, |g| g.wmo_group_id),
     }
 }
 
@@ -119,13 +123,13 @@ pub(crate) fn track_current_interior(
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, eye);
     let mut found = None;
     for inst in &instances {
-        let Some(model) = wmos.get(&inst.handle).filter(|m| m.wmo_id != 0) else {
+        let Some(model) = wmos.get(&inst.handle).filter(|m| m.rooms.wmo_id != 0) else {
             continue;
         };
         let local_from_world = inst.world_from_local.inverse();
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye, z));
-        if let Some(gi) = down_ray_seeds(model, eye_local, terrain_local).in_group {
+        if let Some(gi) = down_ray_seeds(&model.rooms, eye_local, terrain_local).in_group {
             found = Some(keys(model, inst, gi));
             break;
         }
@@ -147,7 +151,7 @@ pub(crate) fn track_area_interior(
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, probe);
     let mut found = None;
     for inst in &instances {
-        let Some(model) = wmos.get(&inst.handle).filter(|m| m.wmo_id != 0) else {
+        let Some(model) = wmos.get(&inst.handle).filter(|m| m.rooms.wmo_id != 0) else {
             continue;
         };
         let local_from_world = inst.world_from_local.inverse();
@@ -233,7 +237,7 @@ fn room_cast(
     let probe = feet + Vec3::Y * (FEET_PROBE_LIFT + rise);
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, probe);
     instances.iter().find_map(|(entity, inst)| {
-        let model = wmos.get(&inst.handle).filter(|m| m.wmo_id != 0)?;
+        let model = wmos.get(&inst.handle).filter(|m| m.rooms.wmo_id != 0)?;
         let local_from_world = inst.world_from_local.inverse();
         let local = bevy_to_wow(local_from_world.transform_point3(probe));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe, z));
@@ -250,8 +254,8 @@ fn interior_group_under(
     terrain_z: Option<f32>,
 ) -> Option<usize> {
     let (group, best_z) = nearest_face_below(
-        &model.group_collision_tris,
-        &model.group_collision_bounds,
+        &model.rooms.group_collision_tris,
+        &model.rooms.group_collision_bounds,
         eye_model,
     )?;
     if eye_model[2] - best_z > FEET_RAY_REACH
@@ -260,6 +264,7 @@ fn interior_group_under(
         return None;
     }
     let outdoor = model
+        .rooms
         .group_nav
         .get(group)
         .is_none_or(|g: &WmoGroupNav| g.flags & EXTERIOR != 0);

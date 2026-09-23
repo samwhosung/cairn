@@ -67,7 +67,7 @@ pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_u
 pub use texture::{blp_image, rgba_image};
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
 pub use wdt::WdtIndex;
-pub use wmo::{DoodadBase, WmoGroupNav, WmoModel};
+pub use wmo::{DoodadBase, WmoGroupNav, WmoModel, WmoRooms};
 pub use wmo_areas::{WmoArea, WmoAreas};
 
 /// Registers the loaders for BLP textures, WDT and ADT map files, and M2 and WMO models. Add it

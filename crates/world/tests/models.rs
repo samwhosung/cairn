@@ -156,15 +156,15 @@ fn a_wmo_loads_its_groups_portals_and_doodads() {
         assert_eq!(got.geometry.vertex_colors, want.vertex_colors);
         assert_eq!(got.geometry.wmo_batch, want.wmo_batch);
     }
-    assert_eq!(m.group_nav.len(), root.group_count() as usize);
+    assert_eq!(m.rooms.group_nav.len(), root.group_count() as usize);
     assert_eq!(m.submesh_group.len(), m.submeshes.len());
-    assert_eq!(m.portal_infos.len(), root.portals().infos.len());
+    assert_eq!(m.rooms.portal_infos.len(), root.portals().infos.len());
     assert_eq!(m.doodads.len(), root.doodads().len());
     assert!(
-        m.group_nav.iter().any(|g| g.flags & 0x8 != 0),
+        m.rooms.group_nav.iter().any(|g| g.flags & 0x8 != 0),
         "an outdoor shell"
     );
-    assert!(m.group_collision_tris.iter().any(|g| !g.is_empty()));
+    assert!(m.rooms.group_collision_tris.iter().any(|g| !g.is_empty()));
     assert!(
         m.doodad_base
             .iter()
