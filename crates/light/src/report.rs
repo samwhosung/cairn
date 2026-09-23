@@ -41,10 +41,8 @@ impl LightCatalog {
             "LightParams {p} @ time {time} half-min — all int rows (sRGB 0..255):"
         );
         for b in 0..INT_BAND_ROWS {
-            let key = int_band_id(p, b);
-            let _ = match self
-                .int_bands
-                .get(&key)
+            let _ = match int_band_id(p, b)
+                .and_then(|key| self.int_bands.get(&key))
                 .and_then(|band| sample_color(band, time))
             {
                 Some(c) => writeln!(
@@ -58,10 +56,8 @@ impl LightCatalog {
             };
         }
         for b in 0..FLOAT_BAND_ROWS {
-            let key = float_band_id(p, b);
-            let _ = match self
-                .float_bands
-                .get(&key)
+            let _ = match float_band_id(p, b)
+                .and_then(|key| self.float_bands.get(&key))
                 .and_then(|band| sample_float(band, time))
             {
                 Some(v) => writeln!(s, "  float[{b}] = {v:.4}"),

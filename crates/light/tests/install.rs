@@ -118,6 +118,7 @@ fn records_past_the_id_gaps_read_their_own_bands() {
     assert!((last.fog_start_frac + 0.2).abs() < 1e-6);
     assert!(cat.sample_params_id(0, NOON).is_none());
     assert!(cat.sample_params_id(10_000, NOON).is_none());
+    assert!(cat.sample_params_id(u32::MAX / 18 + 2, NOON).is_none());
 }
 
 #[test]

@@ -28,12 +28,18 @@ const FLOAT_BAND_FOG_END: u32 = 0;
 const FLOAT_BAND_FOG_START: u32 = 1;
 const FLOAT_BAND_CLOUD_DENSITY: u32 = 3;
 
-pub(crate) fn int_band_id(params_id: u32, row: u32) -> u32 {
-    (params_id - 1) * INT_BAND_ROWS + row + 1
+pub(crate) fn int_band_id(params_id: u32, row: u32) -> Option<u32> {
+    params_id
+        .checked_sub(1)?
+        .checked_mul(INT_BAND_ROWS)?
+        .checked_add(row + 1)
 }
 
-pub(crate) fn float_band_id(params_id: u32, row: u32) -> u32 {
-    (params_id - 1) * FLOAT_BAND_ROWS + row + 1
+pub(crate) fn float_band_id(params_id: u32, row: u32) -> Option<u32> {
+    params_id
+        .checked_sub(1)?
+        .checked_mul(FLOAT_BAND_ROWS)?
+        .checked_add(row + 1)
 }
 
 pub(crate) fn weather_slot(ghost: bool, stormy: bool, underwater: bool) -> usize {
@@ -191,18 +197,18 @@ impl LightCatalog {
     }
 
     fn has_bands(&self, p: u32) -> bool {
-        p >= 1 && self.int_bands.contains_key(&int_band_id(p, INT_BAND_FOG))
+        int_band_id(p, INT_BAND_FOG).is_some_and(|id| self.int_bands.contains_key(&id))
     }
 
     pub(crate) fn sample_param(&self, p: u32, t: u32) -> Atmosphere {
         let float = |row: u32| {
-            self.float_bands
-                .get(&float_band_id(p, row))
+            float_band_id(p, row)
+                .and_then(|id| self.float_bands.get(&id))
                 .and_then(|b| sample_float(b, t))
         };
         let col = |row: u32| {
-            self.int_bands
-                .get(&int_band_id(p, row))
+            int_band_id(p, row)
+                .and_then(|id| self.int_bands.get(&id))
                 .and_then(|b| sample_color(b, t))
                 .unwrap_or(ZERO_KEY_COLOR)
         };
@@ -233,5 +239,19 @@ impl LightCatalog {
                 col(INT_BAND_CLOUD_BASE),
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn band_ids_past_u32_max_are_none() {
+        assert_eq!(int_band_id(12, INT_BAND_FOG), Some(206));
+        assert_eq!(float_band_id(12, FLOAT_BAND_FOG_END), Some(67));
+        assert_eq!(int_band_id(0, 0), None);
+        assert_eq!(int_band_id(u32::MAX / INT_BAND_ROWS + 2, 0), None);
+        assert_eq!(float_band_id(u32::MAX, 0), None);
     }
 }
