@@ -78,6 +78,31 @@ pub fn blp_image(blp: NativeBlp, formats: CompressedImageFormats, repeat: Repeat
     );
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = levels;
+    image.sampler = world_sampler(repeat);
+    image
+}
+
+/// An RGBA8 texture built on the CPU, its levels as given, sampled like a world texture.
+pub fn rgba_image(width: u32, height: u32, levels: Vec<Vec<u8>>, repeat: Repeat) -> Image {
+    let count = levels.len() as u32;
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(levels.into_iter().flatten().collect());
+    image.texture_descriptor.mip_level_count = count;
+    image.sampler = world_sampler(repeat);
+    image
+}
+
+/// Trilinear, anisotropy off: how the 1.12.1 client filters world textures on a fresh install.
+fn world_sampler(repeat: Repeat) -> ImageSampler {
     let address = |repeats| {
         if repeats {
             ImageAddressMode::Repeat
@@ -85,16 +110,14 @@ pub fn blp_image(blp: NativeBlp, formats: CompressedImageFormats, repeat: Repeat
             ImageAddressMode::ClampToEdge
         }
     };
-    // Trilinear, anisotropy off: how the 1.12.1 client filters world textures on a fresh install.
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: address(repeat.u),
         address_mode_v: address(repeat.v),
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
         ..ImageSamplerDescriptor::default()
-    });
-    image
+    })
 }
 
 fn block_format(texels: BlpTexels) -> Option<TextureFormat> {

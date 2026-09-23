@@ -1,6 +1,6 @@
-use bevy::math::Mat3;
+use bevy::math::{Affine3A, Mat3, Mat3A, Vec3A};
 use bevy::prelude::*;
-use model::BillboardKind;
+use model::{BillboardKind, ParentArm, ParentBasis};
 
 use crate::model::BillboardInfo;
 use crate::view::WorldCamera;
@@ -54,6 +54,49 @@ pub(crate) fn billboard_basis(
         }
     };
     rotation_onto_wow_axes(bone_x, bone_y, bone_z)
+}
+
+/// Unless the arm takes the root's origin, the bone stays where its animated parent carried it
+/// and only the basis changes.
+pub(crate) fn parent_arm_matrix(
+    arm: ParentArm,
+    parent: Affine3A,
+    model_root: Affine3A,
+    rest_pivot: Vec3,
+) -> Affine3A {
+    const UNIT_EPS: f32 = 1.0 / (1 << 22) as f32;
+    const RATIO_EPS: f32 = 1e-5;
+    let (p, r) = (parent.matrix3, model_root.matrix3);
+    let per_axis = |f: &dyn Fn(usize) -> Vec3A| Mat3A::from_cols(f(0), f(1), f(2));
+    let matrix3 = match arm.basis {
+        ParentBasis::Keep => p,
+        ParentBasis::UnitNormalize => per_axis(&|k| {
+            let len = p.col(k).length();
+            if len > UNIT_EPS {
+                p.col(k) / len
+            } else {
+                p.col(k)
+            }
+        }),
+        ParentBasis::RootDirection => per_axis(&|k| {
+            let rl2 = r.col(k).length_squared();
+            let ratio = if rl2 <= RATIO_EPS {
+                1.0
+            } else {
+                p.col(k).length() / rl2.sqrt()
+            };
+            r.col(k) * ratio
+        }),
+        ParentBasis::RootBasis => r,
+    };
+    Affine3A {
+        matrix3,
+        translation: if arm.ignore_translate {
+            model_root.translation
+        } else {
+            parent.transform_point3a(rest_pivot.into()) - matrix3 * Vec3A::from(rest_pivot)
+        },
+    }
 }
 
 /// The rotation of a mesh in Bevy's axes that lays its WoW x, y and z along the given directions.

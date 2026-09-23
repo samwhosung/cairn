@@ -22,12 +22,14 @@ mod models;
 mod placements;
 mod portal;
 mod probes;
+pub mod rig;
 mod sh;
 mod sky;
 mod source;
 mod stream;
 mod terrain;
 mod texture;
+pub mod unit;
 mod view;
 mod visibility;
 mod wdt;
@@ -46,7 +48,7 @@ pub use placements::{
     GLOBAL_WMO_ID, PlacedModel, Placement, Placements, PropPlacement, prop_placements,
 };
 pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_url, wmo_url};
-pub use texture::blp_image;
+pub use texture::{blp_image, rgba_image};
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
 pub use wdt::WdtIndex;
 pub use wmo::{DoodadBase, WmoGroupNav, WmoModel};
@@ -90,6 +92,8 @@ impl Plugin for WorldPlugin {
             light::LightBufferPlugin,
             terrain::TerrainMaterialPlugin,
             model_material::ModelMaterialPlugin,
+            rig::RigPlugin,
+            unit::UnitPlugin,
             probes::ProbePlugin,
             horizon::HorizonPlugin,
             sky::SkyPlugin,

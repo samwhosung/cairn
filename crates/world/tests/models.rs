@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use bevy::animation::AnimationClip;
+use bevy::animation::graph::AnimationGraph;
 use bevy::asset::{AssetPlugin, LoadState};
 use bevy::prelude::*;
 use mpq::Chain;
@@ -9,6 +11,7 @@ use world::{DoodadBase, M2Model, WmoModel};
 const LAMPPOST: &str = "World\\Azeroth\\Elwynn\\PassiveDoodads\\LampPost\\LampPost.mdx";
 const CAMPFIRE: &str = "World\\Azeroth\\Elwynn\\PassiveDoodads\\Campfire\\ElwynnCampfire.mdx";
 const INN: &str = "World\\wmo\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo";
+const HUMAN_MALE: &str = "Character\\Human\\Male\\HumanMale.mdx";
 
 fn data_or_skip() -> Option<PathBuf> {
     let data = std::env::var_os("WOW_DATA").map(PathBuf::from);
@@ -26,6 +29,8 @@ fn app(data: &Path) -> App {
     app.add_plugins(AssetPlugin::default())
         .init_asset::<Image>()
         .init_asset::<Mesh>()
+        .init_asset::<AnimationClip>()
+        .init_asset::<AnimationGraph>()
         .add_plugins(world::LoadersPlugin);
     app.finish();
     app.cleanup();
@@ -92,6 +97,40 @@ fn an_m2_loads_as_the_model_crate_reads_it() {
         fire.lights.iter().filter(|l| l.casts()).count(),
         1,
         "its flame"
+    );
+}
+
+#[test]
+fn a_character_loads_its_skeleton_and_sequences() {
+    let Some(data) = data_or_skip() else {
+        return;
+    };
+    let mut app = app(&data);
+    let handle: Handle<M2Model> = app
+        .world()
+        .resource::<AssetServer>()
+        .load(world::m2_url(HUMAN_MALE));
+    wait_for(&mut app, &handle);
+    let chain = Chain::open(&data).expect("open the chain");
+    let bytes = chain
+        .read(&HUMAN_MALE.replace(".mdx", ".m2"))
+        .expect("read");
+    let skeleton = model::parse_m2_skeleton(&bytes).expect("skeleton");
+    let m2s = app.world().resource::<Assets<M2Model>>();
+    let m = m2s.get(&handle).expect("loaded");
+    assert_eq!(m.skeleton.joints.len(), skeleton.bones.len());
+    assert_eq!(m.inverse_bindposes.len(), skeleton.bones.len());
+    for id in [5, 6, 11, 17] {
+        assert!(m.attachments.iter().any(|a| a.id == id), "attachment {id}");
+    }
+    let anims = m.animations.as_ref().expect("sequences");
+    let stands = anims.clips.iter().filter(|c| c.anim_id == 0).count();
+    assert_eq!(stands, 4, "Stand and its three variations");
+    let run = anims.find_resolved(5, &|_| None).expect("a run");
+    assert!(run.looping && run.move_speed > 6.9);
+    assert_eq!(
+        anims.find_resolved(187, &|_| None).map(|c| c.anim_id),
+        Some(187)
     );
 }
 

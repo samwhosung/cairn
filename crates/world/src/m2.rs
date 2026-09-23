@@ -1,22 +1,38 @@
 use std::io;
+use std::sync::Arc;
 
+use bevy::animation::graph::AnimationGraph;
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
-use bevy::math::Vec3;
+use bevy::math::{Mat4, Vec3};
 use bevy::reflect::TypePath;
-use model::{M2Bounds, M2Light, parse_m2_bounds, parse_m2_lights, parse_m2_render_submeshes};
+use model::{
+    M2Bounds, M2Light, parse_m2_animation_lookup, parse_m2_animation_summary, parse_m2_animations,
+    parse_m2_attachments, parse_m2_bounds, parse_m2_global_sequence_bones, parse_m2_lights,
+    parse_m2_playable_animation_lookup, parse_m2_render_submeshes, parse_m2_skeleton,
+};
 
 use crate::coords::wow_to_bevy;
 use crate::model::ModelSubmesh;
+use crate::rig::{
+    AnimClip, ModelAnimations, ModelAttachment, ModelSkeleton, PoseSource, build_animation_clip,
+    build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
+};
 
 /// An M2 as the world draws it: its render batches in skin order, its authored bounds and its
-/// lights.
+/// lights, and the skeleton and sequences it animates by.
 #[derive(Asset, TypePath)]
 pub struct M2Model {
     pub submeshes: Vec<ModelSubmesh>,
     /// `None` when the header's bounds do not read.
     pub bounds: Option<M2Bounds>,
     pub lights: Vec<M2Light>,
+    /// Empty for a boneless model.
+    pub skeleton: ModelSkeleton,
+    pub inverse_bindposes: Arc<[Mat4]>,
+    pub attachments: Vec<ModelAttachment>,
+    /// `None` when nothing in the model moves with a sequence.
+    pub animations: Option<ModelAnimations>,
 }
 
 impl M2Model {
@@ -58,18 +74,85 @@ impl AssetLoader for M2Loader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let subs = parse_m2_render_submeshes(&bytes, "", &[]).map_err(io::Error::other)?;
-        let submeshes = subs
+        let submeshes: Vec<ModelSubmesh> = subs
             .into_iter()
             .map(|sub| ModelSubmesh::load(ctx, sub))
             .collect();
+        let raw_skeleton = parse_m2_skeleton(&bytes).unwrap_or_default();
+        let (skeleton, inverse_bindposes) = build_skeleton(&raw_skeleton);
+        let attachments = build_attachments(
+            &parse_m2_attachments(&bytes).unwrap_or_default(),
+            &skeleton_pivots(&raw_skeleton),
+        );
+        let animations = animations(ctx, &bytes, &skeleton, &submeshes);
         Ok(M2Model {
             submeshes,
             bounds: parse_m2_bounds(&bytes).ok(),
             lights: parse_m2_lights(&bytes),
+            skeleton,
+            inverse_bindposes: inverse_bindposes.into(),
+            attachments,
+            animations,
         })
     }
 
     fn extensions(&self) -> &[&str] {
         &["m2"]
     }
+}
+
+fn animations(
+    ctx: &mut LoadContext<'_>,
+    bytes: &[u8],
+    skeleton: &ModelSkeleton,
+    submeshes: &[ModelSubmesh],
+) -> Option<ModelAnimations> {
+    let mut graph = AnimationGraph::new();
+    let root = graph.root;
+    let mut pose = PoseSource {
+        bone_masks: vec![0; skeleton.joints.len()],
+        ..PoseSource::default()
+    };
+    let mut clips = Vec::new();
+    for (i, anim) in parse_m2_animations(bytes).iter().enumerate() {
+        let (clip, pose_clip, poses_bones) = build_animation_clip(anim, skeleton);
+        let pose_idx = pose.clips.len() as u32;
+        pose.clips.push(pose_clip);
+        let clip = ctx.add_labeled_asset(format!("clip{i}"), clip);
+        let node = graph.add_clip(clip, 1.0, root);
+        pose.set_node(node, pose_idx, 0);
+        let (lo, hi) = (wow_to_bevy(anim.bounds_min), wow_to_bevy(anim.bounds_max));
+        clips.push(AnimClip {
+            anim_id: anim.anim_id,
+            seq_index: anim.seq_index,
+            node,
+            looping: anim.looping,
+            duration: anim.duration,
+            move_speed: anim.move_speed,
+            blend_time: anim.blend_time,
+            bounds_min: lo.min(hi),
+            bounds_max: lo.max(hi),
+            frequency: anim.frequency,
+            replay: (anim.min_replay, anim.max_replay),
+            poses_bones,
+        });
+    }
+    let global_bones = build_global_bones(&parse_m2_global_sequence_bones(bytes), skeleton);
+    let samples_sequence = parse_m2_animation_summary(bytes)
+        .is_ok_and(|s| s.particle_emitter_count > 0 || s.ribbon_emitter_count > 0)
+        || submeshes.iter().any(|s| {
+            let g = &s.geometry;
+            g.alpha_anim.is_some() || g.uv_anim.is_some() || g.rgb_anim.is_some()
+        });
+    let animates = clips.iter().any(|c| c.poses_bones)
+        || !global_bones.is_empty()
+        || (samples_sequence && !clips.is_empty());
+    animates.then(|| ModelAnimations {
+        graph: ctx.add_labeled_asset("anim_graph".to_owned(), graph),
+        clips,
+        playable_animation_lookup: parse_m2_playable_animation_lookup(bytes).unwrap_or_default(),
+        animation_lookup: parse_m2_animation_lookup(bytes).unwrap_or_default(),
+        global_bones,
+        pose: Arc::new(pose),
+    })
 }

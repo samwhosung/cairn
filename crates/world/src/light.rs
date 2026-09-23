@@ -7,6 +7,7 @@ use bevy::transform::TransformSystems;
 
 use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
 use crate::probes::{MAX_PROP_PROBES, PROBE_ROWS};
+use crate::rig::{BONE_BYTES, MAX_PALETTE_BONES, MAX_RIG_SLOTS};
 use crate::sh::sh_probe_coeffs;
 use crate::view::{FARCLIP, WorldCamera};
 
@@ -16,11 +17,15 @@ const MAX_POINT_LIGHTS: usize = 256;
 const POINT_ROWS: usize = 2 * MAX_POINT_LIGHTS;
 const ROW_BYTES: usize = 16;
 pub(crate) const PROBE_REGION_OFFSET: u64 = ((HEADER_ROWS + POINT_ROWS) * ROW_BYTES) as u64;
-const TINT_REGION_BYTES: usize = 2048 * 4;
+/// Mirrors `WowLight` in model.wgsl.
+pub(crate) const RIG_TABLE_OFFSET: u64 =
+    PROBE_REGION_OFFSET + (MAX_PROP_PROBES * PROBE_ROWS * ROW_BYTES) as u64;
+const TINT_REGION_OFFSET: u64 = RIG_TABLE_OFFSET + (MAX_RIG_SLOTS * 4) as u64;
+pub(crate) const RIG_ORIGIN_OFFSET: u64 = TINT_REGION_OFFSET + (MAX_RIG_SLOTS * 4) as u64;
 const MATANIM_ROWS: usize = 2048;
-const BUFFER_BYTES: u64 = PROBE_REGION_OFFSET
-    + (MAX_PROP_PROBES * PROBE_ROWS * ROW_BYTES + TINT_REGION_BYTES + MATANIM_ROWS * ROW_BYTES)
-        as u64;
+const MATANIM_OFFSET: u64 = RIG_ORIGIN_OFFSET + (MAX_RIG_SLOTS * ROW_BYTES) as u64;
+pub(crate) const RIG_PALETTE_OFFSET: u64 = MATANIM_OFFSET + (MATANIM_ROWS * ROW_BYTES) as u64;
+const BUFFER_BYTES: u64 = RIG_PALETTE_OFFSET + MAX_PALETTE_BONES as u64 * BONE_BYTES;
 
 const AMBIENT: usize = 0;
 const DIFFUSE: usize = 1;

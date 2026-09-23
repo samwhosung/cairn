@@ -44,8 +44,11 @@ struct WowLight {
     point_count: vec4<f32>,
     points: array<vec4<f32>, 512>,
     prop_probes: array<vec4<f32>, 57344>,
+    rig_table: array<u32, 2048>,
     rig_tint: array<u32, 2048>,
+    rig_origin: array<vec4<f32>, 2048>,
     matanim: array<vec4<f32>, 2048>,
+    palettes: array<vec4<f32>>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
 
@@ -76,6 +79,7 @@ const TAG_SHADE_SHIFT: u32 = 6u;
 const TAG_PROBE_MASK: u32 = 0x1fffu;
 const TAG_SLOT_SHIFT: u32 = 19u;
 const TAG_SLOT_MASK: u32 = 0x7ffu;
+const BONE_ROWS: u32 = 3u;
 const TAG_INTERIOR_FOG: u32 = 0x40000000u;
 const TAG_HIGHLIGHT: u32 = 0x80000000u;
 
@@ -198,7 +202,61 @@ struct WowVertex {
 #ifdef VERTEX_COLORS
     @location(5) color: vec4<f32>,
 #endif
+#ifdef WOW_RIG_SKIN
+    @location(10) joint_indices: vec4<u32>,
+    @location(11) joint_weights: vec4<f32>,
+#endif
 }
+
+#ifdef WOW_RIG_SKIN
+fn wow_rig_slot(instance_index: u32) -> u32 {
+    return (mesh_functions::get_tag(instance_index) >> TAG_SLOT_SHIFT) & TAG_SLOT_MASK;
+}
+
+fn wow_skin_model(instance_index: u32, indices: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> {
+    let base = wow_light.rig_table[wow_rig_slot(instance_index)];
+    let b0 = BONE_ROWS * (base + indices.x);
+    let b1 = BONE_ROWS * (base + indices.y);
+    let b2 = BONE_ROWS * (base + indices.z);
+    let b3 = BONE_ROWS * (base + indices.w);
+    let r0 = weights.x * wow_light.palettes[b0]
+        + weights.y * wow_light.palettes[b1]
+        + weights.z * wow_light.palettes[b2]
+        + weights.w * wow_light.palettes[b3];
+    let r1 = weights.x * wow_light.palettes[b0 + 1u]
+        + weights.y * wow_light.palettes[b1 + 1u]
+        + weights.z * wow_light.palettes[b2 + 1u]
+        + weights.w * wow_light.palettes[b3 + 1u];
+    let r2 = weights.x * wow_light.palettes[b0 + 2u]
+        + weights.y * wow_light.palettes[b1 + 2u]
+        + weights.z * wow_light.palettes[b2 + 2u]
+        + weights.w * wow_light.palettes[b3 + 2u];
+    return mat4x4<f32>(
+        vec4<f32>(r0.x, r1.x, r2.x, 0.0),
+        vec4<f32>(r0.y, r1.y, r2.y, 0.0),
+        vec4<f32>(r0.z, r1.z, r2.z, 0.0),
+        vec4<f32>(r0.w, r1.w, r2.w, 1.0),
+    );
+}
+
+fn inverse_transpose_3x3m(in: mat3x3<f32>) -> mat3x3<f32> {
+    let x = cross(in[1], in[2]);
+    let y = cross(in[2], in[0]);
+    let z = cross(in[0], in[1]);
+    let det = dot(in[2], z);
+    return mat3x3<f32>(x / det, y / det, z / det);
+}
+
+fn wow_skin_normals(frame_from_local: mat4x4<f32>, normal: vec3<f32>) -> vec3<f32> {
+    return wow_normalize(
+        inverse_transpose_3x3m(mat3x3<f32>(
+            frame_from_local[0].xyz,
+            frame_from_local[1].xyz,
+            frame_from_local[2].xyz
+        )) * normal
+    );
+}
+#endif
 
 @vertex
 fn vertex(vertex: WowVertex) -> WowVsOut {
@@ -207,15 +265,28 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
     // The placement splits into its rotation and its origin, so no vertex is a big-times-small
     // product in f32.
     let mesh_world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+#ifdef WOW_RIG_SKIN
+    var frame_from_local = wow_skin_model(
+        vertex.instance_index,
+        vertex.joint_indices,
+        vertex.joint_weights
+    );
+    let frame_origin = wow_light.rig_origin[wow_rig_slot(vertex.instance_index)].xyz;
+#else
     var frame_from_local = mesh_world_from_local;
     let frame_origin = mesh_world_from_local[3].xyz;
     frame_from_local[3] = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+#endif
 
 #ifdef VERTEX_NORMALS
+#ifdef WOW_RIG_SKIN
+    out.world_normal = wow_skin_normals(frame_from_local, vertex.normal);
+#else
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
         vertex.normal,
         vertex.instance_index
     );
+#endif
 #endif
 
 #ifdef VERTEX_POSITIONS

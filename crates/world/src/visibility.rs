@@ -63,8 +63,13 @@ pub(crate) fn probe_bits(slot: u16) -> u32 {
     INTERIOR_FOG_BIT | (u32::from(slot) << PROBE_SHIFT) | alpha_bits(1.0)
 }
 
-fn with_alpha(tag: u32, alpha: f32) -> u32 {
+pub(crate) fn with_alpha(tag: u32, alpha: f32) -> u32 {
     (tag & !ALPHA_MASK) | alpha_bits(alpha)
+}
+
+pub(crate) fn translucent(tag: u32) -> bool {
+    let payload = tag & !INTERIOR_FOG_BIT;
+    payload != 0 && (1..ALPHA_MASK).contains(&(payload & ALPHA_MASK))
 }
 
 fn with_interior_fog(tag: u32, on: bool) -> u32 {

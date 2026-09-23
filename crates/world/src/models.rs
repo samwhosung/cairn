@@ -228,7 +228,7 @@ fn shade_known(streamer: &Streamer, adts: &Assets<AdtTile>, at: &Transform) -> b
     ground_shade(streamer, adts, at).is_some()
 }
 
-fn ground_shade(
+pub(crate) fn ground_shade(
     streamer: &Streamer,
     adts: &Assets<AdtTile>,
     at: &Transform,
@@ -497,8 +497,9 @@ impl Spawner<'_, '_, '_> {
                     fog_policy: g.fog_policy,
                     env_map: g.env_map,
                     shade,
-                    batch_order: NonZeroU16::MIN
-                        .saturating_add(u16::try_from(i).unwrap_or(u16::MAX)),
+                    batch_order: Some(
+                        NonZeroU16::MIN.saturating_add(u16::try_from(i).unwrap_or(u16::MAX)),
+                    ),
                     uv_offset_at_rest: g.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0)),
                     tint_at_rest: g.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0)),
                     animated: (g.uv_anim.is_some() || g.rgb_anim.is_some()).then_some(BatchId {

@@ -9,11 +9,13 @@ use bevy::pbr::{
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, CompareFunction,
-    Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, ColorWrites,
+    CompareFunction, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 use model::{FogPolicy, ModelBlend, WmoBatchClass};
+
+use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
 
 pub type ModelMaterial = ExtendedMaterial<StandardMaterial, ModelExtension>;
 
@@ -23,6 +25,9 @@ const ALPHA_KEY: f32 = model::ALPHA_KEY_REF as f32 / 255.0;
 /// file order; capped under 1 so no batch index becomes its own pipeline.
 const BATCH_ORDER_SORT_EPS: f32 = 1e-3;
 const BATCH_ORDER_SORT_CAP: f32 = 0.9;
+/// A depth-prime twin sorts this many yards ahead of its model's colour batches, so a fading body
+/// primes its whole depth before any of it blends.
+const DEPTH_PRIME_SORT_BIAS: f32 = -8.0;
 
 const NO_DEPTH_WRITE: u16 = 1;
 const NO_DEPTH_TEST: u16 = 1 << 1;
@@ -31,6 +36,7 @@ const OPAQUE_INTENT: u16 = 1 << 3;
 const FOG_SHIFT: u16 = 4;
 const MODULATE: u16 = 1 << 7;
 const MODULATE_2X: u16 = 1 << 8;
+const DEPTH_PRIME: u16 = 1 << 9;
 const TWIN_CUTOUT: u16 = 1 << 10;
 const ENV_MAP: u16 = 1 << 12;
 
@@ -43,6 +49,7 @@ pub struct ModelKey {
     no_depth_test: bool,
     modulate: bool,
     modulate2x: bool,
+    depth_prime: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
@@ -55,6 +62,7 @@ impl From<&ModelExtension> for ModelKey {
             no_depth_test: markers & NO_DEPTH_TEST != 0,
             modulate: markers & MODULATE != 0,
             modulate2x: markers & MODULATE_2X != 0,
+            depth_prime: markers & DEPTH_PRIME != 0,
         }
     }
 }
@@ -94,9 +102,28 @@ impl MaterialExtension for ModelExtension {
     fn specialize(
         _pipeline: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        if layout.0.contains(ATTRIBUTE_WOW_JOINT_INDEX) {
+            descriptor.vertex.shader_defs.push("WOW_RIG_SKIN".into());
+            let mut attrs = Vec::with_capacity(7);
+            for (attr, loc) in [
+                (Mesh::ATTRIBUTE_POSITION, 0),
+                (Mesh::ATTRIBUTE_NORMAL, 1),
+                (Mesh::ATTRIBUTE_UV_0, 2),
+                (Mesh::ATTRIBUTE_UV_1, 3),
+                (Mesh::ATTRIBUTE_TANGENT, 4),
+                (Mesh::ATTRIBUTE_COLOR, 5),
+            ] {
+                if layout.0.contains(attr) {
+                    attrs.push(attr.at_shader_location(loc));
+                }
+            }
+            attrs.push(ATTRIBUTE_WOW_JOINT_INDEX.at_shader_location(10));
+            attrs.push(ATTRIBUTE_WOW_JOINT_WEIGHT.at_shader_location(11));
+            descriptor.vertex.buffers = vec![layout.0.get_layout(&attrs)?];
+        }
         let key = key.bind_group_data;
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = !key.no_depth_write || key.fade;
@@ -141,6 +168,13 @@ impl MaterialExtension for ModelExtension {
                 alpha: keep_alpha,
             });
         }
+        if key.depth_prime {
+            target.blend = None;
+            target.write_mask = ColorWrites::empty();
+            if let Some(ds) = descriptor.depth_stencil.as_mut() {
+                ds.depth_write_enabled = true;
+            }
+        }
         Ok(())
     }
 }
@@ -155,10 +189,13 @@ impl Plugin for ModelMaterialPlugin {
     }
 }
 
+/// Which sun intensity the model lane lights a batch with: the client's 1.0 on lit ground and 0.5
+/// in the ground's baked shadow.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum GroundShade {
     Lit,
     Shadowed,
+    Entity,
 }
 
 impl GroundShade {
@@ -166,6 +203,7 @@ impl GroundShade {
         match self {
             GroundShade::Lit => 0.6,
             GroundShade::Shadowed => 0.2,
+            GroundShade::Entity => 1.0,
         }
     }
 }
@@ -174,6 +212,7 @@ impl GroundShade {
 pub(crate) enum Variant {
     Steady,
     FadeTwin,
+    DepthPrime,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -197,7 +236,7 @@ pub(crate) struct BatchLook {
     pub fog_policy: FogPolicy,
     pub env_map: bool,
     pub shade: GroundShade,
-    pub batch_order: NonZeroU16,
+    pub batch_order: Option<NonZeroU16>,
     pub uv_offset_at_rest: [f32; 2],
     pub tint_at_rest: [f32; 3],
     pub animated: Option<BatchId>,
@@ -221,7 +260,7 @@ struct MatKey {
     fog_policy: FogPolicy,
     env_map: bool,
     shade: GroundShade,
-    batch_order: NonZeroU16,
+    batch_order: Option<NonZeroU16>,
     animated: Option<BatchId>,
     wmo_class: Option<WmoBatchClass>,
     sidn: Option<[u8; 3]>,
@@ -268,6 +307,9 @@ impl ModelMaterials {
 }
 
 fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
+    if variant == Variant::DepthPrime {
+        return depth_prime(look, light);
+    }
     let fade_variant = variant == Variant::FadeTwin;
     let blend = look.blend;
     let source_cutout = blend == ModelBlend::AlphaTest;
@@ -281,7 +323,8 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
         }
     };
     let depth_bias = if matches!(alpha_mode, AlphaMode::Blend) {
-        (f32::from(look.batch_order.get()) * BATCH_ORDER_SORT_EPS).min(BATCH_ORDER_SORT_CAP)
+        (f32::from(look.batch_order.map_or(0, NonZeroU16::get)) * BATCH_ORDER_SORT_EPS)
+            .min(BATCH_ORDER_SORT_CAP)
     } else {
         0.0
     };
@@ -301,7 +344,7 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
     let unlit =
         look.emissive || (!look.is_wmo && matches!(blend, ModelBlend::Mod | ModelBlend::Mod2x));
     let order = if look.is_wmo {
-        f32::from(look.batch_order.get())
+        f32::from(look.batch_order.map_or(0, NonZeroU16::get))
     } else {
         0.0
     };
@@ -346,6 +389,39 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
                 class_lane,
             ),
             sidn: Vec4::new(sidn[0], sidn[1], sidn[2], flag(look.window)),
+            anim_slots: Vec4::ZERO,
+            light: light.clone(),
+        },
+    }
+}
+
+fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
+    let cutout = look.blend == ModelBlend::AlphaTest;
+    ExtendedMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: look.texture.clone(),
+            alpha_mode: AlphaMode::Blend,
+            double_sided: look.two_sided,
+            cull_mode: if look.two_sided {
+                None
+            } else {
+                Some(Face::Back)
+            },
+            depth_bias: DEPTH_PRIME_SORT_BIAS,
+            ..StandardMaterial::default()
+        },
+        extension: ModelExtension {
+            clutter_fade: Vec4::new(
+                0.0,
+                0.0,
+                f32::from(DEPTH_PRIME | if cutout { TWIN_CUTOUT } else { 0 }),
+                0.0,
+            ),
+            model_flags: Vec4::ZERO,
+            sun_scale: Vec4::new(GroundShade::Entity.selector(), 0.0, 0.0, 0.0),
+            tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            sidn: Vec4::ZERO,
             anim_slots: Vec4::ZERO,
             light: light.clone(),
         },

@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use bevy::asset::{LoadContext, RenderAssetUsages};
 use bevy::camera::primitives::Aabb;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
+use bevy::render::render_resource::VertexFormat;
 use model::{BillboardKind, RenderSubmesh};
 
 use crate::coords::wow_to_bevy;
@@ -62,6 +63,29 @@ fn mesh_positions(sub: &RenderSubmesh) -> Vec<[f32; 3]> {
         .iter()
         .map(|p| (wow_to_bevy(*p) - center).to_array())
         .collect()
+}
+
+/// Each vertex's four bone indices, which only the model shader's skinning lane reads; Bevy's own
+/// joint attributes would send the mesh down its skinning path instead.
+pub const ATTRIBUTE_WOW_JOINT_INDEX: MeshVertexAttribute =
+    MeshVertexAttribute::new("Wow_JointIndex", 988_540_917, VertexFormat::Uint16x4);
+/// Each vertex's four bone weights, summing to 1.
+pub const ATTRIBUTE_WOW_JOINT_WEIGHT: MeshVertexAttribute =
+    MeshVertexAttribute::new("Wow_JointWeight", 988_540_918, VertexFormat::Float32x4);
+
+pub(crate) fn skinned_submesh_mesh(sub: &RenderSubmesh) -> Mesh {
+    let mut mesh = submesh_mesh(sub);
+    if sub.joints.len() == sub.positions.len() && !sub.joints.is_empty() {
+        mesh.insert_attribute(
+            ATTRIBUTE_WOW_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(sub.joints.clone()),
+        );
+        mesh.insert_attribute(
+            ATTRIBUTE_WOW_JOINT_WEIGHT,
+            VertexAttributeValues::Float32x4(sub.weights.clone()),
+        );
+    }
+    mesh
 }
 
 /// A batch's mesh in Bevy axes, with its authored normals — turned round on a billboard card
