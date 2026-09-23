@@ -513,7 +513,8 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     let lit_interior = select(lit_m2_interior, lit_wmo_interior, is_wmo());
     let is_rig = m.sun_scale.x >= 1.5;
     let lit = select(select(lit_exterior, lit_interior, is_interior()), lit_m2_interior, is_rig);
-    let albedo = base.rgb * (m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz);
+    let anim_tint = m.tint.rgb + wow_light.matanim[u32(m.anim_slots.y)].xyz;
+    let albedo = base.rgb * anim_tint;
     let is_emissive = m.model_flags.w > 0.5;
     var sidn_w = 1.0;
     if (is_interior() && is_wmo()) {
@@ -560,7 +561,19 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     );
     lit_rgb = albedo * primary;
 #endif
-    var rgb = select(lit_rgb, albedo * inst_tint, is_emissive);
+    var unlit_rgb = albedo * inst_tint;
+    if (!is_wmo()) {
+#ifdef VERTEX_COLORS
+        let m2_color = in.color.rgb * anim_tint;
+        let texel = base.rgb / max(in.color.rgb, vec3<f32>(1.0 / 255.0));
+#else
+        let m2_color = anim_tint;
+        let texel = base.rgb;
+#endif
+        // The client clamps an unlit M2's colour before the texel modulates it.
+        unlit_rgb = texel * clamp(m2_color * inst_tint, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    var rgb = select(lit_rgb, unlit_rgb, is_emissive);
     let is_mod = has_marker(MODULATE_BIT);
     let is_mod2x = has_marker(MODULATE_2X_BIT);
     // The client draws an M2 Mod or Mod2x batch from the bare texel.
