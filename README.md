@@ -19,6 +19,7 @@ gates enforce the rest.
 ## Crates
 
 <!-- crates:start -->
+- [`adt`](crates/adt) — Reads World of Warcraft 1.12.1 ADT terrain tiles: heights, textures, liquids and placements
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
