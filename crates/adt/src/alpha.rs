@@ -12,7 +12,7 @@ pub struct CombinedAlphaMap {
 impl CombinedAlphaMap {
     /// `has_big_alpha` reads uncompressed maps as 8 bits a texel instead of 4. `fix_alpha` copies
     /// the last row and column from their neighbours, for maps authored at 63×63. The 1.12.1
-    /// client uses `false`, `true`.
+    /// client reads 4 bits, and fixes a chunk's maps only when its header flag `0x8000` is clear.
     pub fn new(chunk: &McnkChunk, has_big_alpha: bool, fix_alpha: bool) -> Self {
         let mut map = vec![0u8; TEXELS * 4];
         for px in map.as_chunks_mut::<4>().0 {

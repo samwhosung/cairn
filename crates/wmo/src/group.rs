@@ -7,7 +7,7 @@ use crate::record::{f32_le, u16_le, u32_le, whole_records};
 /// One group file's geometry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WmoGroup {
-    /// `MOGP` flags; `flags & 0x48` set means an exterior group.
+    /// `MOGP` flags. The client lights and draws the group as exterior when `flags & 0x48` is set.
     pub flags: u32,
     /// The whole group's liquid type, or `0xf` when each `MLIQ` tile names its own.
     pub group_liquid: u32,

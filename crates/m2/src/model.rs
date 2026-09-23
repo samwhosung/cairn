@@ -67,7 +67,7 @@ impl M2RenderFlags {
     }
 }
 
-/// Material blend mode: 0 opaque, 1 alpha-key, 2 alpha, 3 and 4 additive.
+/// Blend mode: 0 opaque, 1 alpha-key, 2 alpha, 3 and 4 additive, 5 modulate, 6 modulate 2x.
 #[derive(Debug, Clone, Copy)]
 pub struct M2BlendMode(pub(crate) u16);
 

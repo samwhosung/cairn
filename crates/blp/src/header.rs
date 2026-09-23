@@ -6,7 +6,7 @@ pub(crate) const HEADER_SIZE: usize = 148;
 pub(crate) const PALETTE_SIZE: usize = 256 * 4;
 const LEVELS: usize = 16;
 
-/// Bounds what a corrupt header can make the decoder allocate; real textures stop at 1024.
+/// Bounds what a corrupt header can make the decoder allocate; shipped textures stop at 512.
 pub(crate) const MAX_DIM: u32 = 8192;
 
 /// The header, palette and level table, read once for both decoders.
