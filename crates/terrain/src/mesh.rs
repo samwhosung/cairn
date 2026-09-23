@@ -1,4 +1,6 @@
-use adt::{CombinedAlphaMap, McnkChunk, McshChunk, RootAdt, VertexNormal, parse_adt};
+use adt::{
+    CombinedAlphaMap, MCNK_DO_NOT_FIX_ALPHA, McnkChunk, McshChunk, RootAdt, VertexNormal, parse_adt,
+};
 
 use crate::Error;
 use crate::liquid::{LiquidMesh, build_liquid_mesh};
@@ -243,8 +245,12 @@ fn chunk_mesh(root: &RootAdt, mcnk: &McnkChunk) -> Option<ChunkMesh> {
         })
         .unzip();
     let base_texture = layer_textures.first().cloned();
-    let alpha_map = (layer_textures.len() > 1)
-        .then(|| CombinedAlphaMap::new(mcnk, false, true).as_slice().to_vec());
+    let fix_alpha = header.flags & MCNK_DO_NOT_FIX_ALPHA == 0;
+    let alpha_map = (layer_textures.len() > 1).then(|| {
+        CombinedAlphaMap::new(mcnk, false, fix_alpha)
+            .as_slice()
+            .to_vec()
+    });
     let shadow = mcnk.shadow.as_ref().map(shadow_texels);
     let pred_tex = std::array::from_fn(|k| (header.pred_tex[k / 4] >> (2 * (k % 4))) & 0x3);
     let no_effect_doodad =

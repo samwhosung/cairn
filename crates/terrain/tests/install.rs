@@ -189,6 +189,43 @@ fn ocean_and_river_depths_ride_their_own_divisors() {
 }
 
 #[test]
+fn flag_0x8000_reads_alpha_maps_whole() {
+    let Some(chain) = chain_or_skip() else {
+        return;
+    };
+    let mut bytes = chain
+        .read("World\\Maps\\Azeroth\\Azeroth_32_48.adt")
+        .expect("read");
+    let edge_fixed = terrain::adt_to_tile_mesh(&bytes).expect("mesh");
+    let mut at = 0;
+    while at + 8 <= bytes.len() {
+        let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().expect("4 bytes"));
+        if &bytes[at..at + 4] == b"KNCM" {
+            bytes[at + 9] |= 0x80;
+        }
+        at += 8 + size as usize;
+    }
+    let whole = terrain::adt_to_tile_mesh(&bytes).expect("mesh");
+    let root = adt::parse_adt(&bytes).expect("parse");
+    let mut changed = 0;
+    for ((mcnk, a), b) in root
+        .mcnk_chunks
+        .iter()
+        .zip(&edge_fixed.chunks)
+        .zip(&whole.chunks)
+    {
+        assert_ne!(mcnk.header.flags & adt::MCNK_DO_NOT_FIX_ALPHA, 0);
+        let (Some(a), Some(b)) = (&a.alpha_map, &b.alpha_map) else {
+            continue;
+        };
+        let as_read = adt::CombinedAlphaMap::new(mcnk, false, false);
+        assert_eq!(b.as_slice(), as_read.as_slice());
+        changed += usize::from(a != b);
+    }
+    assert!(changed > 0);
+}
+
+#[test]
 fn elwynns_lake_tile_is_still_water_on_a_sane_grid() {
     let Some(chain) = chain_or_skip() else {
         return;

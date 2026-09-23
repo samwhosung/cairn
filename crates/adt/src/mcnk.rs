@@ -92,6 +92,10 @@ impl McshChunk {
 /// The MCNK header flag that bars movers from the chunk.
 pub const MCNK_IMPASSABLE: u32 = 0x2;
 
+/// The MCNK header flag that marks the chunk's alpha maps as authored at 64×64: without it the
+/// client copies their last row and column from their neighbours.
+pub const MCNK_DO_NOT_FIX_ALPHA: u32 = 0x8000;
+
 /// The fields of the MCNK header that are read.
 #[derive(Debug, Clone)]
 pub struct McnkHeader {
