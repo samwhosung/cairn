@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "The repo's gates: `cargo xtask check` runs every one CI runs"
+description = "The repo's gates, all run by `cargo xtask check`"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

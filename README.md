@@ -13,7 +13,7 @@ terrain as the client walks, swims and collides, lit by the hour under its sky a
 ## Working on it
 
     cargo xtask setup   # once per clone: use the repo's git hooks
-    cargo xtask check   # every gate CI runs (--fast for the quick ones)
+    cargo xtask check   # every gate (--fast for the quick ones)
 
 Agents and people follow the same rules; [AGENTS.md](AGENTS.md) has the short version, and the
 gates enforce the rest.
@@ -40,7 +40,7 @@ gates enforce the rest.
 - [`wmo`](crates/wmo) — Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files
 - [`world`](crates/world) — World of Warcraft 1.12.1 in Bevy: its files as assets, its world drawn as the client draws it
 - [`wowfile`](crates/wowfile) — Bounds-checked little-endian reads and the chunk walk the WoW file formats share
-- [`xtask`](xtask) — The repo's gates: `cargo xtask check` runs every one CI runs
+- [`xtask`](xtask) — The repo's gates, all run by `cargo xtask check`
 <!-- crates:end -->
 
 ## License

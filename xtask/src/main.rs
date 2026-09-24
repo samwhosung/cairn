@@ -1,4 +1,4 @@
-//! The repo's gates. `cargo xtask check` runs every one CI runs; `--fast` runs the quick ones.
+//! The repo's gates. `cargo xtask check` runs every one; `--fast` runs the quick ones.
 
 mod rules;
 
@@ -9,7 +9,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 
 const USAGE: &str = "usage: cargo xtask <command>
-  check [--fast]      every gate CI runs; --fast skips clippy, tests, deny and machete
+  check [--fast]      every gate; --fast skips clippy, tests, deny and machete
   commit-msg <file>   lint one commit message (the commit-msg hook)
   commits <range>     lint every commit message in a git range
   map [--check]       regenerate the crate list in README.md
