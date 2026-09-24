@@ -43,8 +43,7 @@ fn runner(server: SocketAddr, look: CharacterLook) -> Runner {
         let Some(mut w) = Walker::welcomed(server, "Runner", look, HZ) else {
             return;
         };
-        w.settle();
-        w.pace();
+        super::walker::ready(&mut [&mut w]);
         let _ = ready.send(());
         while cued.try_recv().is_err() {
             w.run(1);

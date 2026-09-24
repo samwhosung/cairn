@@ -7,7 +7,7 @@ use world::unit::CharacterLook;
 
 use super::MEADOW;
 use super::honest::{Stand, serve};
-use super::walker::Walker;
+use super::walker::{Walker, ready};
 use crate::net::{Faults, OtherPlayer, RemoteMotion};
 use crate::player::state::{GRAVITY, RUN_SPEED};
 
@@ -264,13 +264,7 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], b_faults: Faults) -> Optio
     let id = |w: &Walker| w.net().and_then(|n| n.welcome()).map(|w| w.id);
     let (id_a, id_b) = (id(&a).expect("A joined"), id(&b).expect("B joined"));
     *b.net_mut().expect("B joined").faults() = b_faults;
-    while !(a.settled() && b.settled()) {
-        a.run(1);
-        b.run(1);
-        std::thread::sleep(std::time::Duration::from_secs_f32(1.0 / HZ));
-    }
-    a.pace();
-    b.pace();
+    ready(&mut [&mut a, &mut b]);
     let (mut script_a, mut script_b) = (Script::default(), Script::default());
     let mut walked = Walked {
         a_seen_by_b: Watch::default(),

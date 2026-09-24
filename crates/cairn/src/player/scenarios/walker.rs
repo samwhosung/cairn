@@ -53,6 +53,42 @@ pub fn time_update(joined: bool, step: Duration) -> TimeUpdateStrategy {
     }
 }
 
+/// Updates the walkers side by side until each body is let go and the collision around it is
+/// resident. Their game clocks are held meanwhile: under load the collision can take longer to
+/// build than a body's own settle waits before it lets go.
+fn settle_all(walkers: &mut [&mut Walker]) {
+    let deadline = Instant::now() + Duration::from_secs(300);
+    for w in walkers.iter_mut() {
+        w.app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    }
+    while !walkers.iter().all(|w| w.settled()) {
+        assert!(Instant::now() < deadline, "the collision never settled");
+        round(walkers);
+    }
+    for w in walkers.iter_mut() {
+        w.app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+    }
+}
+
+/// Settles joined walkers side by side, then paces them. The physics steps by the game clock the
+/// settle held, so the first round after it takes in every collider that streamed in meanwhile;
+/// a second keeps that round's length out of the first paced frame.
+pub fn ready(walkers: &mut [&mut Walker]) {
+    settle_all(walkers);
+    round(walkers);
+    round(walkers);
+    for w in walkers.iter_mut() {
+        w.pace();
+    }
+}
+
+fn round(walkers: &mut [&mut Walker]) {
+    for w in walkers.iter_mut() {
+        w.app.update();
+    }
+    std::thread::sleep(walkers.iter().map(|w| w.step).max().unwrap_or_default());
+}
+
 impl Walker {
     /// A client on `map` whose body starts with its feet at `feet` (WoW), facing `heading_deg`
     /// (0 north, 90 west), stepped at `hz`. `None` without `WOW_DATA`.
@@ -74,19 +110,18 @@ impl Walker {
     /// welcome places it, stepped at `hz` and paced to the wall clock.
     pub fn joined(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
         let mut walker = Self::welcomed(server, name, look, hz)?;
-        walker.settle();
-        walker.pace();
+        ready(&mut [&mut walker]);
         Some(walker)
     }
 
-    /// [`Walker::joined`], but not yet settled or paced.
+    /// [`Walker::joined`], but not yet [`ready`].
     pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
         let hello = crate::net::hello(name.to_owned(), &look);
         let net = Net::connect(server, hello);
         Self::build("Azeroth", [0.0; 3], 0.0, hz, None, Some(net))
     }
 
-    pub fn pace(&mut self) {
+    fn pace(&mut self) {
         self.paced = Some(Pace {
             first: Instant::now(),
             frames: 0,
@@ -190,16 +225,9 @@ impl Walker {
         self
     }
 
-    /// Updates until the body is let go and the collision around it is resident: under load the
-    /// body's own settle can give up on its stall clock first. That clock is the game's, so each
-    /// update waits out its own step on the wall clock.
+    /// Updates until the body is let go and the collision around it is resident.
     pub fn settle(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(300);
-        while !self.settled() {
-            assert!(Instant::now() < deadline, "the collision never settled");
-            self.app.update();
-            std::thread::sleep(self.step);
-        }
+        settle_all(&mut [self]);
     }
 
     pub fn player(&self) -> &Player {
