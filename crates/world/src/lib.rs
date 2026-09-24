@@ -7,6 +7,7 @@
 mod adt;
 mod atmosphere;
 mod billboard;
+mod clouds;
 pub mod collision;
 pub mod coords;
 mod glow;
@@ -26,6 +27,7 @@ pub mod rig;
 mod room;
 mod sh;
 mod sky;
+mod sky_order;
 mod source;
 mod stream;
 mod terrain;
@@ -41,6 +43,7 @@ use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
 use bevy::prelude::*;
 
 pub use adt::AdtTile;
+pub use clouds::CloudClock;
 pub use glow::FullScreenGlow;
 pub use light::{Fog, SceneLight};
 pub use m2::M2Model;
@@ -99,6 +102,7 @@ impl Plugin for WorldPlugin {
             probes::ProbePlugin,
             horizon::HorizonPlugin,
             sky::SkyPlugin,
+            clouds::CloudsPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()

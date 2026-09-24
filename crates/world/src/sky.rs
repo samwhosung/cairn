@@ -13,6 +13,7 @@ use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
 
 use crate::light::SceneLight;
+use crate::sky_order::{SKY_VERTEX_SHADER, sky_pipeline_state};
 use crate::view::WorldCamera;
 
 pub type SkyMaterial = ExtendedMaterial<StandardMaterial, SkyExtension>;
@@ -40,7 +41,7 @@ pub struct SkyExtension {
 
 impl MaterialExtension for SkyExtension {
     fn vertex_shader() -> ShaderRef {
-        "embedded://world/sky_vertex.wgsl".into()
+        SKY_VERTEX_SHADER.into()
     }
 
     fn fragment_shader() -> ShaderRef {
@@ -54,10 +55,7 @@ impl MaterialExtension for SkyExtension {
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        if let Some(depth) = descriptor.depth_stencil.as_mut() {
-            depth.depth_write_enabled = false;
-            depth.bias.constant = 0;
-        }
+        sky_pipeline_state(descriptor);
         Ok(())
     }
 }

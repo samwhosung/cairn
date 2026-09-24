@@ -60,11 +60,14 @@ pub(crate) fn resolve_light(
 fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
     let minute = minute as f32;
     let fog_end = atmosphere.fog_end.min(FARCLIP);
+    let toward = |d: [f32; 3]| wow_to_bevy(d).normalize();
+    let visible_sun = toward(daynight::celestial_sun_direction(minute));
+    let moon = toward(daynight::moon_direction(minute));
     SceneLight {
         ambient: atmosphere.ambient,
         diffuse: atmosphere.sun_diffuse,
         specular: atmosphere.sun_color,
-        sun: wow_to_bevy(daynight::sun_direction(minute)).normalize(),
+        sun: toward(daynight::sun_direction(minute)),
         fog_color: atmosphere.fog_color,
         fog_start: atmosphere.fog_start_frac * fog_end,
         fog_end,
@@ -75,9 +78,17 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
         },
         sky: atmosphere.sky,
         sky_warp: daynight::sky_warp(minute, atmosphere.highlight_sky),
-        visible_sun: wow_to_bevy(daynight::celestial_sun_direction(minute)).normalize(),
+        visible_sun,
         night_glow: daynight::sidn_night_fraction(minute),
         glow: (atmosphere.glow * 255.0).floor() / 255.0,
+        cloud_density: atmosphere.cloud_density,
+        cloud_colors: atmosphere.cloud_colors,
+        cloud_glow_dir: if daynight::cloud_glow_is_sun(minute) {
+            visible_sun
+        } else {
+            moon
+        },
+        cloud_glow: daynight::cloud_glow_track(minute),
     }
 }
 

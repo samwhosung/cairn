@@ -117,6 +117,7 @@ impl Plugin for ShotPlugin {
                 ));
             })
             .init_resource::<ReadyToShoot>()
+            .insert_resource(world::CloudClock::Held)
             .add_systems(Update, capture);
         if self.aged_by == AgedBy::World {
             app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))

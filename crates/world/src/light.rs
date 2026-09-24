@@ -71,6 +71,14 @@ pub struct SceneLight {
     pub night_glow: f32,
     /// The full-screen glow's weight, a byte fraction.
     pub glow: f32,
+    /// How much of the sky clouds may cover, 1 being all of it.
+    pub cloud_density: f32,
+    /// `[glow, gradient slope, gradient base]`.
+    pub cloud_colors: [[f32; 3]; 3],
+    /// The direction to the body that lights the clouds, in Bevy's axes.
+    pub cloud_glow_dir: Vec3,
+    /// How strongly that body lights them, `0..=1`.
+    pub cloud_glow: f32,
 }
 
 /// A fog's colour, and where it starts and is full, in yards.
