@@ -92,7 +92,8 @@ pub fn control(
         mouse: &inputs.buttons,
     };
     if player.settling
-        && (world.residency.settled() || settle.stalled(world.residency.pending(), now))
+        && (world.residency.settled()
+            || settle.stalled(world.residency.indexed(), world.residency.pending(), now))
     {
         release_settle(&mut player, &world.collide);
     }
@@ -310,10 +311,8 @@ pub struct SettleClock {
 }
 
 impl SettleClock {
-    /// Whether the same work has been pending for [`SETTLE_TIMEOUT`]. A collision that is not
-    /// settled with nothing pending has not had its map's index yet, and has not begun.
-    fn stalled(&mut self, pending: usize, now: f32) -> bool {
-        if pending == 0 || self.pending != Some(pending) {
+    fn stalled(&mut self, indexed: bool, pending: usize, now: f32) -> bool {
+        if !indexed || self.pending != Some(pending) {
             self.pending = Some(pending);
             self.since = now;
         }
@@ -342,15 +341,15 @@ mod tests {
     fn the_settle_waits_out_a_stream_not_begun_and_gives_up_on_one_that_stopped() {
         let mut clock = SettleClock::default();
         assert!(
-            (0..=60).all(|s| !clock.stalled(0, s as f32)),
+            (0..=60).all(|s| !clock.stalled(false, 0, s as f32)),
             "a map whose index has not come"
         );
-        assert!(!clock.stalled(3, 60.0));
-        assert!(!clock.stalled(3, 65.9));
-        assert!(!clock.stalled(2, 66.0), "progress restarts the clock");
-        assert!(!clock.stalled(2, 71.9));
+        assert!(!clock.stalled(true, 3, 60.0));
+        assert!(!clock.stalled(true, 3, 65.9));
+        assert!(!clock.stalled(true, 2, 66.0), "progress restarts the clock");
+        assert!(!clock.stalled(true, 2, 71.9));
         assert!(
-            clock.stalled(2, 72.1),
+            clock.stalled(true, 2, 72.1),
             "the same two pending for six seconds"
         );
     }

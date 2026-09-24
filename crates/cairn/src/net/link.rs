@@ -14,14 +14,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUF: usize = 64 << 10;
 
 pub enum Arrival {
-    /// A frame, and when its bytes came off the socket.
-    Frame {
-        bytes: Vec<u8>,
-        at: Instant,
-    },
-    Gone {
-        reason: String,
-    },
+    Frame { bytes: Vec<u8>, arrived: Instant },
+    Gone { reason: String },
 }
 
 pub struct Link {
@@ -35,12 +29,12 @@ impl Link {
     /// connect included, waits for [`Link::arrivals`].
     pub fn open(addr: SocketAddr, hello: Hello) -> Self {
         let (out, to_send) = mpsc::channel();
-        let (arrived, arrivals) = mpsc::channel();
+        let (to_window, arrivals) = mpsc::channel();
         let stream = Arc::new(Mutex::new(None));
-        let (held, gone) = (stream.clone(), arrived.clone());
+        let (held, gone) = (stream.clone(), to_window.clone());
         let spawned = thread::Builder::new().name("net".into()).spawn(move || {
-            let reason = run(addr, &hello, &held, to_send, &arrived);
-            let _ = arrived.send(Arrival::Gone { reason });
+            let reason = run(addr, &hello, &held, to_send, &to_window);
+            let _ = to_window.send(Arrival::Gone { reason });
         });
         if let Err(e) = spawned {
             let reason = format!("no thread for the connection: {e}");
@@ -83,7 +77,7 @@ fn run(
     hello: &Hello,
     held: &Mutex<Option<TcpStream>>,
     to_send: Receiver<Vec<u8>>,
-    arrived: &Sender<Arrival>,
+    to_window: &Sender<Arrival>,
 ) -> String {
     let mut stream = match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
         Ok(s) => s,
@@ -111,13 +105,13 @@ fn run(
             Ok(n) => n,
             Err(e) => return format!("the connection to {addr}: {e}"),
         };
-        let at = Instant::now();
+        let arrived = Instant::now();
         frames.extend(&buf[..n]);
         loop {
             match frames.next_frame() {
                 Ok(Some(frame)) => {
                     let bytes = frame.to_vec();
-                    if arrived.send(Arrival::Frame { bytes, at }).is_err() {
+                    if to_window.send(Arrival::Frame { bytes, arrived }).is_err() {
                         return "the client stopped listening".into();
                     }
                 }

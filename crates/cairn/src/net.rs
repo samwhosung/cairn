@@ -1,4 +1,4 @@
-//! Playing with others through a server; the window plays on alone when its server goes.
+//! Playing with others through a server.
 
 mod claims;
 mod link;
@@ -187,7 +187,7 @@ fn receive(
     };
     for arrival in net.link.arrivals() {
         let (frame, arrived) = match arrival {
-            Arrival::Frame { bytes, at } => (bytes, at),
+            Arrival::Frame { bytes, arrived } => (bytes, arrived),
             Arrival::Gone { reason } => return alone(&mut commands, &mut net, reason),
         };
         match ServerMessage::read(&frame) {
@@ -216,9 +216,9 @@ fn receive(
                 let at = BatchContext {
                     server_ms: batch.tick.wrapping_mul(tick_ms),
                     own_pos: bevy_to_wow(player.pos),
-                    arrived_ms: real_ms_at(&real, arrived),
-                    now_ms: real.elapsed_secs_f64() * 1000.0,
-                    frame_secs: time.elapsed_secs(),
+                    arrived_real_ms: real_ms_at(&real, arrived),
+                    now_real_ms: real.elapsed_secs_f64() * 1000.0,
+                    game_secs: time.elapsed_secs(),
                 };
                 for record in batch {
                     match record {
@@ -254,8 +254,6 @@ fn receive(
     }
 }
 
-/// Where `instant` falls on the real clock, in ms: bytes that waited for this frame fall before
-/// it.
 fn real_ms_at(real: &Time<Real>, instant: Instant) -> f64 {
     let now_ms = real.elapsed_secs_f64() * 1000.0;
     let Some(now) = real.last_update() else {

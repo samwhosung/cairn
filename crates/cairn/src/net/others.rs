@@ -94,19 +94,15 @@ pub struct Faults {
     pub no_dead_reckoning: bool,
 }
 
-/// What every record of a batch is read with; relayed positions are unwrapped around `own_pos`.
-/// `arrived_ms` and `now_ms` are on the real clock: when the batch came off the socket, and this
-/// frame.
 pub struct BatchContext {
     pub server_ms: u32,
     pub own_pos: [f32; 3],
-    pub arrived_ms: f64,
-    pub now_ms: f64,
-    pub frame_secs: f32,
+    pub arrived_real_ms: f64,
+    pub now_real_ms: f64,
+    pub game_secs: f32,
 }
 
 impl Others {
-    /// Takes in one record of a batch; a correction is not this one's.
     pub fn take(&mut self, commands: &mut Commands<'_, '_>, record: Record<'_>, at: &BatchContext) {
         match record {
             Record::Appear {
@@ -117,7 +113,7 @@ impl Others {
                 state,
             } => {
                 if let Some(old) = self.by_slot.remove(&slot) {
-                    leave(commands, old.entity, at.frame_secs);
+                    leave(commands, old.entity, at.game_secs);
                 }
                 info!("{name} comes into view");
                 let entity = commands.spawn_empty().id();
@@ -135,13 +131,13 @@ impl Others {
                     UnitShade::default(),
                     UnitMotion::default(),
                     UnitAlpha::default(),
-                    RemoteMotion::seeded(&mv, at.arrived_ms),
+                    RemoteMotion::seeded(&mv, at.arrived_real_ms),
                 ));
                 self.by_slot.insert(slot, relayed);
             }
             Record::Vanish { slot } => {
                 if let Some(gone) = self.by_slot.remove(&slot) {
-                    leave(commands, gone.entity, at.frame_secs);
+                    leave(commands, gone.entity, at.game_secs);
                 }
             }
             Record::Move { slot, pos, facing } => self.relay(commands, slot, at, |r| {
@@ -171,7 +167,7 @@ impl Others {
         change(r);
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut mv = r.relay_move(at.server_ms);
-        let (arrived_ms, now_ms) = (at.arrived_ms, at.now_ms);
+        let (arrived_ms, now_ms) = (at.arrived_real_ms, at.now_real_ms);
         #[cfg(test)]
         {
             self.dropped = self.faults.drop_every_other && !self.dropped;
@@ -191,9 +187,9 @@ impl Others {
             });
     }
 
-    pub fn leave_all(&mut self, commands: &mut Commands<'_, '_>, frame_secs: f32) {
+    pub fn leave_all(&mut self, commands: &mut Commands<'_, '_>, game_secs: f32) {
         for (_, gone) in self.by_slot.drain() {
-            leave(commands, gone.entity, frame_secs);
+            leave(commands, gone.entity, game_secs);
         }
     }
 }
@@ -212,7 +208,7 @@ fn look_of(a: &Appearance) -> CharacterLook {
     }
 }
 
-fn leave(commands: &mut Commands<'_, '_>, entity: Entity, frame_secs: f32) {
+fn leave(commands: &mut Commands<'_, '_>, entity: Entity, game_secs: f32) {
     commands
         .entity(entity)
         .queue(move |mut e: EntityWorldMut<'_>| {
@@ -220,14 +216,14 @@ fn leave(commands: &mut Commands<'_, '_>, entity: Entity, frame_secs: f32) {
                 info!("{} leaves view", p.name);
             }
             let drawn = e.get::<UnitAlpha>().map_or(1.0, |a| a.alpha);
-            let from_alpha = e.get::<UnitAppear>().map_or(drawn, |a| a.alpha(frame_secs));
+            let from_alpha = e.get::<UnitAppear>().map_or(drawn, |a| a.alpha(game_secs));
             e.remove::<(OtherPlayer, UnitAppear)>();
             if from_alpha < LEAVE_MIN_ALPHA {
                 e.despawn();
             } else {
                 e.insert(Leaving {
                     from_alpha,
-                    started_secs: frame_secs,
+                    started_secs: game_secs,
                 });
             }
         });

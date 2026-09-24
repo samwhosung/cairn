@@ -464,13 +464,18 @@ fn a_tauren_wades_out_deeper_than_a_gnome_before_it_swims() {
 /// and its plane a yard above the ground, `n · (x, y) = c`. It runs flat from y = 26 to y = 20.
 const INN_WALL: ([f32; 2], f32) = ([0.992_55, -0.121_91], -9383.97);
 
+const INN_WALL_START: [f32; 2] = {
+    let ([nx, ny], c) = INN_WALL;
+    let y = 25.5;
+    [(c - ny * y) / nx + 2.0 * nx, y + 2.0 * ny]
+};
+
 /// At 240 Hz each step along the wall is under 3/1024 yd in x, which a position this far from the
 /// origin rounds into the wall until the cast meets it at zero distance: the slide stops there.
 #[test]
 fn a_wmo_wall_is_slid_along_and_never_tunnelled_at_any_frame_rate() {
-    let ([nx, ny], c) = INN_WALL;
-    let y = 25.5;
-    let start = [(c - ny * y) / nx + 2.0 * nx, y + 2.0 * ny];
+    let ([nx, ny], _) = INN_WALL;
+    let start = INN_WALL_START;
     for hz in [20.0_f32, 30.0, 60.0, 120.0, 144.0, 240.0] {
         let Some(mut w) = Walker::on_ground(start, 218.0, hz) else {
             return;

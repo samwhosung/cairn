@@ -24,7 +24,7 @@ use crate::player::swim::{SWIM_BACK_SPEED, SWIM_SPEED};
 
 const RECONCILE_TOL_SQ: f32 = 7.716e-4;
 const FACING_DEAD_ZONE: f32 = 9.5367e-7;
-const SHUFFLE_MIN_TURN: f32 = 1.0e-5;
+const TURN_IN_PLACE_MIN: f32 = 1.0e-5;
 
 /// One move as the server relayed it, with the state it did not repeat filled in from before.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,8 +51,6 @@ pub struct RemoteMotion {
     pub orientation: f32,
     pub flags: u32,
     pub pitch: f32,
-    /// Horizontal speed, or a swimmer's stroke speed, yd/s.
-    pub speed: f32,
     /// Up positive, yd/s; 0 unless falling.
     pub vertical_velocity: f32,
     pub jump_xy_vel: [f32; 2],
@@ -60,7 +58,6 @@ pub struct RemoteMotion {
     timing: ReplayTiming,
 }
 
-/// Where dead reckoning puts a player some time on from its last applied state.
 #[derive(Clone, Copy, Debug)]
 struct Reckoned {
     wow_pos: [f32; 3],
@@ -75,15 +72,12 @@ struct Airborne {
 }
 
 impl RemoteMotion {
-    /// A player first seen doing `mv`, arriving at `arrived_ms`: the timing seeds on it and it
-    /// applies at once.
     pub fn seeded(mv: &RelayMove, arrived_ms: f64) -> Self {
         let mut rm = Self {
             wow_pos: mv.wow_pos,
             orientation: mv.orientation,
             flags: 0,
             pitch: 0.0,
-            speed: 0.0,
             vertical_velocity: 0.0,
             jump_xy_vel: [0.0; 2],
             pending: VecDeque::new(),
@@ -94,8 +88,6 @@ impl RemoteMotion {
         rm
     }
 
-    /// Schedules a move that arrived at `arrived_ms`: it applies now, at `now_ms`, if it is due
-    /// and nothing waits before it, and waits otherwise.
     pub fn relayed(&mut self, mv: RelayMove, arrived_ms: f64, now_ms: f64) {
         let fire_ms = self.timing.schedule(
             mv.server_ms,
@@ -269,8 +261,10 @@ pub(super) fn drain_pending_moves(
     }
 }
 
-/// The step from `rm`'s pose to `to`, met by the world as the player's own is: a mover that
-/// stands still is not stepped, and a swimmer's depth is its own.
+fn moves_through_the_world(f: u32) -> bool {
+    f & flags::UNDER_WAY != 0 && f & flags::SWIMMING == 0
+}
+
 fn through_world(
     world: &WorldCollision<'_, '_>,
     capsule: &Collider,
@@ -278,7 +272,7 @@ fn through_world(
     to: [f32; 3],
     dt: Duration,
 ) -> [f32; 3] {
-    if rm.flags & flags::UNDER_WAY == 0 || rm.flags & flags::SWIMMING != 0 {
+    if !moves_through_the_world(rm.flags) {
         return to;
     }
     let half_h = Vec3::Y * (CAPSULE_HEIGHT * 0.5);
@@ -300,7 +294,6 @@ fn through_world(
     bevy_to_wow(center - half_h)
 }
 
-/// Blends this frame's pose toward the move waiting next, to land on it at its fire time.
 fn toward_waiting(rm: &RemoteMotion, step: Reckoned, dt: f32, now_ms: f64) -> Reckoned {
     let Some(next) = rm.pending.front() else {
         return step;
@@ -325,8 +318,7 @@ fn toward_waiting(rm: &RemoteMotion, step: Reckoned, dt: f32, now_ms: f64) -> Re
     }
 }
 
-/// A standing player turning in place shuffles its feet the way it turns.
-fn shuffle(rm: &RemoteMotion, facing: f32) -> u32 {
+fn turn_in_place_flags(rm: &RemoteMotion, facing: f32) -> u32 {
     let still = flags::ANY_MOVE | flags::TURNING | flags::FALLING | flags::SWIMMING;
     let turned = if rm.flags & still == 0 {
         wrap_pi(facing - rm.orientation)
@@ -334,8 +326,8 @@ fn shuffle(rm: &RemoteMotion, facing: f32) -> u32 {
         0.0
     };
     match turned {
-        t if t > SHUFFLE_MIN_TURN => flags::TURN_LEFT,
-        t if t < -SHUFFLE_MIN_TURN => flags::TURN_RIGHT,
+        t if t > TURN_IN_PLACE_MIN => flags::TURN_LEFT,
+        t if t < -TURN_IN_PLACE_MIN => flags::TURN_RIGHT,
         _ => 0,
     }
 }
@@ -388,15 +380,14 @@ pub(super) fn extrapolate_remote_units(
         let mut step = rm.reckon(dt);
         step.wow_pos = through_world(&world, &capsule.0, &rm, step.wow_pos, time.delta());
         let step = toward_waiting(&rm, step, dt, now_ms);
-        let shuffled = shuffle(&rm, step.facing);
+        let in_place = turn_in_place_flags(&rm, step.facing);
         rm.wow_pos = step.wow_pos;
         rm.orientation = step.facing;
         rm.vertical_velocity = step.vertical_velocity;
-        rm.speed = step.speed;
         motion.set_if_neq(UnitMotion {
             speed: step.speed,
             vertical_speed: step.vertical_velocity,
-            flags: rm.flags | shuffled,
+            flags: rm.flags | in_place,
             ..*motion
         });
         draw(&mut t, &rm, twist, dt);

@@ -40,9 +40,9 @@ pub(super) const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 pub(super) const EAST: f32 = 270.0;
 const HILLTOP_SOUTH_OF_GOLDSHIRE: [f32; 2] = [-9200.0, -420.0];
 const SUN_BEARING: f32 = 45.0;
-struct Stand {
-    xy: [f32; 2],
-    heading: f32,
+pub(super) struct Stand {
+    pub(super) xy: [f32; 2],
+    pub(super) heading: f32,
 }
 
 const FACING_A_GOLDSHIRE_LAMPPOST: Stand = Stand {
@@ -62,7 +62,7 @@ const IN_THE_SUN_FOUR_YARDS_EAST: [f32; 2] = [
     IN_A_TREES_SHADOW_BELOW_THE_ABBEY.xy[0],
     IN_A_TREES_SHADOW_BELOW_THE_ABBEY.xy[1] - 4.0,
 ];
-const ON_THE_SNOW_OUTSIDE_KHARANOS: Stand = Stand {
+pub(super) const ON_THE_SNOW_OUTSIDE_KHARANOS: Stand = Stand {
     xy: [-5650.0, -450.0],
     heading: 0.0,
 };

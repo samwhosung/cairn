@@ -47,9 +47,9 @@ fn take(app: &mut App, others: &mut Others, record: Record<'_>, server_ms: u32, 
     let at = BatchContext {
         server_ms,
         own_pos: [100.0, 50.0, 10.0],
-        arrived_ms: real_ms,
-        now_ms: real_ms,
-        frame_secs: app.world().resource::<Time>().elapsed_secs(),
+        arrived_real_ms: real_ms,
+        now_real_ms: real_ms,
+        game_secs: app.world().resource::<Time>().elapsed_secs(),
     };
     others.take(&mut app.world_mut().commands(), record, &at);
     app.world_mut().flush();

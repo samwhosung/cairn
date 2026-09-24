@@ -12,8 +12,6 @@ use crate::net::{Faults, OtherPlayer, RemoteMotion};
 use crate::player::state::{GRAVITY, RUN_SPEED};
 
 pub const HZ: f32 = 60.0;
-/// The wait for a tick, the batch's building and delivery, the watcher's frame and its replay
-/// buffer.
 const CLAIM_TO_VIEW_SECS: f32 = 0.15;
 const NEAR_TIER_SECS: f32 = 0.05;
 const HEARTBEAT_SECS: f32 = protocol::HEARTBEAT_MS as f32 / 1000.0;

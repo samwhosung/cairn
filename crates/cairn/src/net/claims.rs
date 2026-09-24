@@ -33,7 +33,6 @@ impl Claims {
         }
     }
 
-    /// Puts the player where a refused claim left it on the server, and acknowledges it.
     pub fn correct(&mut self, player: &mut Player, seq: u32, movement: &Movement) {
         player.pos = wow_to_bevy(movement.pos);
         player.face_yaw = movement.facing;

@@ -4,7 +4,7 @@ use world::unit::CharacterLook;
 
 use super::walker::Walker;
 use super::{
-    ABBEY_STAIRS, CANAL_RAMP, DOWN_THE_RAMP, HILLSIDE, INN_WALL, MEADOW, SHORE, walk_path,
+    ABBEY_STAIRS, CANAL_RAMP, DOWN_THE_RAMP, HILLSIDE, INN_WALL_START, MEADOW, SHORE, walk_path,
 };
 
 const HZ: f32 = 60.0;
@@ -42,13 +42,6 @@ fn hold_w(w: &mut Walker, frames: usize) {
     w.run(frames);
     w.release(KeyCode::KeyW);
 }
-
-/// Two yards out from the Goldshire inn's north wall, where it runs flat.
-const INN_WALL_START: [f32; 3] = {
-    let ([nx, ny], c) = INN_WALL;
-    let y = 25.5;
-    [(c - ny * y) / nx + 2.0 * nx, y + 2.0 * ny, 56.572]
-};
 
 const SCENARIOS: [Scenario; 7] = [
     Scenario {
@@ -111,7 +104,7 @@ const SCENARIOS: [Scenario; 7] = [
     Scenario {
         name: "along the inn's wall",
         at: Stand {
-            feet: INN_WALL_START,
+            feet: [INN_WALL_START[0], INN_WALL_START[1], 56.572],
             heading_deg: 218.0,
         },
         walk: |w| hold_w(w, 72),

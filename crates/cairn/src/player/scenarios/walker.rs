@@ -34,13 +34,9 @@ pub struct Frame {
 pub struct Walker {
     pub app: App,
     step: Duration,
-    /// When a joined walker's last frame began: it steps no faster than `step` on the wall
-    /// clock, as a window draws, and a late frame is not made up by a burst.
-    paced: Option<Instant>,
+    last_frame_began: Option<Instant>,
 }
 
-/// A client that has joined a server keeps the wall clock the server ticks by, as a window does;
-/// one alone steps by `step`.
 pub fn time_update(joined: bool, step: Duration) -> TimeUpdateStrategy {
     if joined {
         TimeUpdateStrategy::Automatic
@@ -49,26 +45,33 @@ pub fn time_update(joined: bool, step: Duration) -> TimeUpdateStrategy {
     }
 }
 
-/// Updates the walkers side by side until each body is let go and the collision around it is
-/// resident. Their game clocks are held meanwhile: under load the collision can take longer to
-/// build than a body's own settle waits before it lets go.
 fn settle_all(walkers: &mut [&mut Walker]) {
     let deadline = Instant::now() + Duration::from_secs(300);
-    for w in walkers.iter_mut() {
-        w.app.world_mut().resource_mut::<Time<Virtual>>().pause();
-    }
+    hold_game_clocks(walkers);
     while !walkers.iter().all(|w| w.settled()) {
         assert!(Instant::now() < deadline, "the collision never settled");
         round(walkers);
     }
+    release_game_clocks(walkers);
+}
+
+/// Unheld, a body's own settle can give up and let the body go before a slow world has streamed
+/// in.
+fn hold_game_clocks(walkers: &mut [&mut Walker]) {
+    for w in walkers.iter_mut() {
+        w.app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    }
+}
+
+fn release_game_clocks(walkers: &mut [&mut Walker]) {
     for w in walkers.iter_mut() {
         w.app.world_mut().resource_mut::<Time<Virtual>>().unpause();
     }
 }
 
-/// Settles joined walkers side by side, then paces them. The physics steps by the game clock the
-/// settle held, so the first round after it takes in every collider that streamed in meanwhile;
-/// a second keeps that round's length out of the first paced frame.
+/// The physics steps by the game clock the settle held, so the first round after it takes in
+/// every collider that streamed in meanwhile; a second keeps that round's length out of the first
+/// paced frame.
 pub fn ready(walkers: &mut [&mut Walker]) {
     settle_all(walkers);
     round(walkers);
@@ -118,7 +121,7 @@ impl Walker {
     }
 
     fn pace(&mut self) {
-        self.paced = Some(Instant::now());
+        self.last_frame_began = Some(Instant::now());
     }
 
     pub fn settled(&self) -> bool {
@@ -173,7 +176,7 @@ impl Walker {
         let mut walker = Self {
             app,
             step,
-            paced: None,
+            last_frame_began: None,
         };
         if joining {
             walker.await_welcome();
@@ -218,7 +221,6 @@ impl Walker {
         self
     }
 
-    /// Updates until the body is let go and the collision around it is resident.
     pub fn settle(&mut self) {
         settle_all(&mut [self]);
     }
@@ -283,7 +285,7 @@ impl Walker {
     pub fn run(&mut self, n: usize) -> Vec<Frame> {
         (0..n)
             .map(|_| {
-                if let Some(last) = &mut self.paced {
+                if let Some(last) = &mut self.last_frame_began {
                     std::thread::sleep(
                         (*last + self.step).saturating_duration_since(Instant::now()),
                     );
@@ -305,7 +307,6 @@ impl Walker {
         self.app.world_mut().resource_mut::<Player>().face_yaw = heading_deg.to_radians();
     }
 
-    /// Tilts the aim a swimmer steers by, as the mouse would.
     pub fn pitch(&mut self, deg: f32) {
         self.app.world_mut().resource_mut::<Player>().mover_pitch = deg.to_radians();
     }

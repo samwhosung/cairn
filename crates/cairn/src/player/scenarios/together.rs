@@ -11,7 +11,7 @@ use world::unit::{BodyDressed, CharacterLook, UnitBody};
 
 use super::honest::{Stand, serve};
 use super::pair::Act;
-use super::pictures::{EAST, GOLDSHIRE, Painter, frame_costs};
+use super::pictures::{EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS, Painter, frame_costs};
 use super::walker::Walker;
 use crate::net::{OtherPlayer, RemoteMotion};
 use crate::player::state::Player;
@@ -19,7 +19,6 @@ use crate::player::state::Player;
 const HZ: f32 = 60.0;
 const STEP: Duration = Duration::from_nanos(16_666_667);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
-/// The runner starts 8 yd from the painter and runs past it.
 const SUBJECT_WITHIN_YD: f32 = 12.0;
 const STATE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -98,7 +97,6 @@ fn others_dressed_and_skinned(p: &mut Painter) -> bool {
         })
 }
 
-/// How far across from the painter's body the other player's copy stands.
 fn yards_to_the_other(p: &mut Painter) -> Option<f32> {
     let world = p.app.world_mut();
     let me = bevy_to_wow(world.resource::<Player>().pos);
@@ -109,7 +107,6 @@ fn yards_to_the_other(p: &mut Painter) -> Option<f32> {
         .reduce(f32::min)
 }
 
-/// The movement flags of the other player's copy.
 fn the_others_flags(p: &mut Painter) -> Option<u32> {
     let world = p.app.world_mut();
     world
@@ -119,10 +116,9 @@ fn the_others_flags(p: &mut Painter) -> Option<u32> {
         .map(|m| m.flags)
 }
 
-/// Runs the painter until its copy of the other player moves as `now` says.
-fn wait_until_the_other(p: &mut Painter, what: &str, now: impl Fn(u32) -> bool) {
+fn wait_until_the_other(p: &mut Painter, what: &str, flags_say: impl Fn(u32) -> bool) {
     let deadline = Instant::now() + STATE_TIMEOUT;
-    while !the_others_flags(p).is_some_and(&now) {
+    while !the_others_flags(p).is_some_and(&flags_say) {
         assert!(
             Instant::now() < deadline,
             "the other player was never seen {what}"
@@ -147,8 +143,6 @@ struct Scene {
     night: bool,
 }
 
-/// Goldshire's crossroads: the runner starts ahead of the painter and to its right, and runs
-/// across its view.
 fn in_goldshire(name: &'static str, painter: CharacterLook, runner: CharacterLook) -> Scene {
     Scene {
         name,
@@ -170,14 +164,14 @@ fn in_goldshire(name: &'static str, painter: CharacterLook, runner: CharacterLoo
     }
 }
 
-/// The snow outside Kharanos, where a runner's feet print and a dwarf's breath shows.
 fn on_the_snow(painter: CharacterLook, runner: CharacterLook) -> Scene {
+    let snow = ON_THE_SNOW_OUTSIDE_KHARANOS;
     Scene {
         name: "together-snow",
         painter: (
             Stand {
-                feet: [-5650.0, -450.0, 393.0],
-                heading_deg: 0.0,
+                feet: [snow.xy[0], snow.xy[1], 393.0],
+                heading_deg: snow.heading,
             },
             painter,
         ),

@@ -112,7 +112,6 @@ pub struct Joining {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Join {
     Connect(SocketAddr),
-    /// Serve the world in-process on this port of 127.0.0.1, and join it.
     Host(u16),
 }
 
