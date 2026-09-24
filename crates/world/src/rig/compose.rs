@@ -281,6 +281,83 @@ mod tests {
     }
 
     #[test]
+    fn a_billboard_under_a_moving_parent_turns_to_every_camera() {
+        use model::BillboardKind;
+
+        use crate::coords::wow_to_bevy;
+        let root = GlobalTransform::from(
+            Transform::from_rotation(Quat::from_rotation_y(0.9)).with_scale(Vec3::splat(0.5)),
+        );
+        let cameras = [
+            (0.0, 0.0),
+            (1.3, -0.2),
+            (-2.4, -0.9),
+            (3.0, 0.6),
+            (0.4, -1.4),
+        ];
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(wow_to_bevy);
+        for kind in [
+            BillboardKind::Spherical,
+            BillboardKind::LockX,
+            BillboardKind::LockY,
+            BillboardKind::LockZ,
+        ] {
+            let sk = skeleton(vec![
+                joint(-1, Vec3::new(0.0, 1.5, 0.0)),
+                ModelJoint {
+                    parent: 0,
+                    local_translation: Vec3::new(0.4, 0.3, -0.2),
+                    billboard: Some(kind),
+                    parent_arm: None,
+                },
+                joint(1, axes[2]),
+            ]);
+            let mut rig = RigPose::new(Entity::PLACEHOLDER, &sk);
+            rig.locals[0].translation += Vec3::new(0.2, -0.1, 0.3);
+            rig.locals[0].rotation = Quat::from_euler(EulerRot::YXZ, 0.7, -0.4, 0.3);
+            rig.locals[1].rotation = Quat::from_rotation_x(0.5);
+            rig.locals[1].scale = Vec3::splat(1.5);
+            rig.compose();
+            let (scale, kept, pivot) =
+                GlobalTransform::from(root.affine() * rig.model[1]).to_scale_rotation_translation();
+            let kept = axes.map(|a| kept * a);
+            for (yaw, pitch) in cameras {
+                let eye = Transform::from_rotation(
+                    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch),
+                );
+                let (fwd, right, up) = (*eye.forward(), *eye.right(), *eye.up());
+                let (worlds, _) = rig_worlds(&rig, root, Some((fwd, right, up)));
+                let (s, r, t) = worlds[1].to_scale_rotation_translation();
+                let at = format!("{kind:?} from yaw {yaw}, pitch {pitch}");
+                assert!(
+                    (t - pivot).length() < 1e-4,
+                    "{at}: the pivot left its parent"
+                );
+                assert!((s - scale).length() < 1e-4, "{at}: the scale changed");
+                let [x, y, z] = axes.map(|a| r * a);
+                let near = |a: Vec3, b: Vec3| (a - b).length() < 1e-4;
+                let (held, in_screen, faces) = match kind {
+                    BillboardKind::Spherical => {
+                        (near(x, -fwd) && near(y, right) && near(z, up), 0.0, x)
+                    }
+                    BillboardKind::LockX => (near(x, kept[0]), z.dot(fwd), y),
+                    BillboardKind::LockY => (near(y, kept[1]), x.dot(fwd), z),
+                    BillboardKind::LockZ => (near(z, kept[2]), y.dot(fwd), x),
+                };
+                assert!(held, "{at}: the held axes are wrong");
+                assert!(
+                    in_screen.abs() < 1e-4,
+                    "{at}: the rebuilt axis leaves the screen"
+                );
+                assert!(faces.dot(-fwd) >= -1e-4, "{at}: it faces away");
+                let child = worlds[2].translation();
+                let want = t + r * (s * axes[2]);
+                assert!(near(child, want), "{at}: the child left the turned frame");
+            }
+        }
+    }
+
+    #[test]
     fn a_plain_chain_is_the_root_times_the_model_frames() {
         let sk = skeleton(vec![joint(-1, Vec3::X), joint(0, Vec3::Y)]);
         let mut rig = RigPose::new(Entity::PLACEHOLDER, &sk);
