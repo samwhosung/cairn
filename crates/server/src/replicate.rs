@@ -262,11 +262,11 @@ impl Pass<'_> {
             return;
         }
         if b.flags_changed_at <= e.sent_tick {
-            if self.tick - e.sent_tick < self.view.every(self.dist2(b)) {
-                return;
-            }
             if self.shedding {
                 self.built.deferred += 1;
+                return;
+            }
+            if self.tick - e.sent_tick < self.view.every(self.dist2(b)) {
                 return;
             }
         }
