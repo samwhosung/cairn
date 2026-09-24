@@ -1,22 +1,28 @@
-use bevy::prelude::Resource;
+use bevy::prelude::{Resource, Vec3};
 
-/// The client's one `rand()` stream: every animation arm that rolls a variation or a replay
-/// count draws from it, one after another.
-#[derive(Resource)]
-pub struct AnimRng(u32);
+/// A C runtime `rand()` stream that animation arms roll their variations and replay counts from.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct AnimRng {
+    state: u32,
+    seed: u32,
+}
 
 impl Default for AnimRng {
     /// The C runtime's seed before `srand`.
     fn default() -> Self {
-        Self(1)
+        Self::seeded(1)
     }
 }
 
 impl AnimRng {
+    fn seeded(seed: u32) -> Self {
+        Self { state: seed, seed }
+    }
+
     /// One draw, `0..=0x7fff`.
     pub fn draw(&mut self) -> u16 {
-        self.0 = self.0.wrapping_mul(214_013).wrapping_add(2_531_011);
-        ((self.0 >> 16) & 0x7fff) as u16
+        self.state = self.state.wrapping_mul(214_013).wrapping_add(2_531_011);
+        ((self.state >> 16) & 0x7fff) as u16
     }
 
     /// The passes an arm plays before it is re-rolled: `max(1, min + ((rand() · (max − min)) >>
@@ -33,10 +39,30 @@ impl AnimRng {
         if reproducible {
             return;
         }
-        self.0 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |d| d.as_millis() as u32);
+        *self = Self::seeded(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.as_millis() as u32),
+        );
     }
+
+    /// A stream for an arm standing at `at`, seeded from the seed this one started from.
+    #[must_use]
+    pub fn at(&self, at: Vec3) -> Self {
+        let seed = at
+            .to_array()
+            .into_iter()
+            .fold(self.seed, |h, v| murmur3_fmix32(h ^ v.to_bits()));
+        Self::seeded(seed)
+    }
+}
+
+fn murmur3_fmix32(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^ (h >> 16)
 }
 
 #[cfg(test)]

@@ -139,6 +139,7 @@ fn host(batches: Vec<Entity>, rerolls_at: f32, anim_id: Option<u16>, gate: Gate)
         anim_id,
         gate,
         parked_at: 0.0,
+        own_stream: None,
     }
 }
 
@@ -179,6 +180,7 @@ fn a_placed_doodad_rolls_a_fresh_variation_every_window() {
             host(Vec::new(), f32::NEG_INFINITY, Some(0), Gate::Drawn),
             lightning(),
             AnimationPlayer::default(),
+            Transform::default(),
         ))
         .id();
     app.update();
@@ -208,6 +210,45 @@ fn a_placed_doodad_rolls_a_fresh_variation_every_window() {
     );
 }
 
+fn variations_played(at: Vec3, session_draws_first: usize) -> (Vec<AnimationNodeIndex>, AnimRng) {
+    let mut app = reroll_app();
+    for _ in 0..session_draws_first {
+        app.world_mut().resource_mut::<AnimRng>().draw();
+    }
+    let h = app
+        .world_mut()
+        .spawn((
+            host(Vec::new(), f32::NEG_INFINITY, Some(0), Gate::Drawn),
+            lightning(),
+            AnimationPlayer::default(),
+            Transform::from_translation(at),
+        ))
+        .id();
+    let played = (0..ROLLS)
+        .map(|_| {
+            step(&mut app, 1400);
+            let host = app.world().entity(h).get::<DoodadAnimHost>();
+            host.and_then(|h| h.clip).expect("armed").node
+        })
+        .collect();
+    (played, *app.world().resource::<AnimRng>())
+}
+
+#[test]
+fn a_doodad_rolls_on_a_stream_of_its_own() {
+    let at = Vec3::new(-9433.0, 44.0, 57.0);
+    let (played, mut session) = variations_played(at, 0);
+    let (after_others, _) = variations_played(at, 7);
+    assert!(played == after_others, "rolls made elsewhere moved its own");
+    assert_eq!(
+        session.draw(),
+        AnimRng::default().draw(),
+        "its rolls moved the session's"
+    );
+    let (a_yard_off, _) = variations_played(at + Vec3::X, 0);
+    assert!(played != a_yard_off, "a doodad a yard off rolled the same");
+}
+
 #[test]
 fn a_global_sequence_only_host_is_never_armed() {
     let mut app = reroll_app();
@@ -216,6 +257,7 @@ fn a_global_sequence_only_host_is_never_armed() {
         .spawn((
             host(Vec::new(), f32::NEG_INFINITY, None, Gate::Drawn),
             anims(Vec::new(), None, true),
+            Transform::default(),
         ))
         .id();
     for _ in 0..8 {
@@ -239,6 +281,7 @@ fn an_undrawn_host_keeps_rolling_but_leaves_its_player_stopped() {
             host(Vec::new(), f32::NEG_INFINITY, Some(0), Gate::Parked),
             lightning(),
             AnimationPlayer::default(),
+            Transform::default(),
         ))
         .id();
     app.update();

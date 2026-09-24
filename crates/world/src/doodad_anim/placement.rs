@@ -198,6 +198,7 @@ impl RigBuilder {
             anim_id: self.host.anim_id,
             gate: Gate::New,
             parked_at: self.now,
+            own_stream: None,
         });
         if !self.lazy_parts.is_empty() {
             commands.entity(root).insert(LazyRig {

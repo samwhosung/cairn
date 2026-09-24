@@ -164,6 +164,7 @@ pub struct DoodadAnimHost {
     pub(crate) anim_id: Option<u16>,
     pub(crate) gate: Gate,
     pub(crate) parked_at: f32,
+    pub(crate) own_stream: Option<AnimRng>,
 }
 
 impl DoodadAnimHost {
@@ -180,25 +181,29 @@ impl DoodadAnimHost {
 
 fn reroll_doodad_variation(
     time: Res<'_, Time>,
-    mut rng: ResMut<'_, AnimRng>,
+    session: Res<'_, AnimRng>,
     mut hosts: Query<
         '_,
         '_,
         (
             &mut DoodadAnimHost,
             &ModelAnimations,
+            &Transform,
             Option<&mut AnimationPlayer>,
         ),
     >,
 ) {
     let now = time.elapsed_secs();
-    for (mut host, anims, player) in &mut hosts {
+    for (mut host, anims, at, player) in &mut hosts {
         let Some(anim_id) = host.anim_id else {
             continue;
         };
         if now < host.rerolls_at {
             continue;
         }
+        let mut rng = host
+            .own_stream
+            .unwrap_or_else(|| session.at(at.translation));
         let Some(clip) = anims.pick_variation(anim_id, rng.draw()) else {
             host.anim_id = None;
             continue;
@@ -208,6 +213,7 @@ fn reroll_doodad_variation(
             duration: clip.duration,
         };
         let replay = rng.replay_count(clip.replay);
+        host.own_stream = Some(rng);
         host.armed_at = now;
         host.rerolls_at = now + (armed.duration * replay as f32).max(f32::EPSILON);
         host.clip = Some(armed);
