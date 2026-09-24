@@ -320,8 +320,35 @@ fn human() -> CharacterLook {
     CharacterLook::naked(1, 0)
 }
 
+/// Runs the test `name` of this module again in a process of its own, where its clients share
+/// the engine's task pools with no other test's, and fails if it fails there. `true` in that
+/// process.
+fn alone_in_a_process(name: &str) -> bool {
+    const ALONE: &str = "CAIRN_TEST_ALONE";
+    let module = module_path!().split_once("::").map_or("", |(_, m)| m);
+    let test = format!("{module}::{name}");
+    if std::env::var(ALONE).is_ok_and(|t| t == test) {
+        return true;
+    }
+    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([test.as_str(), "--exact", "--nocapture"])
+        .env(ALONE, &test)
+        .output()
+        .expect("the test runs in a process of its own");
+    print!("{}", String::from_utf8_lossy(&out.stdout));
+    eprint!("{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{test} failed in a process of its own"
+    );
+    false
+}
+
 #[test]
 fn two_clients_see_each_other_walk_run_turn_jump_fall_and_swim() {
+    if !alone_in_a_process("two_clients_see_each_other_walk_run_turn_jump_fall_and_swim") {
+        return;
+    }
     for place in [&MEADOW_WALK, &CANAL] {
         let Some(w) = walk(place, [human(), human()], Faults::default()) else {
             return;
