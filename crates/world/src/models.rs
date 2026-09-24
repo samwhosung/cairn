@@ -21,7 +21,7 @@ use crate::model::{ModelSubmesh, submesh_mesh};
 use crate::model_material::{
     BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
 };
-use crate::placements::{PlacedModel, Placements, prop_placements};
+use crate::placements::{PlacedModel, Placement, Placements, prop_placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::{PropLobeLight, PropProbeSlot, PropProbes, fold_interior_probe};
 use crate::stream::Streamer;
@@ -33,6 +33,7 @@ enum ModelHandle {
     Wmo {
         handle: Handle<WmoModel>,
         doodad_set: u16,
+        name_set: u16,
         props: Option<Vec<Prop>>,
     },
 }
@@ -68,6 +69,31 @@ struct Furnishing {
     spawned: bool,
     entities: Vec<Entity>,
     forms: Vec<Arc<[Handle<Mesh>]>>,
+}
+
+impl Furnishing {
+    fn new(p: &Placement, server: &AssetServer) -> Self {
+        let model = match &p.model {
+            PlacedModel::Doodad { url } => ModelHandle::M2(server.load(url)),
+            PlacedModel::Building {
+                url,
+                doodad_set,
+                name_set,
+            } => ModelHandle::Wmo {
+                handle: server.load(url),
+                doodad_set: *doodad_set,
+                name_set: *name_set,
+                props: None,
+            },
+        };
+        Self {
+            model,
+            transform: p.transform,
+            spawned: false,
+            entities: Vec::new(),
+            forms: Vec::new(),
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -107,31 +133,16 @@ pub(crate) fn furnish(
     });
     forms.retain(|_, weak| weak.strong_count() > 0);
     for (id, p) in placements.iter() {
-        by_id.entry(id).or_insert_with(|| {
-            let model = match &p.model {
-                PlacedModel::Doodad { url } => ModelHandle::M2(server.load(url)),
-                PlacedModel::Building {
-                    url, doodad_set, ..
-                } => ModelHandle::Wmo {
-                    handle: server.load(url),
-                    doodad_set: *doodad_set,
-                    props: None,
-                },
-            };
-            Furnishing {
-                model,
-                transform: p.transform,
-                spawned: false,
-                entities: Vec::new(),
-                forms: Vec::new(),
-            }
-        });
+        by_id
+            .entry(id)
+            .or_insert_with(|| Furnishing::new(p, &server));
     }
     for f in by_id.values_mut() {
         if let ModelHandle::Wmo {
             handle,
             doodad_set,
             props: props @ None,
+            ..
         } = &mut f.model
             && let Some(m) = wmos.get(&*handle)
         {
@@ -168,12 +179,18 @@ pub(crate) fn furnish(
                 f.entities = entities;
                 f.forms.push(form);
             }
-            ModelHandle::Wmo { handle, props, .. } => {
+            ModelHandle::Wmo {
+                handle,
+                props,
+                name_set,
+                ..
+            } => {
                 let Some(m) = wmos.get(handle) else {
                     continue;
                 };
                 let form = spawner.forms(handle.id().untyped(), &m.submeshes);
-                let instance = spawner.building(handle, m, &form, &f.transform, &mut f.entities);
+                let instance =
+                    spawner.building(handle, *name_set, m, &form, &f.transform, &mut f.entities);
                 f.forms.push(form);
                 for prop in props.iter().flatten() {
                     let Some(pm) = m2s.get(&prop.handle) else {
@@ -440,6 +457,7 @@ impl Spawner<'_, '_, '_> {
     fn building(
         &mut self,
         handle: &Handle<WmoModel>,
+        name_set: u16,
         m: &WmoModel,
         form: &[Handle<Mesh>],
         transform: &Transform,
@@ -451,6 +469,7 @@ impl Spawner<'_, '_, '_> {
                 handle.clone(),
                 transform,
                 m.group_nav.len(),
+                name_set,
             ))
             .id();
         out.push(instance);

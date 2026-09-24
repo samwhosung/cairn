@@ -39,15 +39,23 @@ const FULL_SCREEN: Rect = Rect {
 pub struct WmoPortalInstance {
     pub(crate) handle: Handle<WmoModel>,
     pub(crate) world_from_local: Affine3A,
+    /// The placement's `WMOAreaTable` name set.
+    pub(crate) name_set: u16,
     pub(crate) visible: Vec<bool>,
     pub(crate) interior_fog: Vec<bool>,
 }
 
 impl WmoPortalInstance {
-    pub(crate) fn new(handle: Handle<WmoModel>, transform: &Transform, groups: usize) -> Self {
+    pub(crate) fn new(
+        handle: Handle<WmoModel>,
+        transform: &Transform,
+        groups: usize,
+        name_set: u16,
+    ) -> Self {
         Self {
             handle,
             world_from_local: transform.compute_affine(),
+            name_set,
             visible: vec![true; groups],
             interior_fog: vec![false; groups],
         }
@@ -151,7 +159,11 @@ fn room_fog(model: &WmoModel, seeds: DownRaySeeds, eye_local: [f32; 3]) -> Optio
         .and_then(|n| select_room_fog(&model.fogs, n.fog_indices, eye_local))
 }
 
-fn terrain_z_local(local_from_world: &Affine3A, eye_world: Vec3, terrain_wow_z: f32) -> f32 {
+pub(crate) fn terrain_z_local(
+    local_from_world: &Affine3A,
+    eye_world: Vec3,
+    terrain_wow_z: f32,
+) -> f32 {
     let eye_wow = bevy_to_wow(eye_world);
     let surface = wow_to_bevy([eye_wow[0], eye_wow[1], terrain_wow_z]);
     bevy_to_wow(local_from_world.transform_point3(surface))[2]
@@ -480,8 +492,8 @@ fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-struct DownRaySeeds {
-    in_group: Option<usize>,
+pub(crate) struct DownRaySeeds {
+    pub(crate) in_group: Option<usize>,
     across: Option<usize>,
 }
 
@@ -493,7 +505,11 @@ impl DownRaySeeds {
     }
 }
 
-fn down_ray_seeds(model: &WmoModel, eye: [f32; 3], terrain_z: Option<f32>) -> DownRaySeeds {
+pub(crate) fn down_ray_seeds(
+    model: &WmoModel,
+    eye: [f32; 3],
+    terrain_z: Option<f32>,
+) -> DownRaySeeds {
     let nav = &model.group_nav;
     let in_column = |g: &WmoGroupNav| {
         eye[0] >= g.bbox_min[0]

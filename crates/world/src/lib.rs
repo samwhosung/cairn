@@ -15,6 +15,7 @@ pub mod doodad_sound;
 mod glow;
 mod ground;
 mod horizon;
+pub mod interior;
 mod layers;
 mod light;
 mod m2;
@@ -41,6 +42,7 @@ mod view;
 mod visibility;
 mod wdt;
 mod wmo;
+mod wmo_areas;
 
 use bevy::asset::AssetApp;
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
@@ -61,6 +63,7 @@ pub use texture::{blp_image, rgba_image};
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
 pub use wdt::WdtIndex;
 pub use wmo::{DoodadBase, WmoGroupNav, WmoModel};
+pub use wmo_areas::{WmoArea, WmoAreas};
 
 /// Registers the loaders for BLP textures, WDT and ADT map files, and M2 and WMO models. Add it
 /// after `DefaultPlugins`: their render plugin says whether the GPU takes BC textures when it
@@ -116,8 +119,14 @@ impl Plugin for WorldPlugin {
         .init_resource::<models::Furnished>()
         .init_resource::<room::CameraRoom>()
         .init_resource::<room::RoomCrossfade>()
+        .init_resource::<interior::Viewer>()
+        .init_resource::<interior::CurrentWmoInterior>()
+        .init_resource::<interior::PlayerWmoRoom>()
+        .init_resource::<interior::CurrentAreaInterior>()
+        .init_resource::<interior::CurrentArea>()
+        .init_resource::<interior::WmoGeneration>()
         .add_message::<rig_events::AnimEvent>()
-        .add_systems(Startup, atmosphere::load_catalog)
+        .add_systems(Startup, (atmosphere::load_catalog, wmo_areas::load))
         .add_systems(
             Update,
             (
@@ -129,6 +138,11 @@ impl Plugin for WorldPlugin {
                     models::furnish,
                     portal::compute_wmo_pvs,
                     visibility::apply_model_visibility,
+                    interior::count_buildings,
+                    interior::track_current_interior,
+                    interior::track_area_interior,
+                    interior::update_current_area,
+                    interior::track_unit_rooms,
                     doodad_sound::fire_sound_host_events,
                 )
                     .chain()

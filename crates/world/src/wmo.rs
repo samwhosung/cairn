@@ -5,21 +5,25 @@ use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::reflect::TypePath;
 use model::{
-    WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef,
+    WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef, WmoRoot,
     accumulate_wmo_group_camera_only_collision, accumulate_wmo_group_collision, parse_wmo_lights,
     parse_wmo_root, wmo_group_doodad_refs, wmo_group_header, wmo_group_light_refs,
-    wmo_group_submeshes,
+    wmo_group_submeshes, wmo_root_id,
 };
 
 use crate::model::ModelSubmesh;
 use crate::source::MPQ_SOURCE;
 
 pub(crate) type Triangle = [[f32; 3]; 3];
+/// A box as `(min, max)`.
+pub type Bounds = ([f32; 3], [f32; 3]);
 
 /// A WMO building as the world draws it: every group's render batches, the portal graph that
 /// decides which groups draw, and the doodads it places. Positions are the WMO's own space.
 #[derive(Asset, TypePath)]
 pub struct WmoModel {
+    /// The root's key into `WMOAreaTable`.
+    pub wmo_id: u32,
     pub submeshes: Vec<ModelSubmesh>,
     /// The group each of [`Self::submeshes`] belongs to.
     pub submesh_group: Vec<u16>,
@@ -32,6 +36,8 @@ pub struct WmoModel {
     pub group_collision_tris: Vec<Vec<Triangle>>,
     /// Per group: the faces only the camera collides with.
     pub group_camera_only_tris: Vec<Vec<Triangle>>,
+    /// Per group: the box of its collision faces, `None` without any.
+    pub group_collision_bounds: Vec<Option<Bounds>>,
     pub doodads: Vec<WmoDoodad>,
     pub doodad_sets: Vec<WmoDoodadSet>,
     /// Parallel to [`Self::doodads`]: how each is lit.
@@ -51,6 +57,8 @@ pub struct WmoModel {
 #[derive(Clone, Copy, Debug)]
 pub struct WmoGroupNav {
     pub flags: u32,
+    /// The group's id in `WMOAreaTable`.
+    pub area_table_id: u32,
     pub bbox_min: [f32; 3],
     pub bbox_max: [f32; 3],
     pub ref_start: u16,
@@ -154,6 +162,41 @@ fn resolve_doodad_bases(
         .collect()
 }
 
+fn bounds<'a>(points: impl Iterator<Item = &'a [f32; 3]>) -> Option<Bounds> {
+    points.fold(None, |acc, v| {
+        let (mut min, mut max) = acc.unwrap_or((*v, *v));
+        for a in 0..3 {
+            min[a] = min[a].min(v[a]);
+            max[a] = max[a].max(v[a]);
+        }
+        Some((min, max))
+    })
+}
+
+/// Each group's bounding box from the root's group list; the header fields fill in as the group
+/// files load.
+fn group_navs(root: &WmoRoot) -> Vec<WmoGroupNav> {
+    (0..root.group_count() as usize)
+        .map(|gi| {
+            let (bbox_min, bbox_max) = root
+                .group_infos()
+                .get(gi)
+                .map_or(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]), |g| {
+                    (g.bbox_min, g.bbox_max)
+                });
+            WmoGroupNav {
+                flags: 0,
+                area_table_id: 0,
+                bbox_min,
+                bbox_max,
+                ref_start: 0,
+                ref_count: 0,
+                fog_indices: [0; 4],
+            }
+        })
+        .collect()
+}
+
 fn triangles(positions: &[[f32; 3]], indices: &[u32]) -> Vec<Triangle> {
     indices
         .as_chunks::<3>()
@@ -189,24 +232,7 @@ impl AssetLoader for WmoLoader {
         let path = ctx.path().path().to_string_lossy().to_ascii_lowercase();
         let stem = path.strip_suffix(".wmo").unwrap_or(&path).to_owned();
         let groups = root.group_count() as usize;
-        let mut group_nav: Vec<WmoGroupNav> = (0..groups)
-            .map(|gi| {
-                let (bbox_min, bbox_max) = root
-                    .group_infos()
-                    .get(gi)
-                    .map_or(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]), |g| {
-                        (g.bbox_min, g.bbox_max)
-                    });
-                WmoGroupNav {
-                    flags: 0,
-                    bbox_min,
-                    bbox_max,
-                    ref_start: 0,
-                    ref_count: 0,
-                    fog_indices: [0; 4],
-                }
-            })
-            .collect();
+        let mut group_nav = group_navs(&root);
         let mut submeshes = Vec::new();
         let mut submesh_group = Vec::new();
         let mut group_collision_tris = vec![Vec::new(); groups];
@@ -221,6 +247,7 @@ impl AssetLoader for WmoLoader {
             if let Some(h) = wmo_group_header(&gbytes) {
                 let nav = &mut group_nav[gi];
                 nav.flags = h.flags;
+                nav.area_table_id = h.area_table_id;
                 nav.ref_start = h.portal_ref_start;
                 nav.ref_count = h.portal_ref_count;
                 nav.fog_indices = h.fog_indices;
@@ -248,7 +275,12 @@ impl AssetLoader for WmoLoader {
             &group_light_refs,
         );
         let portals = root.portals();
+        let group_collision_bounds = group_collision_tris
+            .iter()
+            .map(|tris| bounds(tris.iter().flatten()))
+            .collect();
         Ok(WmoModel {
+            wmo_id: wmo_root_id(&bytes),
             submeshes,
             submesh_group,
             portal_vertices: portals.vertices.clone(),
@@ -257,6 +289,7 @@ impl AssetLoader for WmoLoader {
             group_nav,
             group_collision_tris,
             group_camera_only_tris,
+            group_collision_bounds,
             doodads: root.doodads().to_vec(),
             doodad_sets: root.doodad_sets().to_vec(),
             doodad_base,
