@@ -1,2 +1,4 @@
+exclude = [".claude/**", "target/**"]
+
 [formatting]
 reorder_keys = false
