@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
@@ -246,6 +246,7 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
             players: 1,
             settle: 10_000,
             measure: 10_000,
+            grace: 10_000,
         }),
         ..Config::default()
     })
@@ -258,6 +259,46 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
         .expect("the server stops")
         .expect("a clean stop");
     assert_eq!(measured, 0, "the window never opened");
+}
+
+#[test]
+fn a_window_ends_on_time_though_a_client_neither_reads_nor_leaves() {
+    let tick_ms = 20;
+    let window = Window {
+        players: 1,
+        settle: 5,
+        measure: 10,
+        grace: 20,
+    };
+    let running = server::start(Config {
+        tick_threads: 1,
+        tick_ms,
+        window: Some(window),
+        ..Config::default()
+    })
+    .expect("a server");
+    let started = Instant::now();
+    let mut stays = Client::join(running.addr(), "Ada");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(running.wait().map(|s| (s.ticks, s.ticks_after, s.stayed))));
+    let ticks = window.settle + window.measure + window.grace;
+    let bound =
+        Duration::from_millis(u64::from(ticks) * u64::from(tick_ms)) * 2 + Duration::from_secs(1);
+    let ended = rx
+        .recv_timeout(bound.saturating_sub(started.elapsed()))
+        .unwrap_or_else(|_| {
+            panic!("the window did not end within {bound:?}: twice its {ticks} ticks, and a second")
+        })
+        .expect("a clean stop");
+    assert_eq!(
+        ended,
+        (10, 20, 1),
+        "ticks measured, ticks after, players dropped"
+    );
+    assert!(
+        stays.cut_off(),
+        "the server returned and left the connection open"
+    );
 }
 
 #[test]

@@ -73,9 +73,10 @@ impl Running {
         self.wait()
     }
 
-    /// Waits until the window's [`Window::players`] have come and all have left, then closes every
-    /// connection and returns once the connections' tasks have ended, so not from async code.
-    /// Without a window it returns only on an error: use [`Running::stop`].
+    /// Waits until the window's [`Window::players`] have come and all have left or its
+    /// [`Window::grace`] has run out, then closes every connection and returns once the
+    /// connections' tasks have ended, so not from async code. Without a window it returns only on
+    /// an error: use [`Running::stop`].
     pub fn wait(self) -> io::Result<Summary> {
         let summary = self
             .tick

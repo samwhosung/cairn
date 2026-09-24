@@ -11,10 +11,11 @@ use server::{
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
-              [--record FILE] [--players N --settle S --measure S] [--label TEXT]
+              [--record FILE] [--players N --settle S --measure S --grace S] [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
-         are in, wait S seconds and measure for S seconds; once every player has left,
-         print one summary row and stop.
+         are in, wait S seconds and measure for S seconds; once every player has left, or
+         S seconds after the window (--grace, 10) with the rest dropped, print one summary
+         row and stop.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
          and world hash to FILE.
        server header
@@ -85,6 +86,7 @@ fn serve(args: &[String]) -> Result<(), String> {
             players: num(&f, "players", 0)?,
             settle: ticks(num(&f, "settle", 5.0)?),
             measure: ticks(num(&f, "measure", 20.0)?),
+            grace: ticks(num(&f, "grace", 10.0)?),
         }),
         None => None,
     };
@@ -108,6 +110,13 @@ fn serve(args: &[String]) -> Result<(), String> {
     let running = server::start(cfg).map_err(|e| format!("starting: {e}"))?;
     eprintln!("serving on {}", running.addr());
     let summary = running.wait().map_err(|e| format!("serving: {e}"))?;
+    if window.is_some_and(|w| summary.ticks == w.measure as usize) {
+        let after = f64::from(summary.ticks_after) * f64::from(tick_ms) / 1000.0;
+        match summary.stayed {
+            0 => eprintln!("every player had left {after:.2} s after the window"),
+            n => eprintln!("the grace ran out {after:.2} s after the window: dropped {n} still in"),
+        }
+    }
     let label = f.get("label").map_or("", String::as_str);
     println!("{}", summary.row(label));
     Ok(())

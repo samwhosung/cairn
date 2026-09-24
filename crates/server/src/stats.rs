@@ -180,6 +180,10 @@ pub struct Summary {
     pub hash: u64,
     /// The whole process's CPU over the window as a share of one core.
     pub process_share: f64,
+    /// Ticks from the window's end to the server's stop; 0 when the window never ended.
+    pub ticks_after: u32,
+    /// Players still in when the grace ran out, whose connections the server dropped.
+    pub stayed: u32,
 }
 
 impl Summary {
@@ -229,6 +233,8 @@ impl Summary {
             shared: built.shared_bytes as f64 / bytes_out.max(1.0),
             hash: ticks.last().map_or(0, |t| t.hash),
             process_share: process_ns as f64 / 1e9 / wall_secs.max(1e-9),
+            ticks_after: 0,
+            stayed: 0,
         }
     }
 
