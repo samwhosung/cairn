@@ -8,6 +8,8 @@ mod camera_dynamics;
 mod camera_water;
 mod controller;
 #[cfg(test)]
+mod course;
+#[cfg(test)]
 mod fixture;
 mod flags;
 mod gait;
