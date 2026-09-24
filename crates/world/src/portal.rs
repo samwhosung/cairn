@@ -62,6 +62,11 @@ impl WmoPortalInstance {
     }
 }
 
+/// The building group the camera's eye is in, from the flood's own down-ray: the first placement
+/// with portals that seeds a group of its own that is not an exterior one.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CameraInteriorClaim(pub Option<crate::interior::WmoRoom>);
+
 #[derive(Component, Clone)]
 pub struct WmoGroupVis {
     pub(crate) instance: Entity,
@@ -95,8 +100,9 @@ pub(crate) fn compute_wmo_pvs(
     camera: Query<'_, '_, (&GlobalTransform, &Projection), With<WorldCamera>>,
     streamer: Res<'_, Streamer>,
     adts: Res<'_, Assets<AdtTile>>,
-    mut instances: Query<'_, '_, &mut WmoPortalInstance>,
+    mut instances: Query<'_, '_, (Entity, &mut WmoPortalInstance)>,
     mut room: ResMut<'_, CameraRoom>,
+    mut camera_claim: ResMut<'_, CameraInteriorClaim>,
 ) {
     let Ok((cam, projection)) = camera.single() else {
         return;
@@ -105,7 +111,8 @@ pub(crate) fn compute_wmo_pvs(
     let eye_world = cam.translation();
     let terrain = terrain_wow_z_under(&streamer, &adts, eye_world);
     let mut found = CameraRoom::default();
-    for mut inst in &mut instances {
+    let mut claim = None;
+    for (entity, mut inst) in &mut instances {
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
         };
@@ -141,10 +148,23 @@ pub(crate) fn compute_wmo_pvs(
                 fog: room_fog(model, pvs.seeds, eye_local),
             };
         }
+        if claim.is_none()
+            && let Some(gi) = pvs.seeds.in_group
+            && model
+                .group_nav
+                .get(gi)
+                .is_some_and(|n| n.flags & EXTERIOR == 0)
+        {
+            claim = Some(crate::interior::WmoRoom {
+                instance: entity,
+                group: gi as u16,
+            });
+        }
     }
     if *room != found {
         *room = found;
     }
+    camera_claim.set_if_neq(CameraInteriorClaim(claim));
 }
 
 fn truly_interior(nav: &WmoGroupNav) -> bool {

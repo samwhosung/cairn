@@ -35,6 +35,8 @@ mod sky_order;
 mod skybox;
 mod source;
 mod stream;
+pub mod submersion;
+pub mod surface;
 mod terrain;
 mod texture;
 pub mod unit;
@@ -125,6 +127,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<interior::CurrentAreaInterior>()
         .init_resource::<interior::CurrentArea>()
         .init_resource::<interior::WmoGeneration>()
+        .init_resource::<portal::CameraInteriorClaim>()
         .add_message::<rig_events::AnimEvent>()
         .add_systems(Startup, (atmosphere::load_catalog, wmo_areas::load))
         .add_systems(

@@ -5,10 +5,11 @@ use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::reflect::TypePath;
 use model::{
-    WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef, WmoRoot,
-    accumulate_wmo_group_camera_only_collision, accumulate_wmo_group_collision, parse_wmo_lights,
-    parse_wmo_root, wmo_group_doodad_refs, wmo_group_header, wmo_group_light_refs,
-    wmo_group_submeshes, wmo_root_id,
+    FootprintTris, WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo,
+    WmoPortalRef, WmoRoot, accumulate_wmo_group_camera_only_collision,
+    accumulate_wmo_group_collision, parse_wmo_lights, parse_wmo_root, wmo_group_doodad_refs,
+    wmo_group_footprint_tris, wmo_group_header, wmo_group_light_refs, wmo_group_submeshes,
+    wmo_root_id,
 };
 
 use crate::model::ModelSubmesh;
@@ -38,6 +39,12 @@ pub struct WmoModel {
     pub group_camera_only_tris: Vec<Vec<Triangle>>,
     /// Per group: the box of its collision faces, `None` without any.
     pub group_collision_bounds: Vec<Option<Bounds>>,
+    /// Per interior group: the render faces a down-ray reads a surface's material off.
+    pub group_footprints: Vec<Option<FootprintTris>>,
+    /// Per group: the box of its footprint's faces.
+    pub group_footprint_bounds: Vec<Option<Bounds>>,
+    /// Per material: the `TerrainType` its surfaces are.
+    pub material_ground_types: Vec<u32>,
     pub doodads: Vec<WmoDoodad>,
     pub doodad_sets: Vec<WmoDoodadSet>,
     /// Parallel to [`Self::doodads`]: how each is lit.
@@ -173,6 +180,14 @@ fn bounds<'a>(points: impl Iterator<Item = &'a [f32; 3]>) -> Option<Bounds> {
     })
 }
 
+fn footprint_bounds(fp: &FootprintTris) -> Option<Bounds> {
+    bounds(
+        fp.indices
+            .iter()
+            .filter_map(|&i| fp.positions.get(i as usize)),
+    )
+}
+
 /// Each group's bounding box from the root's group list; the header fields fill in as the group
 /// files load.
 fn group_navs(root: &WmoRoot) -> Vec<WmoGroupNav> {
@@ -239,6 +254,7 @@ impl AssetLoader for WmoLoader {
         let mut group_camera_only_tris = vec![Vec::new(); groups];
         let mut group_doodad_refs = vec![Vec::new(); groups];
         let mut group_light_refs = vec![Vec::new(); groups];
+        let mut group_footprints = vec![None; groups];
         for gi in 0..groups {
             let url = format!("{MPQ_SOURCE}://{stem}_{gi:03}.wmo");
             let Ok(gbytes) = ctx.read_asset_bytes(url).await else {
@@ -260,6 +276,7 @@ impl AssetLoader for WmoLoader {
             group_camera_only_tris[gi] = triangles(&pos, &idx);
             group_doodad_refs[gi] = wmo_group_doodad_refs(&gbytes);
             group_light_refs[gi] = wmo_group_light_refs(&gbytes);
+            group_footprints[gi] = wmo_group_footprint_tris(&gbytes);
             for sub in wmo_group_submeshes(&gbytes, &root) {
                 submeshes.push(ModelSubmesh::load(ctx, sub));
                 submesh_group.push(gi as u16);
@@ -279,6 +296,10 @@ impl AssetLoader for WmoLoader {
             .iter()
             .map(|tris| bounds(tris.iter().flatten()))
             .collect();
+        let group_footprint_bounds = group_footprints
+            .iter()
+            .map(|fp| fp.as_ref().and_then(footprint_bounds))
+            .collect();
         Ok(WmoModel {
             wmo_id: wmo_root_id(&bytes),
             submeshes,
@@ -290,6 +311,9 @@ impl AssetLoader for WmoLoader {
             group_collision_tris,
             group_camera_only_tris,
             group_collision_bounds,
+            group_footprints,
+            group_footprint_bounds,
+            material_ground_types: root.material_ground_types(),
             doodads: root.doodads().to_vec(),
             doodad_sets: root.doodad_sets().to_vec(),
             doodad_base,
