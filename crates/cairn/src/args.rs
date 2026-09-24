@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,8 +14,12 @@ const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
+             [--connect HOST:PORT | --host [PORT]] [--name NAME]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
-         --mute keeps the window silent
+         --mute keeps the window silent. --connect joins a running server, which places the
+         player; --host serves the world from this window on 127.0.0.1:PORT (7777 by default)
+         and joins it, and each player who connects there appears beside the host. NAME is
+         who the others see, the race's name by default
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
@@ -47,10 +52,11 @@ Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, 
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 20] = [
+const FLAGS: [&str; 22] = [
     "age",
     "at",
     "az",
+    "connect",
     "display",
     "dist",
     "el",
@@ -61,6 +67,7 @@ const FLAGS: [&str; 20] = [
     "hair-color",
     "look",
     "map",
+    "name",
     "out",
     "race",
     "scale",
@@ -78,6 +85,7 @@ const DEFAULT_SIZE: UVec2 = UVec2::new(1600, 900);
 const DEFAULT_MAP: &str = "Azeroth";
 const NOON: TimeOfDay = TimeOfDay { minute: 12 * 60 };
 const MAX_SIDE: u32 = 8192;
+const DEFAULT_PORT: u16 = 7777;
 
 #[derive(Debug, PartialEq)]
 pub struct Args {
@@ -92,6 +100,17 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
+    pub join: Option<Join>,
+    /// Who the others see; `None` outside a join.
+    pub name: Option<String>,
+}
+
+/// How the window joins others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Join {
+    Connect(SocketAddr),
+    /// Serve the world in-process on this port of 127.0.0.1, and join it.
+    Host(u16),
 }
 
 /// The character walked as: a `ChrRaces` id, 0 male or 1 female, and the five customization
@@ -129,6 +148,11 @@ impl Look {
             .copied()
             .unwrap_or("unknown")
     }
+
+    fn race_title(self) -> String {
+        let name = self.race_name();
+        name[..1].to_ascii_uppercase() + &name[1..]
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -144,9 +168,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut start_flying = false;
     let mut glow = true;
     let mut mute = false;
+    let mut host = None;
     while let Some(arg) = args.next() {
         if arg == "--fly" && !start_flying {
             start_flying = true;
+            continue;
+        }
+        if arg == "--host" && host.is_none() {
+            host = Some(host_port(args.next_if(|a| !a.starts_with("--")))?);
             continue;
         }
         if arg == "--no-glow" && glow {
@@ -204,6 +233,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, shot)?;
+    let (join, name) = join(&mut given, host, look, shot)?;
     Ok(Args {
         pose: pose(&given)?,
         size,
@@ -216,7 +246,53 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         display,
         world_age,
         look,
+        join,
+        name,
     })
+}
+
+fn host_port(given: Option<String>) -> Result<u16, String> {
+    given.map_or(Ok(DEFAULT_PORT), |p| {
+        p.trim()
+            .parse::<u16>()
+            .map_err(|_| format!("--host wants a port, not {p}"))
+    })
+}
+
+fn join(
+    given: &mut BTreeMap<String, String>,
+    host: Option<u16>,
+    look: Look,
+    shot: bool,
+) -> Result<(Option<Join>, Option<String>), String> {
+    let connect = given.remove("connect");
+    if shot && (connect.is_some() || host.is_some()) {
+        return Err("--connect and --host are for the window".into());
+    }
+    let join = match (connect, host) {
+        (Some(_), Some(_)) => {
+            return Err("--connect and --host are two ways to join; give one".into());
+        }
+        (Some(addr), None) => addr
+            .trim()
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut found| found.next())
+            .map(Join::Connect)
+            .ok_or_else(|| format!("--connect wants HOST:PORT, not {addr}"))
+            .map(Some)?,
+        (None, host) => host.map(Join::Host),
+    };
+    let name = match (given.remove("name"), join) {
+        (Some(_), None) => return Err("--name is for joining: --connect or --host".into()),
+        (Some(name), Some(_)) if name.trim().is_empty() => {
+            return Err("--name wants a name".into());
+        }
+        (Some(name), Some(_)) => Some(name.trim().to_owned()),
+        (None, Some(_)) => Some(look.race_title()),
+        (None, None) => None,
+    };
+    Ok((join, name))
 }
 
 fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String> {
@@ -479,6 +555,22 @@ mod tests {
     }
 
     #[test]
+    fn a_window_joins_by_address_or_hosts_on_a_port_as_its_race_unless_named() {
+        let args = parsed("").expect("parses");
+        assert_eq!((args.join, args.name), (None, None));
+        let args = parsed("--connect 127.0.0.1:7000 --race orc").expect("parses");
+        let addr = SocketAddr::from(([127, 0, 0, 1], 7000));
+        assert_eq!(args.join, Some(Join::Connect(addr)));
+        assert_eq!(args.name.as_deref(), Some("Orc"));
+        let args = parsed("--host --name Brother").expect("parses");
+        assert_eq!(args.join, Some(Join::Host(DEFAULT_PORT)));
+        assert_eq!(args.name.as_deref(), Some("Brother"));
+        let args = parsed("--race 7 --host 7100").expect("parses");
+        assert_eq!(args.join, Some(Join::Host(7100)));
+        assert_eq!(args.name.as_deref(), Some("Gnome"));
+    }
+
+    #[test]
     fn a_shot_ages_its_world_two_and_a_half_seconds_unless_told() {
         let age = |line: &str| parsed(line).expect("parses").world_age;
         assert_eq!(age("shot --out a.png"), Duration::from_millis(2500));
@@ -549,6 +641,13 @@ mod tests {
             "shot --display 1 --scale 0 --out a.png",
             "shot --display 1 --at 0,0,0 --out a.png",
             "shot --display 1 --at 0,0,0 --az 0 --el 10 --dist 0 --out a.png",
+            "--connect nowhere",
+            "--connect 127.0.0.1:7000 --host",
+            "--host 70000",
+            "--host --host",
+            "--name Anna",
+            "shot --host --out a.png",
+            "shot --connect 127.0.0.1:7000 --out a.png",
         ] {
             assert!(parsed(line).is_err(), "{line}");
         }

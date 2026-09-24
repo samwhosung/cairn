@@ -32,9 +32,11 @@ use crate::fly::{Fly, fly};
 use crate::view::Pose;
 pub use body::PlayerBody;
 use body::PlayerLook;
-use camera::{CameraControl, CameraRig, LOGIN_PITCH};
+pub(crate) use camera::CameraRig;
+use camera::{CameraControl, LOGIN_PITCH};
 use camera_dynamics::CameraOptions;
-use state::{CAPSULE_HEIGHT, CAPSULE_RADIUS, Player};
+pub(crate) use state::Player;
+use state::{CAPSULE_HEIGHT, CAPSULE_RADIUS};
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {

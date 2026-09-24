@@ -11,6 +11,8 @@ publish.workspace = true
 assert_no_alloc = "1.1"
 avian3d.workspace = true
 bevy.workspace = true
+protocol = { path = "../protocol" }
+server = { path = "../server" }
 sound = { path = "../sound" }
 world = { path = "../world" }
 

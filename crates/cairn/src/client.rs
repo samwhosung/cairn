@@ -82,7 +82,7 @@ fn sound_plugin(mute: bool) -> sound::SoundPlugin {
     }
 }
 
-fn character_look(look: args::Look) -> CharacterLook {
+pub fn character_look(look: args::Look) -> CharacterLook {
     CharacterLook {
         race: look.race,
         sex: look.sex,

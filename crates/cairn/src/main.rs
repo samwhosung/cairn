@@ -8,6 +8,7 @@ mod args;
 mod client;
 mod fixture;
 mod fly;
+mod net;
 mod player;
 mod shot;
 mod view;
@@ -63,7 +64,9 @@ fn main() -> AppExit {
                 return AppExit::error();
             }
         };
-        if let Err(e) = check_look_offered(&tables, args.look) {
+        if let Err(e) =
+            check_look_offered(&tables, args.look).and_then(|()| join(&mut app, &args, map.id))
+        {
             eprintln!("cairn: {e}");
             return AppExit::from_code(2);
         }
@@ -71,6 +74,15 @@ fn main() -> AppExit {
     }
     client::assemble(&mut app, args, &install, map, std::convert::identity);
     app.run()
+}
+
+fn join(app: &mut App, args: &args::Args, map: u32) -> Result<(), String> {
+    let (Some(join), Some(name)) = (args.join, args.name.clone()) else {
+        return Ok(());
+    };
+    let hello = net::hello(name, &client::character_look(args.look));
+    let start = args.pose.target.to_array();
+    net::join(app, join, hello, map, start, args.pose.heading)
 }
 
 fn check_look_offered(tables: &CharacterTables, look: args::Look) -> Result<(), String> {
