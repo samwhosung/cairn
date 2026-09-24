@@ -31,6 +31,7 @@ gates enforce the rest.
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`protocol`](crates/protocol) — The native wire between cairn's client and server: frames, the messages each side sends, and their encoding
+- [`server`](crates/server) — The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process
 - [`sound`](crates/sound) — World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, the kit player, zone music and ambience and the world's emitters, mixed by kira on the device or offline
 - [`terrain`](crates/terrain) — Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them
 - [`wdl`](crates/wdl) — Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from

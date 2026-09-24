@@ -1,0 +1,22 @@
+[package]
+name = "server"
+description = "The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+protocol = { path = "../protocol" }
+rayon = "1.12"
+rustix = { version = "1.1", features = ["time"] }
+tokio = { version = "1.53", features = [
+  "rt-multi-thread",
+  "net",
+  "io-util",
+  "sync",
+] }
+
+[lints]
+workspace = true
