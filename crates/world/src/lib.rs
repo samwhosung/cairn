@@ -13,6 +13,7 @@ pub mod collision;
 pub mod coords;
 mod doodad_anim;
 mod doodad_events;
+mod effect;
 mod glow;
 mod ground;
 mod horizon;
@@ -119,6 +120,7 @@ impl Plugin for WorldPlugin {
             clouds::CloudsPlugin,
             celestial::CelestialPlugin,
             skybox::SkyboxPlugin,
+            effect::EffectPlugin,
             liquid::LiquidPlugin,
         ))
         .init_resource::<Residency>()

@@ -1,6 +1,7 @@
 //! The world's liquids: the animated surfaces of lakes, rivers, the sea, buildings' pools, magma
 //! and slime, where they are, and what the camera's eye is under.
 
+mod drift;
 mod frames;
 mod interleave;
 mod query;
@@ -38,6 +39,7 @@ pub(crate) struct LiquidPlugin;
 impl Plugin for LiquidPlugin {
     fn build(&self, app: &mut App) {
         surface::plugin(app);
+        drift::plugin(app);
         app.init_resource::<WaterIndex>()
             .init_resource::<Underwater>()
             .init_resource::<SubmergedEye>()
