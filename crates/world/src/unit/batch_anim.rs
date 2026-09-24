@@ -67,7 +67,7 @@ impl UnitLoops<'_> {
     }
 }
 
-pub(crate) fn mark_moving(e: &mut EntityCommands<'_>, scrolls: bool, alpha: Option<MatAnim>) {
+pub(crate) fn mark_animated(e: &mut EntityCommands<'_>, scrolls: bool, alpha: Option<MatAnim>) {
     if scrolls {
         e.insert(AnimMatPart);
     }

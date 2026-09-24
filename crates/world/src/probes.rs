@@ -65,7 +65,7 @@ impl Slot {
 }
 
 #[derive(Resource)]
-pub(crate) struct PropProbes {
+pub(crate) struct Probes {
     rows: Arc<Vec<[[f32; 4]; PROBE_ROWS]>>,
     free: Vec<u16>,
     high: usize,
@@ -74,7 +74,7 @@ pub(crate) struct PropProbes {
     generation: u64,
 }
 
-impl Default for PropProbes {
+impl Default for Probes {
     fn default() -> Self {
         Self {
             rows: Arc::new(vec![[[0.0; 4]; PROBE_ROWS]; MAX_PROP_PROBES]),
@@ -87,7 +87,7 @@ impl Default for PropProbes {
     }
 }
 
-impl PropProbes {
+impl Probes {
     pub(crate) fn alloc_shared(&mut self, coeffs: [Vec4; PROBE_ROWS]) -> Option<u16> {
         let key = ProbeKey(coeffs.map(|v| v.to_array().map(f32::to_bits)));
         if let Some(&slot) = self.by_key.get(&key)
@@ -162,11 +162,11 @@ impl PropProbes {
 
 #[derive(Component)]
 #[component(on_replace = free_slot)]
-pub(crate) struct PropProbeSlot(pub u16);
+pub(crate) struct ProbeSlot(pub u16);
 
 fn free_slot(mut world: DeferredWorld<'_>, ctx: HookContext) {
-    if let Some(slot) = world.get::<PropProbeSlot>(ctx.entity).map(|s| s.0) {
-        world.resource_mut::<PropProbes>().release(slot);
+    if let Some(slot) = world.get::<ProbeSlot>(ctx.entity).map(|s| s.0) {
+        world.resource_mut::<Probes>().release(slot);
     }
 }
 
@@ -191,7 +191,7 @@ pub(crate) struct ProbePlugin;
 
 impl Plugin for ProbePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PropProbes>()
+        app.init_resource::<Probes>()
             .init_resource::<ProbeExtract>()
             .add_plugins(ExtractResourcePlugin::<ProbeExtract>::default())
             .add_systems(PostUpdate, publish);
@@ -201,7 +201,7 @@ impl Plugin for ProbePlugin {
     }
 }
 
-fn publish(probes: Res<'_, PropProbes>, mut out: ResMut<'_, ProbeExtract>) {
+fn publish(probes: Res<'_, Probes>, mut out: ResMut<'_, ProbeExtract>) {
     if out.generation != probes.generation {
         out.rows = Arc::clone(&probes.rows);
         out.high = probes.high;
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn identical_probes_share_a_slot_until_the_last_goes() {
-        let mut t = PropProbes::default();
+        let mut t = Probes::default();
         let c = [Vec4::splat(0.5); PROBE_ROWS];
         let a = t.alloc_shared(c).expect("room");
         assert_eq!(t.alloc_shared(c), Some(a));
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn an_owned_slot_is_never_shared_and_rewrites_in_place() {
-        let mut t = PropProbes::default();
+        let mut t = Probes::default();
         let c = [Vec4::splat(0.5); PROBE_ROWS];
         let owned = t.alloc_owned(c).expect("room");
         let shared = t.alloc_shared(c).expect("room");

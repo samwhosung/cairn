@@ -143,7 +143,7 @@ impl UnitDriver {
         }
     }
 
-    fn freeze_arc_for_landing(
+    fn freeze_arc(
         &mut self,
         arc: Bracketed,
         tr: &AnimationTransitions,
@@ -171,7 +171,7 @@ impl UnitDriver {
         rng: &mut AnimRng,
     ) -> Mode {
         if left.airborne() {
-            self.freeze_arc_for_landing(left, tr, player, anims);
+            self.freeze_arc(left, tr, player, anims);
         }
         if let Some(next) = next {
             return self.enter_bracket(next, tr, player, anims, rng);

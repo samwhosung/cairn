@@ -9,7 +9,7 @@ use crate::interior::{FEET_PROBE_LIFT, FaceBelow, WmoGeneration, WmoRoom, face_b
 use crate::light::SceneLight;
 use crate::m2::M2Model;
 use crate::portal::{EXTERIOR, EXTERIOR_LIT, WmoPortalInstance, terrain_z_local};
-use crate::probes::{PropLobeLight, PropProbeSlot, PropProbes, fold_interior_probe};
+use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
 use crate::stream::Streamer;
 use crate::surface::footprint_under;
 use crate::wmo::{WmoModel, cap96, unit_floor_diffuse};
@@ -168,7 +168,7 @@ type Units<'w, 's> = Query<
         Option<&'static mut UnitLight>,
         Option<&'static mut LightRay>,
         Option<&'static ProbeFold>,
-        Option<&'static PropProbeSlot>,
+        Option<&'static ProbeSlot>,
     ),
     With<BodyDressed>,
 >;
@@ -182,10 +182,10 @@ pub(crate) fn classify_unit_light(
     ground: (Res<'_, Streamer>, Res<'_, Assets<AdtTile>>),
     generation: Res<'_, WmoGeneration>,
     scene: Option<Res<'_, SceneLight>>,
-    mut probes: ResMut<'_, PropProbes>,
+    mut probes: ResMut<'_, Probes>,
     mut units: Units<'_, '_>,
 ) {
-    for (entity, gt, model, mut shade, mut light, ray, probe_fold, seated) in &mut units {
+    for (entity, gt, model, mut shade, mut light, ray, probe_fold, held_slot) in &mut units {
         let pos = gt.translation();
         let still = ray.as_ref().is_some_and(|r| {
             r.wmo_generation == generation.0 && pos.distance_squared(r.cast_from) < STILL_DIST_SQ
@@ -202,7 +202,7 @@ pub(crate) fn classify_unit_light(
             }
             continue;
         }
-        let seated = seated.map(|s| s.0);
+        let held_slot = held_slot.map(|s| s.0);
         let (verdict, room) = light_verdict_at(&wmos, instances.iter(), &ground.0, &ground.1, pos);
         shade.on_building_outdoors = matches!(verdict, Verdict::OnBuildingOutdoors);
         let lit_by = match verdict {
@@ -213,7 +213,7 @@ pub(crate) fn classify_unit_light(
                     .get(&model.0)
                     .map_or(Vec3::ZERO, |m| m.fade_sphere(1.0).1);
                 let target = Vec3::from_array(cap96(mocv));
-                if seated.is_none() {
+                if held_slot.is_none() {
                     let from = scene
                         .as_ref()
                         .map_or(target, |s| Vec3::from_array(s.ambient));
@@ -227,7 +227,7 @@ pub(crate) fn classify_unit_light(
                     ref_point: gt.transform_point(center),
                 };
                 let coeffs = fold(&shade, &f);
-                let slot = match seated {
+                let slot = match held_slot {
                     Some(slot) => {
                         probes.update_owned(slot, coeffs);
                         Some(slot)
@@ -244,15 +244,15 @@ pub(crate) fn classify_unit_light(
             }
         };
         shade.indoor = lit_by != LitBy::Sky;
-        match (seated, lit_by) {
+        match (held_slot, lit_by) {
             (Some(old), LitBy::OwnProbe { slot: new }) if old == new => {}
             (_, LitBy::OwnProbe { slot: new }) => {
-                commands.entity(entity).try_insert(PropProbeSlot(new));
+                commands.entity(entity).try_insert(ProbeSlot(new));
             }
             (Some(_), _) => {
                 commands
                     .entity(entity)
-                    .try_remove::<(PropProbeSlot, ProbeFold)>();
+                    .try_remove::<(ProbeSlot, ProbeFold)>();
             }
             (None, _) => {}
         }

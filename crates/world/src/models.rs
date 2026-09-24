@@ -24,7 +24,7 @@ use crate::model_material::{
 };
 use crate::placements::{PlacedModel, Placement, Placements, prop_placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
-use crate::probes::{PropLobeLight, PropProbeSlot, PropProbes, fold_interior_probe};
+use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
 use crate::stream::Streamer;
 use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::{DoodadBase, WmoModel};
@@ -116,7 +116,7 @@ pub(crate) fn furnish(
     mut meshes: ResMut<'_, Assets<Mesh>>,
     mut materials: ResMut<'_, Assets<ModelMaterial>>,
     mut cache: ResMut<'_, ModelMaterials>,
-    mut probes: ResMut<'_, PropProbes>,
+    mut probes: ResMut<'_, Probes>,
     mut furnished: ResMut<'_, Furnished>,
     mut residency: ResMut<'_, Residency>,
     mut loops: MaterialLoops<'_>,
@@ -328,7 +328,7 @@ impl Spawner<'_, '_, '_, '_> {
         f: &mut Furnishing,
         (m2s, wmos): (&Assets<M2Model>, &Assets<WmoModel>),
         (streamer, adts): (&Streamer, &Assets<AdtTile>),
-        probes: &mut PropProbes,
+        probes: &mut Probes,
     ) {
         match &f.model {
             ModelHandle::M2(h) => {
@@ -440,7 +440,7 @@ impl Spawner<'_, '_, '_, '_> {
         form: &[Handle<Mesh>],
         prop: &Prop,
         site: &PropSite<'_>,
-        probes: &mut PropProbes,
+        probes: &mut Probes,
         placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
     ) -> Vec<Entity> {
         let (building, streamer, adts) = (site.building, site.streamer, site.adts);
@@ -484,7 +484,7 @@ impl Spawner<'_, '_, '_, '_> {
                 ents.push(carrier);
                 carrier
             };
-            self.commands.entity(owner).insert(PropProbeSlot(slot));
+            self.commands.entity(owner).insert(ProbeSlot(slot));
         }
         if let Some(room) = &room {
             for &e in &ents {

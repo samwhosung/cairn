@@ -179,8 +179,8 @@ pub(crate) fn apply_unit_look(
         joined_units.extend(parents.iter_ancestors(part).filter(|&e| units.contains(e)));
     }
     let now = time.elapsed_secs();
-    for (root, owner, appear, light, shade, cards, alpha_moves) in &mut units {
-        let (look, fading) = if let Some(appear) = appear {
+    for (root, owner, appear, light, shade, cards, alpha_animated) in &mut units {
+        let (look, alpha_changed) = if let Some(appear) = appear {
             if appear.done(now) {
                 commands.entity(root).remove::<UnitAppear>();
                 (Look::Steady, true)
@@ -189,21 +189,21 @@ pub(crate) fn apply_unit_look(
             }
         } else if let Some(mut owner) = owner {
             let fading = owner.alpha < 1.0;
-            let moving = fading || owner.was_fading;
+            let changed = fading || owner.was_fading;
             owner.was_fading = fading;
             let look = match owner.alpha {
                 a if a >= 1.0 => Look::Steady,
                 a if a <= 0.0 => Look::Hidden,
                 a => Look::SeeThrough(a),
             };
-            (look, moving)
+            (look, changed)
         } else {
             (Look::Steady, false)
         };
         let relit = light.as_ref().is_some_and(Ref::is_changed);
         let joins = joined_units.contains(&root)
             || cards.is_some_and(|c| c.0.iter().any(|&e| joined.contains(e)));
-        let parts_stale = fading || relit || joins || alpha_moves;
+        let parts_stale = alpha_changed || relit || joins || alpha_animated;
         if !parts_stale {
             continue;
         }
@@ -286,8 +286,8 @@ pub(crate) fn sync_depth_primes(
     >,
     mut twins: Query<'_, '_, (&PrimeOf, &mut MeshTag, &mut Mesh3d), Without<PartMaterials>>,
 ) {
-    for (part, fade, tag, mesh, twin, unculled) in &parts {
-        let Some(material) = &fade.depth_prime else {
+    for (part, materials, tag, mesh, twin, unculled) in &parts {
+        let Some(material) = &materials.depth_prime else {
             continue;
         };
         let active = translucent(tag.0);

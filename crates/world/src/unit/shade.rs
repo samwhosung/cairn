@@ -16,8 +16,8 @@ const LIT_T: f32 = 0.75;
 const SHADOWED_T: f32 = 1.0;
 const LIT_INTENSITY: f32 = 2.5;
 const SHADOWED_INTENSITY: f32 = 0.5;
-/// Indoors the client aims at an intensity of 1, which is where the lit end already sits.
-const INDOOR_T: f32 = 0.75;
+const INDOOR_INTENSITY: f32 = 1.0;
+const INDOOR_T: f32 = mix_for(INDOOR_INTENSITY);
 /// The client ramps the intensity at 3.3333 a second over the 2.0-wide span.
 const RAMP_PER_SEC: f32 = 3.3333 / 2.0;
 const AMBIENT_RAMP_PER_SEC: f32 = 2.0;
@@ -25,8 +25,9 @@ const RESAMPLE_DIST: f32 = 0.5;
 const SETTLED_EPS: f32 = 0.4 / 255.0;
 
 /// A unit's own light: the baked ground shadow under its feet, ramped as it walks in and out of
-/// it, carried to every part it draws. Indoors it aims at an intensity of 1 and ramps the ambient
-/// colour its probe is folded from; on a building's outdoor surface it stays lit.
+/// it, and carried to its parts unless a probe of its own lights them. Indoors it aims at an
+/// intensity of 1 and ramps the ambient colour its probe is folded from; on a building's outdoor
+/// surface it stays lit.
 #[derive(Component)]
 pub struct UnitShade {
     t: f32,
@@ -82,6 +83,10 @@ impl UnitShade {
         self.ambient = scene;
         self.ambient_target = room;
     }
+}
+
+const fn mix_for(intensity: f32) -> f32 {
+    (LIT_INTENSITY - intensity) / (LIT_INTENSITY - SHADOWED_INTENSITY)
 }
 
 fn ramp_toward(v: f32, target: f32, step: f32) -> f32 {

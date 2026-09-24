@@ -21,7 +21,7 @@ use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
 
 use super::batch_anim::{
-    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card,
+    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_animated, spawn_card,
 };
 use super::fade::{PartMaterials, UnitAppear};
 
@@ -58,7 +58,8 @@ pub struct WornModel {
     pub attachment: u16,
 }
 
-/// On a dressed body: its parts and the rig slot they skin through, 0 for none.
+/// On a dressed body: its mesh parts, not its billboard cards, and the rig slot they skin
+/// through, 0 for none.
 #[derive(Component, Debug)]
 pub struct BodyDressed {
     pub parts: Vec<Entity>,
@@ -131,7 +132,7 @@ pub(crate) fn dress_bodies(
             .find(|s| s.geometry.char_slot == Some(CharSkinSlot::Hair))
             .map(|s| (s.geometry.blend, s.geometry.two_sided));
         let mut pose = rigged.then(|| RigPose::new(entity, &m2.skeleton));
-        let (mut parts, mut cards, mut alpha_moves) = (Vec::new(), Vec::new(), false);
+        let (mut parts, mut cards, mut alpha_animated) = (Vec::new(), Vec::new(), false);
         for (i, sub) in m2.submeshes.iter().enumerate() {
             let g = &sub.geometry;
             if let Some(dress) = &body.character
@@ -154,13 +155,13 @@ pub(crate) fn dress_bodies(
             );
             let scrolls = loops.register_scroll(&mut materials, &mats, g);
             let alpha = loops.body_alpha(g, entity);
-            alpha_moves |= alpha.is_some();
+            alpha_animated |= alpha.is_some();
             if let Some(info) = &sub.billboard {
                 let joint = card_joint(&mut commands, pose.as_mut(), entity, info);
                 let tag = rig_bits(slot) | alpha_bits(1.0);
                 let mesh = form.static_meshes[i].clone();
                 let mut card = spawn_card(&mut commands, mesh, tag, mats, info, joint, sub.aabb);
-                mark_moving(&mut card, scrolls, alpha);
+                mark_animated(&mut card, scrolls, alpha);
                 cards.push(card.id());
                 continue;
             }
@@ -169,7 +170,7 @@ pub(crate) fn dress_bodies(
             if !skinned && let Some(aabb) = sub.aabb {
                 part.insert(aabb);
             }
-            mark_moving(&mut part, scrolls, alpha);
+            mark_animated(&mut part, scrolls, alpha);
             parts.push(part.id());
         }
         let worn = body
@@ -183,7 +184,7 @@ pub(crate) fn dress_bodies(
             UnitAppear::at(time.elapsed_secs()),
             UnitCards(cards),
         ));
-        if alpha_moves {
+        if alpha_animated {
             root.insert(UnitAlphaAnimated);
         }
         if !worn.is_empty() {

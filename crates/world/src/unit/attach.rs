@@ -4,7 +4,7 @@ use model::CharSkinSlot;
 
 use super::MeshCache;
 use super::batch_anim::{
-    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card,
+    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_animated, spawn_card,
 };
 use super::body::{BodyModel, BodyPart, HoldMeshes, WornModel, batch_look, meshes_for};
 use super::fade::PartMaterials;
@@ -88,7 +88,7 @@ pub(crate) fn attach_worn(
                     HoldMeshes(form.clone()),
                 ))
                 .id();
-            let mut alpha_moves = false;
+            let mut alpha_animated = false;
             for (i, sub) in item.submeshes.iter().enumerate() {
                 let g = &sub.geometry;
                 let texture = if g.char_slot == Some(CharSkinSlot::Object) {
@@ -108,14 +108,14 @@ pub(crate) fn attach_worn(
                 );
                 let scrolls = loops.register_scroll(&mut materials, &mats, g);
                 let alpha = loops.worn_alpha(g);
-                alpha_moves |= alpha.is_some();
+                alpha_animated |= alpha.is_some();
                 let mesh = form.static_meshes[i].clone();
                 if let Some(info) = &sub.billboard {
                     let joint = card_joint(&mut commands, None, root, info);
                     let tag = alpha_bits(1.0);
                     let mut card =
                         spawn_card(&mut commands, mesh, tag, mats, info, joint, sub.aabb);
-                    mark_moving(&mut card, scrolls, alpha);
+                    mark_animated(&mut card, scrolls, alpha);
                     cards.0.push(card.id());
                     continue;
                 }
@@ -131,9 +131,9 @@ pub(crate) fn attach_worn(
                 if let Some(aabb) = sub.aabb {
                     part.insert(aabb);
                 }
-                mark_moving(&mut part, scrolls, alpha);
+                mark_animated(&mut part, scrolls, alpha);
             }
-            if alpha_moves {
+            if alpha_animated {
                 commands.entity(entity).insert(UnitAlphaAnimated);
             }
             false

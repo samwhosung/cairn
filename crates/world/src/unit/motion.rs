@@ -90,7 +90,6 @@ pub struct UnitMotion {
     /// from a step-off.
     pub vertical_speed: f32,
     pub flags: u32,
-    /// The pose it holds while it stands still.
     pub stand_state: StandState,
 }
 
