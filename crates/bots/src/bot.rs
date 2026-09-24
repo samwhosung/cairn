@@ -263,7 +263,7 @@ async fn write(
     let Some(track) = crowd.track(id) else {
         return;
     };
-    let mut mover = Mover::new(spawn.pos[2], spawn.facing);
+    let mut mover = Mover::new(spawn.pos, spawn.facing);
     let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let (mut claims, mut bytes) = (Vec::<Movement>::new(), Vec::new());

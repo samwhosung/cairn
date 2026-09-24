@@ -70,6 +70,9 @@ pub struct Player {
     pub model_yaw: f32,
     /// The mover's pitch: steers a swimmer, held when nothing steers it.
     pub mover_pitch: f32,
+    /// The pitch a swimmer travels and is drawn at: the mover's, levelled where the surface caps
+    /// a rising stroke.
+    pub swim_pitch: f32,
     /// The camera pitch the last mouse-look push carried; the push fires when the aim moves.
     pub aim_pitch_seen: f32,
     pub autorun: bool,
@@ -111,6 +114,7 @@ impl Default for Player {
             face_yaw: 0.0,
             model_yaw: 0.0,
             mover_pitch: 0.0,
+            swim_pitch: 0.0,
             aim_pitch_seen: 0.0,
             autorun: false,
             walking: false,

@@ -220,6 +220,7 @@ pub fn control(
         );
         (o, 0.0)
     };
+    player.swim_pitch = swim_pitch;
     let airborne = !swimming && !outcome.settling && (!outcome.grounded || outcome.jumped);
     let frame = flags::this_frame(
         &mut player,

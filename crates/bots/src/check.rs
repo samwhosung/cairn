@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::mover::HEARTBEAT_MS;
+use protocol::HEARTBEAT_MS;
+
 use crate::track::RUN;
 
 pub const CLAIM_TO_BATCH_MS: f32 = 150.0;

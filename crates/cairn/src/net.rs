@@ -1,6 +1,8 @@
-//! Playing with others: the connection to a server, the welcome that places the player, and the
-//! window that goes on alone when its server goes.
+//! Playing with others: the connection to a server, the welcome that places the player, the
+//! player's claims and the server's corrections, and the window that goes on alone when its
+//! server goes.
 
+mod claims;
 mod link;
 
 use std::net::SocketAddr;
@@ -8,7 +10,7 @@ use std::time::Duration;
 
 use bevy::math::ops;
 use bevy::prelude::*;
-use protocol::{Appearance, ClientMessage, Hello, ServerMessage, VERSION, Welcome};
+use protocol::{Appearance, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome};
 use server::Spawn;
 use world::CurrentMap;
 use world::coords::wow_to_bevy;
@@ -16,6 +18,7 @@ use world::unit::CharacterLook;
 
 use crate::args::Join;
 use crate::player::{CameraRig, Player};
+use claims::Claims;
 use link::{Arrival, Link};
 
 /// Yards between the places a host sets its players, across its own heading.
@@ -30,6 +33,7 @@ pub struct Net {
     link: Link,
     hosted: Option<server::Running>,
     welcomed: Option<Welcome>,
+    claims: Option<Claims>,
     latest_tick: Option<u32>,
     seen_at: Duration,
 }
@@ -41,6 +45,7 @@ impl Net {
             link: Link::open(addr, hello),
             hosted: None,
             welcomed: None,
+            claims: None,
             latest_tick: None,
             seen_at: Duration::ZERO,
         }
@@ -111,12 +116,14 @@ pub fn join(
     Ok(())
 }
 
-/// Takes in what the server sends before the frame's movement runs.
+/// Takes in what the server sends before the frame's movement runs, and claims the movement
+/// after it.
 pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, receive.run_if(resource_exists::<Net>));
+        app.add_systems(PreUpdate, receive.run_if(resource_exists::<Net>))
+            .add_systems(PostUpdate, claims::claim.run_if(resource_exists::<Net>));
     }
 }
 
@@ -155,9 +162,28 @@ fn receive(
                 if let Some(addr) = net.hosting() {
                     info!("hosting: others join with --connect {addr}");
                 }
+                net.claims = Some(Claims::new(&w.spawn));
                 net.welcomed = Some(w);
             }
-            Ok(ServerMessage::Batch(batch)) => net.latest_tick = Some(batch.tick),
+            Ok(ServerMessage::Batch(batch)) => {
+                net.latest_tick = Some(batch.tick);
+                for record in batch {
+                    match record {
+                        Ok(Record::Correct { seq, movement }) => {
+                            if let Some(claims) = &mut net.claims {
+                                warn!("the server put the player back at {:?}", movement.pos);
+                                claims.correct(&mut player, seq, &movement);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("the server sent a broken batch ({e}); playing on alone");
+                            commands.remove_resource::<Net>();
+                            return;
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 warn!("the server sent what is not a message ({e}); playing on alone");
                 commands.remove_resource::<Net>();

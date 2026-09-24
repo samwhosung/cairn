@@ -8,6 +8,7 @@
 
 mod appearance;
 mod batch;
+mod cadence;
 mod error;
 mod frame;
 mod message;
@@ -21,6 +22,7 @@ pub use batch::{
     Batch, Record, SLOTS, begin_batch, write_appear, write_correct, write_move, write_state,
     write_turn, write_vanish,
 };
+pub use cadence::{Cadence, HEARTBEAT_MS};
 pub use error::Error;
 pub use frame::{Frames, Kind, LEN_BYTES, MAX_FRAME, begin_frame, finish_frame};
 pub use message::{Claim, ClientMessage, Hello, ServerMessage, Welcome};

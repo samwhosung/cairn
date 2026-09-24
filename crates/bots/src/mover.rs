@@ -1,11 +1,10 @@
 use std::f32::consts::TAU;
 
-use protocol::{Jump, Movement, flags};
+use protocol::{Cadence, Jump, Movement, flags};
 
 use crate::ground::Ground;
 use crate::track::Track;
 
-pub const HEARTBEAT_MS: u32 = 500;
 const JUMP_SPEED: f32 = 7.955_547;
 const GRAVITY: f32 = 19.291_105;
 const TELEPORT_YD: f32 = 200.0;
@@ -24,15 +23,9 @@ pub enum Told {
     Lie,
 }
 
-/// A client's movement stream as the 1.12 client sends it, frame by frame: a claim for each
-/// change of movement flags (the direction keys go quiet mid-air), one for each frame the facing
-/// changes off the turn keys, and a heartbeat when [`HEARTBEAT_MS`] has passed without either
-/// while moving.
+/// A scripted track walked frame by frame, its claims sent as the client's [`Cadence`] says.
 pub struct Mover {
-    sent_flags: u32,
-    facing: f32,
-    last_send: u32,
-    report_now: bool,
+    cadence: Cadence,
     last_ground_z: f32,
     air: Option<Air>,
     jumped_leg: Option<usize>,
@@ -41,13 +34,14 @@ pub struct Mover {
 }
 
 impl Mover {
-    pub fn new(ground_z: f32, facing: f32) -> Self {
+    pub fn new(spawn: [f32; 3], facing: f32) -> Self {
         Self {
-            sent_flags: 0,
-            facing: facing.rem_euclid(TAU),
-            last_send: 0,
-            report_now: false,
-            last_ground_z: ground_z,
+            cadence: Cadence::new(&Movement {
+                pos: spawn,
+                facing: facing.rem_euclid(TAU),
+                ..Movement::default()
+            }),
+            last_ground_z: spawn[2],
             air: None,
             jumped_leg: None,
             teleported: false,
@@ -57,7 +51,7 @@ impl Mover {
 
     pub fn correct(&mut self, seq: u32) {
         self.ack = seq;
-        self.report_now = true;
+        self.cadence.report_now();
     }
 
     pub fn frame(
@@ -109,54 +103,28 @@ impl Mover {
             }
         }
         movement.flags = live;
-        let changes = self.changes(live, movement.facing);
-        let heartbeat = live != 0 && t.saturating_sub(self.last_send) >= HEARTBEAT_MS;
-        let mut claims = changes + usize::from(changes == 0 && (heartbeat || self.report_now));
-        let fast = track.fast_lie_xy(t);
-        if let Some(lie) = fast {
-            movement.pos[0] = lie[0];
-            movement.pos[1] = lie[1];
-        }
         let teleport = track.lie.is_some_and(|lie| {
             !self.teleported && t >= lie.teleport_at && live & flags::FORWARD != 0
         });
         if teleport {
             self.teleported = true;
-            movement.pos[0] += TELEPORT_YD;
-            claims = claims.max(1);
+            self.cadence.report_now();
         }
-        if claims > 0 {
-            self.last_send = t;
-            self.report_now = false;
+        let claims = self.cadence.claims(&movement);
+        let fast = track.fast_lie_xy(t);
+        if let Some(lie) = fast {
+            movement.pos[0] = lie[0];
+            movement.pos[1] = lie[1];
+        }
+        if teleport {
+            movement.pos[0] += TELEPORT_YD;
         }
         out.extend(std::iter::repeat_n(movement, claims));
-        self.sent_flags = live;
-        self.facing = movement.facing;
         if claims > 0 && (fast.is_some() || teleport) {
             Told::Lie
         } else {
             Told::Truth
         }
-    }
-
-    /// The claim that releases a turn key carries the turn's last facing itself.
-    fn changes(&self, live: u32, facing: f32) -> usize {
-        let changed = live ^ self.sent_flags;
-        let airborne = live & flags::FALLING != 0;
-        let axes = [
-            (flags::FALLING, true),
-            (flags::WALK_MODE, true),
-            (flags::FORWARD | flags::BACKWARD, !airborne),
-            (flags::STRAFE_LEFT | flags::STRAFE_RIGHT, !airborne),
-            (flags::TURNING, true),
-        ];
-        let flag_claims = axes
-            .iter()
-            .filter(|&&(axis, heard)| heard && changed & axis != 0)
-            .count();
-        let turning = (live | self.sent_flags) & flags::TURNING != 0;
-        let turned = !turning && facing.to_bits() != self.facing.to_bits();
-        flag_claims + usize::from(turned)
     }
 }
 
@@ -185,7 +153,7 @@ mod tests {
 
     fn claims(track: &Track, until: u32) -> Vec<(u32, Movement)> {
         let ground = Ground::none();
-        let mut mover = Mover::new(10.0, 0.0);
+        let mut mover = Mover::new([0.0, 0.0, 10.0], 0.0);
         let mut out = Vec::new();
         for t in (0..=until).step_by(50) {
             let mut frame = Vec::new();
