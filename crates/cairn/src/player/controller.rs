@@ -91,7 +91,9 @@ pub fn control(
         keys: &inputs.keys,
         mouse: &inputs.buttons,
     };
-    if player.settling && (world.residency.settled() || settle.stalled(&world.residency, now)) {
+    if player.settling
+        && (world.residency.settled() || settle.stalled(world.residency.pending(), now))
+    {
         release_settle(&mut player, &world.collide);
     }
 
@@ -308,17 +310,16 @@ pub struct SettleClock {
 }
 
 impl SettleClock {
-    fn stalled(&mut self, residency: &CollisionResidency, now: f32) -> bool {
-        if self.pending != Some(residency.pending()) {
-            self.pending = Some(residency.pending());
+    /// Whether the same work has been pending for [`SETTLE_TIMEOUT`]. A collision that is not
+    /// settled with nothing pending has not had its map's index yet, and has not begun.
+    fn stalled(&mut self, pending: usize, now: f32) -> bool {
+        if pending == 0 || self.pending != Some(pending) {
+            self.pending = Some(pending);
             self.since = now;
         }
         let stalled = now - self.since > SETTLE_TIMEOUT;
         if stalled {
-            warn!(
-                "the collision stalled with {} pending; letting the body go",
-                residency.pending()
-            );
+            warn!("the collision stalled with {pending} pending; letting the body go");
         }
         stalled
     }
@@ -330,5 +331,27 @@ fn release_settle(player: &mut Player, collide: &WorldCollision<'_, '_>) {
     let from = player.pos + Vec3::Y * REACH;
     if let Some(hit) = collide.ray_body(from, Dir3::NEG_Y, 2.0 * REACH) {
         player.pos.y = from.y - hit.distance;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_settle_waits_out_a_stream_not_begun_and_gives_up_on_one_that_stopped() {
+        let mut clock = SettleClock::default();
+        assert!(
+            (0..=60).all(|s| !clock.stalled(0, s as f32)),
+            "a map whose index has not come"
+        );
+        assert!(!clock.stalled(3, 60.0));
+        assert!(!clock.stalled(3, 65.9));
+        assert!(!clock.stalled(2, 66.0), "progress restarts the clock");
+        assert!(!clock.stalled(2, 71.9));
+        assert!(
+            clock.stalled(2, 72.1),
+            "the same two pending for six seconds"
+        );
     }
 }
