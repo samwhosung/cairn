@@ -84,6 +84,12 @@ impl Plugin for CollisionPlugin {
                 propagate_before_physics: false,
                 ..default()
             })
+            // As a task, the trees' upkeep would wait behind every collider build on the shared
+            // pool, and nothing is left in the step to overlap it.
+            .insert_resource(ColliderTreeOptimization {
+                use_async_tasks: false,
+                ..default()
+            })
             .init_asset::<TileCollision>()
             .init_asset::<M2Hull>()
             .init_asset::<WmoHull>()
