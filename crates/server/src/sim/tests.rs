@@ -85,7 +85,7 @@ fn hashes(threads: usize, order: Order, inputs: &[Vec<Stamped>]) -> (Vec<u64>, u
         .iter()
         .map(|tick| {
             let st = pool.install(|| sim.tick(tick, order, None, true));
-            refused += st.refused;
+            refused += st.refused.iter().sum::<u32>();
             st.hash
         })
         .collect();

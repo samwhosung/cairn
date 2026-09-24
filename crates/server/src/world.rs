@@ -82,11 +82,11 @@ impl Act {
     }
 }
 
-/// What one tick's step did.
+/// What one tick's step did; refusals by [`crate::rules::Why`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stepped {
     pub claims: u32,
-    pub refused: u32,
+    pub refused: [u32; 6],
     pub stale: u32,
 }
 
@@ -246,7 +246,7 @@ impl World {
             })
             .reduce(Stepped::default, |x, y| Stepped {
                 claims: x.claims + y.claims,
-                refused: x.refused + y.refused,
+                refused: std::array::from_fn(|i| x.refused[i] + y.refused[i]),
                 stale: x.stale + y.stale,
             })
     }
@@ -304,11 +304,11 @@ fn apply(body: &mut Body, act: &Act, tick: u32, rules: &Rules, done: &mut Steppe
             body.stale += 1;
             done.stale += 1;
         }
-        Verdict::Refuse(_) => {
+        Verdict::Refuse(why) => {
             body.seq = body.seq.wrapping_add(1);
             body.corrected = tick;
             body.refused += 1;
-            done.refused += 1;
+            done.refused[why as usize] += 1;
         }
     }
 }

@@ -150,5 +150,9 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
     let seen = a.watch(40, |g| matches!(g, Got::Vanish(_)));
     assert!(seen.contains(&Got::Vanish(1)), "{seen:?}");
     let summary = running.stop().expect("a clean stop");
-    assert_eq!(summary.refused, 1);
+    assert_eq!(
+        summary.refused,
+        [0, 0, 1, 0, 0, 0],
+        "one refusal, for speed"
+    );
 }

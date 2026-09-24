@@ -58,7 +58,7 @@ pub enum Verdict {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Why {
-    Malformed,
+    Malformed = 0,
     /// Earlier than the last claim, or ahead of the server's clock.
     Clock,
     /// Further over the ground than the speed allows.
@@ -90,7 +90,8 @@ impl Rules {
     }
 
     /// Whether `claim`, received at server time `at_ms`, may move `body` on from its last
-    /// accepted state.
+    /// accepted state. The flags may have changed anywhere between the two claims, so the ground
+    /// covered is held to the faster of their speeds.
     pub fn judge(&self, body: &Body, claim: &Claim, at_ms: u32) -> Verdict {
         if claim.ack != body.seq {
             return Verdict::Stale;
@@ -115,7 +116,8 @@ impl Rules {
         let dt = (m.time - last.time) as f32 / 1000.0;
         let [dx, dy, dz] = [0, 1, 2].map(|i| m.pos[i] - last.pos[i]);
         let ground = dx.hypot(dy);
-        if ground > self.speed(last.flags) * dt * (1.0 + self.tolerance) + self.slack {
+        let speed = self.speed(last.flags).max(self.speed(m.flags));
+        if ground > speed * dt * (1.0 + self.tolerance) + self.slack {
             return Verdict::Refuse(Why::Speed);
         }
         if dz > ground * self.climb + self.rise {
@@ -181,10 +183,14 @@ mod tests {
         let fast = claim(1500, flags::FORWARD, [7.0, 0.0, 0.0]);
         assert_eq!(rules.judge(&body, &fast, 1500), Verdict::Refuse(Why::Speed));
         let walking = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD | flags::WALK_MODE);
+        let still_walking = claim(1500, flags::FORWARD | flags::WALK_MODE, [3.5, 0.0, 0.0]);
         assert_eq!(
-            rules.judge(&walking, &honest, 1500),
+            rules.judge(&walking, &still_walking, 1500),
             Verdict::Refuse(Why::Speed)
         );
+        let standing = last_at([0.0, 0.0, 0.0], 1000, 0);
+        let started_late = claim(1200, flags::FORWARD, [1.4, 0.0, 0.0]);
+        assert_eq!(rules.judge(&standing, &started_late, 1200), Verdict::Accept);
     }
 
     #[test]

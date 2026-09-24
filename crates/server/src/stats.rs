@@ -53,7 +53,8 @@ pub struct TickStats {
     pub largest: [u64; 5],
     pub wall: [u64; 5],
     pub claims: u32,
-    pub refused: u32,
+    /// Refusals by why: malformed, clock, speed, climb, fall, launch.
+    pub refused: [u32; 6],
     pub stale: u32,
     pub appeared: u32,
     pub vanished: u32,
@@ -101,7 +102,8 @@ pub struct Summary {
     pub in_per_client: f64,
     pub out_total: f64,
     pub claims_per_client: f64,
-    pub refused: u64,
+    /// Refusals by why: malformed, clock, speed, climb, fall, launch.
+    pub refused: [u64; 6],
     pub stale: u64,
     pub deferred: u64,
     pub kicked: u64,
@@ -142,7 +144,7 @@ impl Summary {
             in_per_client: bytes_in as f64 / per_client_s,
             out_total: sum(&|t| t.bytes_out) as f64 / secs.max(1e-9),
             claims_per_client: sum(&|t| u64::from(t.claims)) as f64 / per_client_s,
-            refused: sum(&|t| u64::from(t.refused)),
+            refused: std::array::from_fn(|i| sum(&|t| u64::from(t.refused[i]))),
             stale: sum(&|t| u64::from(t.stale)),
             deferred: sum(&|t| u64::from(t.deferred)),
             kicked: sum(&|t| u64::from(t.kicked)),
@@ -155,7 +157,7 @@ impl Summary {
 
 impl Summary {
     /// The header of [`Summary::row`]'s table.
-    pub const HEADER: &str = "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: admit / step / index / replicate / hash, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | moves/s per client | refused | stale | deferred | kicked | process % of a core | world hash | load |";
+    pub const HEADER: &str = "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: admit / step / index / replicate / hash, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | moves/s per client | refused: malformed / clock / speed / climb / fall / launch | stale | deferred | kicked | process % of a core | world hash | load |";
 
     /// One markdown row: the tick's cost, the bytes, what was refused and shed, and the load
     /// average when it was printed.
@@ -175,7 +177,7 @@ impl Summary {
             self.out_total / 1e6,
             self.claims_per_client,
             self.moves_per_client,
-            self.refused,
+            self.refused.map(|n| n.to_string()).join(" / "),
             self.stale,
             self.deferred,
             self.kicked,
