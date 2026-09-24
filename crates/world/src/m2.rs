@@ -5,11 +5,14 @@ use bevy::animation::graph::AnimationGraph;
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::camera::primitives::Aabb;
+use bevy::image::Image;
 use bevy::math::{Mat4, Vec3};
+use bevy::prelude::Handle;
 use bevy::reflect::TypePath;
 use model::{
-    M2Bounds, M2Light, parse_m2_animation_lookup, parse_m2_animation_summary, parse_m2_animations,
-    parse_m2_attachments, parse_m2_bounds, parse_m2_global_sequence_bones, parse_m2_lights,
+    M2Bounds, M2Light, ParticleEmitterDef, Skeleton, m2_owner_reach, parse_m2_animation_lookup,
+    parse_m2_animation_summary, parse_m2_animations, parse_m2_attachments, parse_m2_bounds,
+    parse_m2_global_sequence_bones, parse_m2_lights, parse_m2_particle_emitters,
     parse_m2_playable_animation_lookup, parse_m2_render_submeshes, parse_m2_skeleton,
 };
 
@@ -19,6 +22,7 @@ use crate::rig::{
     AnimClip, ClipEvent, ModelAnimations, ModelAttachment, ModelSkeleton, PoseSource,
     build_animation_clip, build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
 };
+use crate::source::{Repeat, m2_url, texture_url};
 
 /// An M2 as the world draws it: its render batches in skin order, its authored bounds and its
 /// lights, and the skeleton and sequences it animates by.
@@ -35,6 +39,19 @@ pub struct M2Model {
     /// `None` when nothing in the model moves with a sequence.
     pub animations: Option<ModelAnimations>,
     pub has_emitters: bool,
+    pub(crate) emitters: Vec<ModelEmitter>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ModelEmitter {
+    pub def: ParticleEmitterDef,
+    pub texture: Option<Handle<Image>>,
+    /// The emitter bone's pivot as the file gives it: model space, WoW axes.
+    pub bone_pivot: [f32; 3],
+    pub recursion: Option<Handle<M2Model>>,
+    pub geometry: Option<Handle<M2Model>>,
+    pub owner_reach: f32,
+    pub idle_seq_index: usize,
 }
 
 impl M2Model {
@@ -85,6 +102,7 @@ impl AssetLoader for M2Loader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let subs = parse_m2_render_submeshes(&bytes, "", &[]).map_err(io::Error::other)?;
+        let owner_reach = m2_owner_reach(&subs);
         let submeshes: Vec<ModelSubmesh> = subs
             .into_iter()
             .map(|sub| ModelSubmesh::load(ctx, sub))
@@ -97,6 +115,11 @@ impl AssetLoader for M2Loader {
         let has_emitters = parse_m2_animation_summary(&bytes)
             .is_ok_and(|s| s.particle_emitter_count > 0 || s.ribbon_emitter_count > 0);
         let animations = animations(ctx, &bytes, &skeleton, &pivots, &submeshes, has_emitters);
+        let idle_seq = animations
+            .as_ref()
+            .and_then(ModelAnimations::idle_clip)
+            .map_or(0, |c| c.seq_index);
+        let emitters = load_effects(ctx, &bytes, &raw_skeleton, owner_reach, idle_seq);
         Ok(M2Model {
             submeshes,
             bounds: parse_m2_bounds(&bytes).ok(),
@@ -106,12 +129,53 @@ impl AssetLoader for M2Loader {
             attachments,
             animations,
             has_emitters,
+            emitters,
         })
     }
 
     fn extensions(&self) -> &[&str] {
         &["m2"]
     }
+}
+
+fn load_effects(
+    ctx: &mut LoadContext<'_>,
+    bytes: &[u8],
+    skeleton: &Skeleton,
+    owner_reach: f32,
+    idle_seq: usize,
+) -> Vec<ModelEmitter> {
+    let pivot = |bone: u16| {
+        skeleton
+            .bones
+            .get(bone as usize)
+            .map_or([0.0; 3], |b| b.pivot)
+    };
+    let mut texture = |t: &Option<String>| {
+        t.as_deref()
+            .map(|t| ctx.load::<Image>(texture_url(t, Repeat::BOTH)))
+    };
+    let emitter_defs = parse_m2_particle_emitters(bytes);
+    let emitter_textures: Vec<_> = emitter_defs.iter().map(|d| texture(&d.texture)).collect();
+    emitter_defs
+        .into_iter()
+        .zip(emitter_textures)
+        .map(|(def, texture)| ModelEmitter {
+            recursion: def
+                .recursion_model
+                .as_deref()
+                .map(|p| ctx.load::<M2Model>(m2_url(p))),
+            geometry: def
+                .geometry_model
+                .as_deref()
+                .map(|p| ctx.load::<M2Model>(m2_url(p))),
+            texture,
+            bone_pivot: pivot(def.bone),
+            owner_reach,
+            idle_seq_index: idle_seq,
+            def,
+        })
+        .collect()
 }
 
 fn animations(

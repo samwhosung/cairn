@@ -14,6 +14,15 @@ pub const NEARCLIP: f32 = 0.1;
 pub const PROJECTION_FAR: f32 = 3000.0;
 pub const FOV_Y: f32 = FRAC_PI_4;
 
+pub(crate) fn nearest_depth_within_farclip(
+    cam_pos: Vec3,
+    cam_fwd: Vec3,
+    center: Vec3,
+    radius: f32,
+) -> bool {
+    (center - cam_pos).dot(cam_fwd) - radius <= FARCLIP
+}
+
 /// The camera the world is drawn through: the one lighting, fog and streaming follow.
 #[derive(Component, Clone, Copy, ExtractComponent)]
 pub struct WorldCamera;

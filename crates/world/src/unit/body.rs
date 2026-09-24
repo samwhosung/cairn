@@ -16,6 +16,7 @@ use crate::model::{ModelSubmesh, skinned_submesh_mesh, submesh_mesh};
 use crate::model_material::{
     BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
 };
+use crate::particles::{EmitClock, EmitterFrames, OwnerLoss, spawn_emitter};
 use crate::rig::{GlobalSeqDrive, RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
@@ -103,12 +104,17 @@ pub(crate) fn dress_bodies(
     mut mesh_cache: ResMut<'_, MeshCache>,
     mut palettes: ResMut<'_, RigPalettes>,
     mut loops: UnitLoops<'_>,
-    bodies: Query<'_, '_, (Entity, &UnitBody, Option<&BodyModel>), Without<BodyDressed>>,
+    bodies: Query<
+        '_,
+        '_,
+        (Entity, &UnitBody, Option<&BodyModel>, Option<&Transform>),
+        Without<BodyDressed>,
+    >,
 ) {
     let Some(light) = light else {
         return;
     };
-    for (entity, body, handle) in &bodies {
+    for (entity, body, handle, placement) in &bodies {
         let handle = if let Some(BodyModel(h)) = handle {
             h.clone()
         } else {
@@ -177,6 +183,13 @@ pub(crate) fn dress_bodies(
             .character
             .as_ref()
             .map_or_else(Vec::new, |c| c.worn.clone());
+        spawn_effects(
+            &mut commands,
+            m2,
+            entity,
+            placement.copied().unwrap_or_default(),
+            pose.as_mut(),
+        );
         let mut root = commands.entity(entity);
         root.insert((
             BodyDressed { parts, slot },
@@ -221,6 +234,28 @@ fn spawn_part<'a>(
         part.insert(NoFrustumCulling);
     }
     part
+}
+
+fn spawn_effects(
+    commands: &mut Commands<'_, '_>,
+    m2: &M2Model,
+    entity: Entity,
+    placement: Transform,
+    mut pose: Option<&mut RigPose>,
+) {
+    for em in &m2.emitters {
+        let owner = pose
+            .as_deref_mut()
+            .and_then(|p| p.anchor_for(commands, em.def.bone))
+            .map_or((entity, [0.0; 3]), |j| (j, em.bone_pivot));
+        let frames = EmitterFrames {
+            owner: Some(owner),
+            anchor: Some(entity),
+            alpha: Some(entity),
+            on_owner_loss: OwnerLoss::Free,
+        };
+        spawn_emitter(commands, em, placement, frames, EmitClock::Host(entity));
+    }
 }
 
 fn insert_rig_and_players(

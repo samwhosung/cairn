@@ -129,11 +129,7 @@ fn a_still_model_whose_idle_sounds_runs_its_idle_clock_alone() {
 fn host(batches: Vec<Entity>, rerolls_at: f32, anim_id: Option<u16>, gate: Gate) -> DoodadAnimHost {
     DoodadAnimHost {
         seen_by: if batches.is_empty() {
-            SeenBy::Bounds(DrawBounds {
-                radius: 1.0,
-                center: Vec3::ZERO,
-                room: None,
-            })
+            SeenBy::Bounds(DrawSetGate::sphere(1.0, Vec3::ZERO))
         } else {
             SeenBy::Batches(batches)
         },
@@ -269,6 +265,8 @@ fn gate_app() -> App {
     ));
     app.init_resource::<Time>();
     app.init_resource::<RigPalettes>();
+    app.init_resource::<crate::portal::ExteriorWindows>();
+    app.init_resource::<crate::portal::CameraInteriorClaim>();
     app.init_asset::<Mesh>();
     app.add_systems(Update, (gate_doodad_anim, reap_parked_rigs).chain());
     app

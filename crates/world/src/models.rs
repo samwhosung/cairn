@@ -13,7 +13,7 @@ use crate::Residency;
 use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
-use crate::doodad_anim::{DrawBounds, MaterialLoops, RigBuilder};
+use crate::doodad_anim::{MaterialLoops, RigBuilder};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
 use crate::liquid::{LiquidAssets, spawn_wmo_liquids};
@@ -22,6 +22,7 @@ use crate::model::{ModelSubmesh, skinned_submesh_mesh, submesh_mesh};
 use crate::model_material::{
     BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
 };
+use crate::particles::{DrawSetGate, EmitClock, EmitterFrames, OwnerLoss, spawn_emitter};
 use crate::placements::{PlacedModel, Placement, Placements, prop_placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
@@ -306,6 +307,7 @@ struct PropSite<'a> {
 struct PlacedDoodad {
     batches: Vec<Entity>,
     rig_root: Option<Entity>,
+    effects: Vec<Entity>,
 }
 
 fn cached_form(
@@ -339,10 +341,12 @@ impl Spawner<'_, '_, '_, '_> {
                 let id = h.id().untyped();
                 let form = self.forms(id, &m.submeshes);
                 let light = DoodadLight::Sky(shade);
-                let placed = self.doodad(m, id, &form, &f.transform, light, None, &mut f.forms);
+                let placed =
+                    self.doodad(m, id, &form, &f.transform, light, None, None, &mut f.forms);
                 let mut ents = placed.batches;
                 self.doodad_lights(m, &f.transform, None, &mut ents);
                 ents.extend(placed.rig_root);
+                ents.extend(placed.effects);
                 f.entities = ents;
                 f.forms.push(form);
             }
@@ -394,14 +398,15 @@ impl Spawner<'_, '_, '_, '_> {
         form: &[Handle<Mesh>],
         transform: &Transform,
         light: DoodadLight,
+        building: Option<Entity>,
         room: Option<&WmoGroupVis>,
         placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
     ) -> PlacedDoodad {
         let (radius, center) = m.fade_sphere(transform.scale.x);
-        let bounds = DrawBounds {
-            radius,
-            center: transform.transform_point(center),
+        let fade = DrawSetGate {
+            building,
             room: room.cloned(),
+            ..DrawSetGate::sphere(radius, transform.transform_point(center))
         };
         let (skinned, meshes) = (&mut *self.skinned, &mut *self.meshes);
         let mut rig = RigBuilder::spawn(
@@ -418,7 +423,7 @@ impl Spawner<'_, '_, '_, '_> {
                 placement_forms.push(form.clone());
                 form
             },
-            bounds,
+            fade.clone(),
             self.now,
         );
         let placed = Placed {
@@ -430,8 +435,41 @@ impl Spawner<'_, '_, '_, '_> {
             local_center: center,
         };
         let batches = self.batches(&m.submeshes, form, &placed, rig.as_mut());
+        let effects = self.spawn_effects(m, transform, &fade, rig.as_mut());
         let rig_root = rig.map(|r| r.finish(self.commands));
-        PlacedDoodad { batches, rig_root }
+        PlacedDoodad {
+            batches,
+            rig_root,
+            effects,
+        }
+    }
+
+    fn spawn_effects(
+        &mut self,
+        m: &M2Model,
+        transform: &Transform,
+        fade: &DrawSetGate,
+        mut rig: Option<&mut RigBuilder>,
+    ) -> Vec<Entity> {
+        let clock = rig.as_ref().and_then(|r| r.sequence_player());
+        let mut out = Vec::new();
+        for em in &m.emitters {
+            let owner = rig
+                .as_deref_mut()
+                .and_then(|r| r.bone_anchor(self.commands, em.def.bone))
+                .map(|a| (a, em.bone_pivot));
+            let frames = EmitterFrames {
+                owner,
+                on_owner_loss: OwnerLoss::Free,
+                ..EmitterFrames::default()
+            };
+            let clock = clock.map_or(EmitClock::Pinned, EmitClock::Host);
+            if let Some(e) = spawn_emitter(self.commands, em, *transform, frames, clock) {
+                self.commands.entity(e).insert(fade.clone());
+                out.push(e);
+            }
+        }
+        out
     }
 
     fn prop(
@@ -472,6 +510,7 @@ impl Spawner<'_, '_, '_, '_> {
             form,
             &prop.transform,
             light,
+            Some(building),
             room.as_ref(),
             placement_forms,
         );
@@ -493,6 +532,7 @@ impl Spawner<'_, '_, '_, '_> {
         }
         self.doodad_lights(m, &prop.transform, room.as_ref(), &mut ents);
         ents.extend(placed.rig_root);
+        ents.extend(placed.effects);
         ents
     }
 

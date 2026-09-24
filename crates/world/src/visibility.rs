@@ -8,7 +8,7 @@ use crate::doodad_anim::MatAnim;
 use crate::liquid::{FarSide, LiquidGrid};
 use crate::model_material::ModelMaterial;
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
-use crate::view::{FARCLIP, WorldCamera};
+use crate::view::{WorldCamera, nearest_depth_within_farclip};
 
 const NEVER_FADE_RADIUS: f32 = 7.0;
 
@@ -168,7 +168,7 @@ pub(crate) fn apply_model_visibility(
             ),
             None => (xf.translation(), 0.0),
         };
-        let in_range = (center - cam_pos).dot(cam_fwd) - radius <= FARCLIP;
+        let in_range = nearest_depth_within_farclip(cam_pos, cam_fwd, center, radius);
         let fade_alpha = fade.map_or(1.0, |f| {
             let c = xf.transform_point(f.local_center);
             let (dx, dz) = (c.x - cam_pos.x, c.z - cam_pos.z);
@@ -245,7 +245,7 @@ mod tests {
 
         use crate::adt::AdtTile;
         use crate::liquid::{LiquidSource, WmoPool};
-        use crate::portal::{CameraInteriorClaim, compute_wmo_pvs};
+        use crate::portal::{CameraInteriorClaim, ExteriorWindows, compute_wmo_pvs};
         use crate::room::CameraRoom;
         use crate::stream::Streamer;
         use crate::wmo::{WmoGroupNav, WmoModel, WmoRooms};
@@ -257,6 +257,7 @@ mod tests {
             .init_resource::<Streamer>()
             .init_resource::<CameraRoom>()
             .init_resource::<CameraInteriorClaim>()
+            .init_resource::<ExteriorWindows>()
             .init_resource::<FarSide>()
             .add_systems(Update, (compute_wmo_pvs, apply_model_visibility).chain());
         let rooms = WmoRooms {

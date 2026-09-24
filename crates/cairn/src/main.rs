@@ -108,11 +108,9 @@ fn main() -> AppExit {
                     },
                 },
             ));
+            app.add_plugins(world::collision::CollisionPlugin);
             if let Some(display) = args.display {
-                app.add_plugins((
-                    world::collision::CollisionPlugin,
-                    fixture::FixturePlugin(display),
-                ));
+                app.add_plugins(fixture::FixturePlugin(display));
             }
             &mut app
         }

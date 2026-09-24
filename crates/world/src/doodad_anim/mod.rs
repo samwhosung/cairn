@@ -4,7 +4,7 @@ mod placement;
 
 use bevy::animation::graph::{AnimationGraphHandle, AnimationNodeIndex};
 use bevy::app::AnimationSystems;
-use bevy::camera::primitives::{Frustum, Sphere};
+use bevy::camera::primitives::Frustum;
 use bevy::prelude::*;
 
 use lazy::LazyRig;
@@ -14,13 +14,14 @@ pub(crate) use placement::{MaterialLoops, RigBuilder};
 
 use crate::doodad_events::idle_has_sound_keys;
 use crate::m2::M2Model;
-use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
+use crate::particles::{DrawSetGate, SceneGates};
+use crate::portal::WmoPortalInstance;
 use crate::rig::{
     AnimClip, AnimParked, AnimRng, GlobalSeqDrive, ModelAnimations, ModelSkeleton, RigPalettes,
     RigPose, RigSkin,
 };
-use crate::view::{FARCLIP, WorldCamera};
-use crate::visibility::{ModelPart, apply_model_visibility, doodad_fade_alpha};
+use crate::view::WorldCamera;
+use crate::visibility::{ModelPart, apply_model_visibility};
 
 pub(crate) enum DoodadAnimTier<'a> {
     Static,
@@ -78,6 +79,7 @@ pub(crate) struct HostBuilder {
     clip: Option<ArmedClip>,
     anim_id: Option<u16>,
     skins: bool,
+    pub(crate) plays_idle_on_player: bool,
 }
 
 impl HostBuilder {
@@ -100,6 +102,7 @@ pub(crate) fn spawn_anim_host(
     let root = commands.spawn((transform, Visibility::default())).id();
     let pose = RigPose::new(root, &m.skeleton);
     let skins = !matches!(classify(&m.skeleton, Some(anims)), DoodadAnimTier::Static);
+    let plays_idle_on_player = matches!(arm, Arm::Posed(_));
     let idle = match arm {
         Arm::Posed(idle) => {
             let mut player = AnimationPlayer::default();
@@ -129,44 +132,13 @@ pub(crate) fn spawn_anim_host(
         }),
         anim_id: idle.map(|c| c.anim_id),
         skins,
+        plays_idle_on_player,
     })
-}
-
-#[derive(Clone)]
-pub(crate) struct DrawBounds {
-    pub(crate) radius: f32,
-    pub(crate) center: Vec3,
-    pub(crate) room: Option<WmoGroupVis>,
-}
-
-impl DrawBounds {
-    fn admits(
-        &self,
-        cam_pos: Vec3,
-        cam_fwd: Vec3,
-        frustum: &Frustum,
-        instances: &Query<'_, '_, &WmoPortalInstance>,
-    ) -> bool {
-        let (dx, dz) = (self.center.x - cam_pos.x, self.center.z - cam_pos.z);
-        let sphere = Sphere {
-            center: self.center.into(),
-            radius: self.radius,
-        };
-        doodad_fade_alpha(self.radius, (dx * dx + dz * dz).sqrt()) > 0.0
-            && (self.center - cam_pos).dot(cam_fwd) - self.radius <= FARCLIP
-            && frustum.intersects_sphere(&sphere, false)
-            && room_admits(
-                self.room.as_ref(),
-                self.room
-                    .as_ref()
-                    .and_then(|r| instances.get(r.instance).ok()),
-            )
-    }
 }
 
 pub(crate) enum SeenBy {
     Batches(Vec<Entity>),
-    Bounds(DrawBounds),
+    Bounds(DrawSetGate),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -281,7 +253,7 @@ fn gate_doodad_anim(
     vis: Query<'_, '_, &Visibility>,
     cam: Camera<'_, '_>,
     changed_vis: Query<'_, '_, (), (Changed<Visibility>, With<ModelPart>)>,
-    instances: Query<'_, '_, &WmoPortalInstance>,
+    gates: SceneGates<'_, '_>,
     changed_instances: Query<'_, '_, (), Changed<WmoPortalInstance>>,
     mut palettes: ResMut<'_, RigPalettes>,
     worlds: Query<'_, '_, &GlobalTransform>,
@@ -295,7 +267,11 @@ fn gate_doodad_anim(
             && !proj.is_changed()
             && !local.as_ref().is_some_and(DetectChanges::is_changed)
     }) && changed_vis.is_empty()
-        && changed_instances.is_empty();
+        && changed_instances.is_empty()
+        && !gates.changed();
+    let view = world_cam
+        .as_ref()
+        .map(|(tf, frustum, proj, _)| gates.view(tf, proj, frustum));
     for (entity, mut host, lazy, pose, has_rig, player) in &mut hosts {
         let was_posing = host.gate.posing();
         let drawn = match host.gate {
@@ -305,9 +281,7 @@ fn gate_doodad_anim(
                 SeenBy::Batches(batches) => batches
                     .iter()
                     .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden)),
-                SeenBy::Bounds(bounds) => world_cam.as_ref().is_some_and(|(tf, frustum, _, _)| {
-                    bounds.admits(tf.translation(), *tf.forward(), frustum, &instances)
-                }),
+                SeenBy::Bounds(fade) => view.as_ref().is_some_and(|v| fade.admitted(&gates, v)),
             },
         };
         if drawn

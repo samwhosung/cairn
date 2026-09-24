@@ -27,6 +27,7 @@ mod mat_anim_table;
 mod model;
 mod model_material;
 mod models;
+pub mod particles;
 mod placements;
 mod portal;
 mod probes;
@@ -122,7 +123,7 @@ impl Plugin for WorldPlugin {
             skybox::SkyboxPlugin,
             liquid::LiquidPlugin,
         ))
-        .add_plugins(effects::EffectsPlugin)
+        .add_plugins((effects::EffectsPlugin, particles::ParticlePlugin))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()
@@ -135,6 +136,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<interior::CurrentArea>()
         .init_resource::<interior::WmoGeneration>()
         .init_resource::<portal::CameraInteriorClaim>()
+        .init_resource::<portal::ExteriorWindows>()
         .add_message::<rig_events::AnimEvent>()
         .add_systems(Startup, (atmosphere::load_catalog, wmo_areas::load))
         .add_systems(

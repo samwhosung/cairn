@@ -66,6 +66,55 @@ impl WmoPortalInstance {
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CameraInteriorClaim(pub Option<crate::interior::WmoRoom>);
 
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
+pub(crate) enum ExteriorWindows {
+    #[default]
+    Unrestricted,
+    ThroughPortals(Vec<Rect>),
+}
+
+const MIN_WINDOW_NDC: f32 = 0.02;
+
+pub(crate) enum ExteriorGate {
+    Open,
+    Windows(Vec<Frustum>),
+}
+
+impl ExteriorGate {
+    pub(crate) fn build(
+        windows: &ExteriorWindows,
+        cam: Option<(&GlobalTransform, &Projection)>,
+    ) -> Self {
+        let ExteriorWindows::ThroughPortals(rects) = windows else {
+            return Self::Open;
+        };
+        let Some((cam, projection)) = cam else {
+            return Self::Open;
+        };
+        let clip_from_world = projection.get_clip_from_view() * cam.to_matrix().inverse();
+        Self::Windows(
+            rects
+                .iter()
+                .filter(|r| r.width() >= MIN_WINDOW_NDC && r.height() >= MIN_WINDOW_NDC)
+                .map(|r| window_frustum(*r, &clip_from_world))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn admits_sphere_box(&self, center: Vec3, radius: f32) -> bool {
+        match self {
+            Self::Open => true,
+            Self::Windows(frusta) => {
+                let aabb =
+                    Aabb::from_min_max(center - Vec3::splat(radius), center + Vec3::splat(radius));
+                frusta
+                    .iter()
+                    .any(|f| f.intersects_obb(&aabb, &Affine3A::IDENTITY, true, true))
+            }
+        }
+    }
+}
+
 #[derive(Component, Clone)]
 pub struct WmoGroupVis {
     pub(crate) instance: Entity,
@@ -94,6 +143,7 @@ pub(crate) fn room_admits(room: Option<&WmoGroupVis>, inst: Option<&WmoPortalIns
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_wmo_pvs(
     wmos: Res<'_, Assets<WmoModel>>,
     camera: Query<'_, '_, (&GlobalTransform, &Projection), With<WorldCamera>>,
@@ -102,6 +152,7 @@ pub(crate) fn compute_wmo_pvs(
     mut instances: Query<'_, '_, (Entity, &mut WmoPortalInstance)>,
     mut room: ResMut<'_, CameraRoom>,
     mut camera_claim: ResMut<'_, CameraInteriorClaim>,
+    mut camera_windows: ResMut<'_, ExteriorWindows>,
 ) {
     let Ok((cam, projection)) = camera.single() else {
         return;
@@ -111,6 +162,7 @@ pub(crate) fn compute_wmo_pvs(
     let terrain = terrain_wow_z_under(&streamer, &adts, eye_world);
     let mut found = CameraRoom::default();
     let mut claim = None;
+    let mut windows = None;
     for (entity, mut inst) in &mut instances {
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
@@ -130,7 +182,7 @@ pub(crate) fn compute_wmo_pvs(
         let local_from_world = world_from_local.inverse();
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye_world));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye_world, z));
-        let pvs = compute_pvs(
+        let mut pvs = compute_pvs(
             rooms,
             eye_local,
             terrain_local,
@@ -168,12 +220,17 @@ pub(crate) fn compute_wmo_pvs(
                 instance: entity,
                 group: gi as u16,
             });
+            windows = Some(std::mem::take(&mut pvs.exterior_windows));
         }
     }
     if *room != found {
         *room = found;
     }
     camera_claim.set_if_neq(CameraInteriorClaim(claim));
+    camera_windows.set_if_neq(windows.map_or(
+        ExteriorWindows::Unrestricted,
+        ExteriorWindows::ThroughPortals,
+    ));
 }
 
 fn truly_interior(nav: &WmoGroupNav) -> bool {
@@ -202,6 +259,7 @@ struct GroupPvs {
     visible: Vec<bool>,
     interior_fog: Vec<bool>,
     seeds: DownRaySeeds,
+    exterior_windows: Vec<Rect>,
 }
 
 struct Step {
@@ -308,7 +366,8 @@ impl Flood<'_> {
     }
 
     fn walk_windows(&mut self) {
-        for rect in std::mem::take(&mut self.windows) {
+        let windows = std::mem::take(&mut self.windows);
+        for &rect in &windows {
             let frustum = window_frustum(rect, self.clip_from_world);
             let mut roots: Vec<Step> = self
                 .rooms
@@ -323,6 +382,7 @@ impl Flood<'_> {
                 .collect();
             self.walk(&mut roots, false);
         }
+        self.windows = windows;
     }
 
     fn add_callback_groups(&mut self) {
@@ -365,6 +425,7 @@ fn compute_pvs(
         visible: flood.visible,
         interior_fog: flood.interior_fog,
         seeds,
+        exterior_windows: flood.windows,
     }
 }
 

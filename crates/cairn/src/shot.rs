@@ -15,6 +15,7 @@ use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 
 use world::Residency;
+use world::collision::CollisionResidency;
 
 use crate::fixture::FRAME_STEP;
 use crate::view::{Pose, camera};
@@ -138,6 +139,7 @@ impl Plugin for ShotPlugin {
 
 fn age_world(
     residency: Res<'_, Residency>,
+    collision: Res<'_, CollisionResidency>,
     pipelines: Res<'_, Pipelines>,
     age_steps: Res<'_, AgeSteps>,
     mut age: ResMut<'_, WorldAge>,
@@ -149,7 +151,11 @@ fn age_world(
     }
     let age_steps = age_steps.0;
     *age = match *age {
-        WorldAge::Loading if residency.settled() && pipelines.built.load(Ordering::Relaxed) => {
+        WorldAge::Loading
+            if residency.settled()
+                && collision.settled()
+                && pipelines.built.load(Ordering::Relaxed) =>
+        {
             if age_steps == 0 {
                 ready.0 = true;
             } else {

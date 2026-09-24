@@ -15,6 +15,7 @@ mod twist;
 use bevy::prelude::*;
 
 use body::MeshCache;
+pub(crate) use body::batch_look;
 pub use body::{BodyDressed, BodyModel, BodyPart, CharacterDress, UnitBody, WornModel};
 pub use drive::UnitDriver;
 pub use fade::{UnitAlpha, UnitAppear};

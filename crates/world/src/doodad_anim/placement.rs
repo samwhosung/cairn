@@ -8,12 +8,13 @@ use model::{KeyAnim, RenderSubmesh, SeqLoops};
 
 use super::lazy::{LazyRig, SkinnedTwin};
 use super::mat_anim::{AnimMatPart, MatLoop, TintAnimMaterials, UvAnimMaterials, register};
-use super::{DoodadAnimHost, DrawBounds, Gate, HostBuilder, MatAnim, SeenBy, spawn_anim_host};
+use super::{DoodadAnimHost, Gate, HostBuilder, MatAnim, SeenBy, spawn_anim_host};
 use crate::billboard::BillboardCard;
 use crate::m2::M2Model;
 use crate::mat_anim_table::MatAnimTable;
 use crate::model::BillboardInfo;
 use crate::model_material::ModelMaterial;
+use crate::particles::DrawSetGate;
 
 #[derive(SystemParam)]
 pub(crate) struct MaterialLoops<'w> {
@@ -99,7 +100,7 @@ pub(crate) struct RigBuilder {
     skinned: Option<Arc<[Handle<Mesh>]>>,
     ibp: Arc<[Mat4]>,
     bound: Option<Aabb>,
-    bounds: DrawBounds,
+    bounds: DrawSetGate,
     now: f32,
     batches: Vec<Entity>,
     lazy_parts: Vec<Entity>,
@@ -111,7 +112,7 @@ impl RigBuilder {
         m: &M2Model,
         transform: &Transform,
         skinned: impl FnOnce() -> Arc<[Handle<Mesh>]>,
-        bounds: DrawBounds,
+        bounds: DrawSetGate,
         now: f32,
     ) -> Option<Self> {
         if !m.has_emitters && m.submeshes.iter().all(|s| s.billboard.is_some()) {
@@ -132,6 +133,18 @@ impl RigBuilder {
 
     pub(crate) fn root(&self) -> Entity {
         self.host.root
+    }
+
+    pub(crate) fn bone_anchor(
+        &mut self,
+        commands: &mut Commands<'_, '_>,
+        bone: u16,
+    ) -> Option<Entity> {
+        self.host.anchor(commands, bone)
+    }
+
+    pub(crate) fn sequence_player(&self) -> Option<Entity> {
+        self.host.plays_idle_on_player.then_some(self.host.root)
     }
 
     pub(crate) fn card(
