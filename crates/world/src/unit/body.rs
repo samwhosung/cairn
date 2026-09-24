@@ -26,10 +26,12 @@ use super::batch_anim::{
     UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_animated, spawn_card,
 };
 use super::fade::{PartMaterials, UnitAppear};
+use super::shadow::BlobShadow;
 
 /// A body to draw at this entity's transform: its model, the creature skins it fills from its
 /// display, and for a character the textures and geosets its appearance chose.
 #[derive(Component, Clone, Debug)]
+#[require(BlobShadow)]
 pub struct UnitBody {
     /// The model's path as the tables name it.
     pub model: String,

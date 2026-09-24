@@ -1,5 +1,6 @@
-//! Creatures and characters: a body's model dressed in its skins, skinned to its skeleton and
-//! lit by its own shade outdoors and by the room it stands in indoors.
+//! Creatures and characters: a body's model dressed in its skins, skinned to its skeleton, lit by
+//! its own shade outdoors and by the room it stands in indoors, and shadowed on the ground under
+//! it.
 
 mod attach;
 mod batch_anim;
@@ -10,6 +11,7 @@ mod light;
 mod look;
 mod motion;
 mod shade;
+mod shadow;
 mod twist;
 
 use bevy::prelude::*;
@@ -35,7 +37,7 @@ pub(crate) struct UnitPlugin;
 impl Plugin for UnitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MeshCache>()
-            .add_systems(Startup, load_tables)
+            .add_systems(Startup, (load_tables, shadow::load_texture))
             .add_systems(
                 Update,
                 (
@@ -50,9 +52,13 @@ impl Plugin for UnitPlugin {
                     .chain()
                     .in_set(UnitSystems),
             )
+            .add_systems(Update, shadow::update_shadows.after(UnitSystems))
             .add_systems(
                 PostUpdate,
-                twist::apply_body_twist.in_set(crate::rig::PosePost),
+                (
+                    twist::apply_body_twist.in_set(crate::rig::PosePost),
+                    shadow::push_shadows.after(crate::effects::begin_effect_frame),
+                ),
             );
     }
 }

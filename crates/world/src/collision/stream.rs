@@ -11,7 +11,7 @@ use super::assets::{M2Hull, TileCollision, WmoHull};
 use super::colliders::{PendingCollider, build_collider_task, placement_collider_data};
 use super::liquid::{PlacedRooms, SwimSurface, waterline_collider};
 use super::weld::HullWelds;
-use super::{camera_layers, liquid_layers, walk_layers};
+use super::{GroundDecalSurface, camera_layers, liquid_layers, walk_layers};
 use crate::CurrentMap;
 use crate::coords::{bevy_to_wow, placement_rotation, wmo_doodad_local, wow_to_bevy};
 use crate::liquid::{LiquidSource, WmoPool, world_grid};
@@ -179,7 +179,11 @@ fn spawn_tile(commands: &mut Commands<'_, '_>, tc: &TileCollision) -> Vec<Entity
         let task = build_collider_task(verts, tris);
         entities.push(
             commands
-                .spawn((Transform::IDENTITY, PendingCollider::new(task, None)))
+                .spawn((
+                    Transform::IDENTITY,
+                    PendingCollider::new(task, None),
+                    GroundDecalSurface,
+                ))
                 .id(),
         );
     }
@@ -361,21 +365,21 @@ pub(super) fn spawn_placement_colliders(
 
 fn spawn_wmo(commands: &mut Commands<'_, '_>, wmo: &WmoHull, at: &Transform) -> Vec<Entity> {
     [
-        (wmo.walk.as_ref(), walk_layers()),
-        (wmo.camera.as_ref(), camera_layers()),
+        (wmo.walk.as_ref(), walk_layers(), true),
+        (wmo.camera.as_ref(), camera_layers(), false),
     ]
     .into_iter()
-    .filter_map(|(mesh, layers)| {
+    .filter_map(|(mesh, layers, takes_decals)| {
         let (verts, tris) = placement_collider_data(mesh, at)?;
         let task = build_collider_task(verts, tris);
-        Some(
-            commands
-                .spawn((
-                    Transform::IDENTITY,
-                    PendingCollider::new(task, Some(layers)),
-                ))
-                .id(),
-        )
+        let mut spawned = commands.spawn((
+            Transform::IDENTITY,
+            PendingCollider::new(task, Some(layers)),
+        ));
+        if takes_decals {
+            spawned.insert(GroundDecalSurface);
+        }
+        Some(spawned.id())
     })
     .collect()
 }

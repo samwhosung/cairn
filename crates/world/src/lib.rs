@@ -11,6 +11,7 @@ mod celestial;
 mod clouds;
 pub mod collision;
 pub mod coords;
+mod decal;
 mod doodad_anim;
 mod doodad_events;
 pub mod effects;

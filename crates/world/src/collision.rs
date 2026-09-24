@@ -54,6 +54,11 @@ pub enum CollisionLayer {
 /// near plane out of a wall. The client's own trace is a bare ray.
 pub const CAMERA_PROBE_RADIUS: f32 = 0.3;
 
+/// On a static trimesh collider, baked in world space, whose triangles take ground decals: a
+/// tile's terrain and the faces a walking body meets in a building, never a doodad.
+#[derive(Component)]
+pub struct GroundDecalSurface;
+
 pub(crate) fn walk_layers() -> CollisionLayers {
     CollisionLayers::new(CollisionLayer::Walk, LayerMask::ALL)
 }
