@@ -49,11 +49,12 @@ pub fn dress_body(
         return;
     };
     for (entity, mut transform) in &mut bodies {
-        if let Some(body) = tables.player_body(&look.0, &install.0, &mut images, &server) {
-            let display = tables.create.body_display(look.0.race, look.0.sex);
-            let scale = new_character_scale(&tables, display);
+        if let Some((body, scale)) =
+            character_body(&tables, &look.0, &install, &mut images, &server)
+        {
             transform.scale = Vec3::splat(scale);
             commands.entity(entity).insert(body);
+            let display = tables.create.body_display(look.0.race, look.0.sex);
             player.collision_height = collision_height(&tables, display, scale);
         } else {
             warn!("no body for {:?}: the player walks unseen", look.0);
@@ -73,6 +74,19 @@ pub fn pivot_on_model(
             commands.entity(entity).insert(CameraPivot::of(Some(m2)));
         }
     }
+}
+
+/// The body a character of `look` is drawn with, and the scale its race's display takes.
+pub fn character_body(
+    tables: &CharacterTables,
+    look: &CharacterLook,
+    install: &Install,
+    images: &mut Assets<Image>,
+    server: &AssetServer,
+) -> Option<(UnitBody, f32)> {
+    let body = tables.player_body(look, &install.0, images, server)?;
+    let display = tables.create.body_display(look.race, look.sex);
+    Some((body, new_character_scale(tables, display)))
 }
 
 fn new_character_scale(tables: &CharacterTables, display: Option<u32>) -> f32 {

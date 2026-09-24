@@ -12,15 +12,15 @@ mod course;
 #[cfg(test)]
 mod fixture;
 mod flags;
-mod gait;
+pub(crate) mod gait;
 mod hearing;
 mod input;
-mod mover;
+pub(crate) mod mover;
 mod posture;
 #[cfg(test)]
 mod scenarios;
-mod state;
-mod swim;
+pub(crate) mod state;
+pub(crate) mod swim;
 
 use avian3d::prelude::Collider;
 use bevy::prelude::*;
@@ -32,6 +32,7 @@ use crate::fly::{Fly, fly};
 use crate::view::Pose;
 pub use body::PlayerBody;
 use body::PlayerLook;
+pub(crate) use body::character_body;
 pub(crate) use camera::CameraRig;
 use camera::{CameraControl, LOGIN_PITCH};
 use camera_dynamics::CameraOptions;

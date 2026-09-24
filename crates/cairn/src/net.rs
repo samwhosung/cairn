@@ -1,25 +1,30 @@
 //! Playing with others: the connection to a server, the welcome that places the player, the
-//! player's claims and the server's corrections, and the window that goes on alone when its
-//! server goes.
+//! player's claims and the server's corrections, the other players in view, and the window that
+//! goes on alone when its server goes.
 
 mod claims;
 mod link;
+mod relay;
+mod remote;
+mod units;
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use bevy::math::ops;
 use bevy::prelude::*;
+use bevy::time::Real;
 use protocol::{Appearance, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome};
 use server::Spawn;
 use world::CurrentMap;
-use world::coords::wow_to_bevy;
-use world::unit::CharacterLook;
+use world::coords::{bevy_to_wow, wow_to_bevy};
+use world::unit::{CharacterLook, UnitSystems};
 
 use crate::args::Join;
 use crate::player::{CameraRig, Player};
 use claims::Claims;
 use link::{Arrival, Link};
+use units::{Others, Stamp};
 
 /// Yards between the places a host sets its players, across its own heading.
 const SPAWN_SPACING: f32 = 2.5;
@@ -32,9 +37,9 @@ const SEEN_EVERY: Duration = Duration::from_millis(500);
 pub struct Net {
     link: Link,
     hosted: Option<server::Running>,
-    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     welcomed: Option<Welcome>,
     claims: Option<Claims>,
+    others: Others,
     latest_tick: Option<u32>,
     seen_at: Duration,
 }
@@ -47,6 +52,7 @@ impl Net {
             hosted: None,
             welcomed: None,
             claims: None,
+            others: Others::default(),
             latest_tick: None,
             seen_at: Duration::ZERO,
         }
@@ -134,42 +140,56 @@ pub fn join(
     Ok(())
 }
 
-/// Takes in what the server sends before the frame's movement runs, and claims the movement
-/// after it.
+/// Takes in what the server sends and moves the other players before the frame's movement runs,
+/// and claims the movement after it.
 pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, receive.run_if(resource_exists::<Net>))
-            .add_systems(PostUpdate, claims::claim.run_if(resource_exists::<Net>));
+        app.add_systems(
+            PreUpdate,
+            (
+                receive.run_if(resource_exists::<Net>),
+                remote::drain_pending_moves,
+                remote::extrapolate_remote_units,
+            )
+                .chain(),
+        )
+        .add_systems(
+            Update,
+            (units::dress_remotes, units::fade_leaving).before(UnitSystems),
+        )
+        .add_systems(PostUpdate, claims::claim.run_if(resource_exists::<Net>));
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive(
     mut commands: Commands<'_, '_>,
-    time: Res<'_, Time<Real>>,
+    real: Res<'_, Time<Real>>,
+    time: Res<'_, Time>,
     mut net: ResMut<'_, Net>,
     map: Res<'_, CurrentMap>,
     mut player: ResMut<'_, Player>,
     mut rigs: Query<'_, '_, &mut CameraRig>,
 ) {
+    let alone = |commands: &mut Commands<'_, '_>, net: &mut Net, why: String| {
+        warn!("{why}; playing on alone");
+        net.others.leave_all(commands, time.elapsed_secs());
+        commands.remove_resource::<Net>();
+    };
     for arrival in net.link.arrivals() {
         let frame = match arrival {
             Arrival::Frame(frame) => frame,
-            Arrival::Gone(reason) => {
-                warn!("{reason}; playing on alone");
-                commands.remove_resource::<Net>();
-                return;
-            }
+            Arrival::Gone(reason) => return alone(&mut commands, &mut net, reason),
         };
         match ServerMessage::read(&frame) {
             Ok(ServerMessage::Welcome(w)) if w.map != map.id => {
-                warn!(
-                    "the server is on map {}, and this window walks map {}; playing on alone",
+                let why = format!(
+                    "the server is on map {}, and this window walks map {}",
                     w.map, map.id
                 );
-                commands.remove_resource::<Net>();
-                return;
+                return alone(&mut commands, &mut net, why);
             }
             Ok(ServerMessage::Welcome(w)) => {
                 place(&mut player, &w);
@@ -185,6 +205,13 @@ fn receive(
             }
             Ok(ServerMessage::Batch(batch)) => {
                 net.latest_tick = Some(batch.tick);
+                let tick_ms = net.welcomed.map_or(0, |w| u32::from(w.tick_ms));
+                let at = Stamp {
+                    wire_ms: batch.tick.wrapping_mul(tick_ms),
+                    me: bevy_to_wow(player.pos),
+                    now_ms: real.elapsed_secs_f64() * 1000.0,
+                    now_secs: time.elapsed_secs(),
+                };
                 for record in batch {
                     match record {
                         Ok(Record::Correct { seq, movement }) => {
@@ -196,19 +223,17 @@ fn receive(
                                 );
                             }
                         }
-                        Ok(_) => {}
+                        Ok(record) => net.others.take(&mut commands, record, &at),
                         Err(e) => {
-                            warn!("the server sent a broken batch ({e}); playing on alone");
-                            commands.remove_resource::<Net>();
-                            return;
+                            let why = format!("the server sent a broken batch ({e})");
+                            return alone(&mut commands, &mut net, why);
                         }
                     }
                 }
             }
             Err(e) => {
-                warn!("the server sent what is not a message ({e}); playing on alone");
-                commands.remove_resource::<Net>();
-                return;
+                let why = format!("the server sent what is not a message ({e})");
+                return alone(&mut commands, &mut net, why);
             }
         }
     }
