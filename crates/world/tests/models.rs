@@ -12,6 +12,7 @@ const LAMPPOST: &str = "World\\Azeroth\\Elwynn\\PassiveDoodads\\LampPost\\LampPo
 const CAMPFIRE: &str = "World\\Azeroth\\Elwynn\\PassiveDoodads\\Campfire\\ElwynnCampfire.mdx";
 const INN: &str = "World\\wmo\\Azeroth\\Buildings\\GoldshireInn\\GoldshireInn.wmo";
 const HUMAN_MALE: &str = "Character\\Human\\Male\\HumanMale.mdx";
+const COLD_BREATH: &str = "Particles\\ColdBreath.mdl";
 
 fn data_or_skip() -> Option<PathBuf> {
     let data = std::env::var_os("WOW_DATA").map(PathBuf::from);
@@ -132,6 +133,61 @@ fn a_character_loads_its_skeleton_and_sequences() {
         anims.find_resolved(187, &|_| None).map(|c| c.anim_id),
         Some(187)
     );
+}
+
+#[test]
+fn an_idle_character_breathes_at_its_mouth_once_a_loop_and_a_puff_plays_once() {
+    let Some(data) = data_or_skip() else {
+        return;
+    };
+    let mut app = app(&data);
+    let server = app.world().resource::<AssetServer>().clone();
+    let human: Handle<M2Model> = server.load(world::m2_url(HUMAN_MALE));
+    let puff: Handle<M2Model> = server.load(world::m2_url(COLD_BREATH));
+    wait_for(&mut app, &human);
+    wait_for(&mut app, &puff);
+    let m2s = app.world().resource::<Assets<M2Model>>();
+    let m = m2s.get(&human).expect("loaded");
+    let stand = m
+        .animations
+        .as_ref()
+        .and_then(|a| a.find(0))
+        .expect("a Stand");
+    let keys: Vec<f32> = stand
+        .events
+        .iter()
+        .filter(|e| e.ident == *b"$BTH")
+        .map(|e| e.time)
+        .collect();
+    assert_eq!(keys.len(), 1, "one breath a loop: {keys:?}");
+    assert!((keys[0] - 0.667).abs() < 0.01 && (stand.duration - 2.667).abs() < 0.01);
+    assert!(
+        m.attachments.iter().any(|a| a.id == 0x11),
+        "the loader keeps the mouth"
+    );
+    let chain = Chain::open(&data).expect("open the chain");
+    let bytes = chain
+        .read(&HUMAN_MALE.replace(".mdx", ".m2"))
+        .expect("read");
+    let points = model::parse_m2_attachments(&bytes).expect("attachments");
+    let at = |id: u16| {
+        points
+            .iter()
+            .find(|a| a.id == id)
+            .expect("a point")
+            .position
+    };
+    let (mouth, head) = (at(0x11), at(11));
+    assert!(
+        mouth[2] > 1.5 && mouth[2] < head[2],
+        "on the face, under the head"
+    );
+    assert!(mouth[0] > head[0], "in front of it");
+    let p = m2s.get(&puff).expect("loaded");
+    assert!(p.submeshes.is_empty() && p.has_emitters, "emitters alone");
+    let clips = &p.animations.as_ref().expect("a sequence").clips;
+    assert_eq!(clips.len(), 1);
+    assert!(!clips[0].looping && (clips[0].duration - 1.5).abs() < 0.01);
 }
 
 #[test]

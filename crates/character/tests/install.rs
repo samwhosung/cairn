@@ -498,3 +498,29 @@ fn a_display_prints_with_the_ink_and_size_its_model_names() {
         "the invisible stalker leaves none"
     );
 }
+
+#[test]
+fn a_display_breathes_unless_its_model_is_flagged_breathless() {
+    let Some(chain) = chain() else { return };
+    let cat = CreatureCatalog::load(chain).expect("load the creatures");
+    let flags: HashMap<String, u32> = raw_table(chain, "CreatureModelData", "uusuuuuuuuuuuuuu")
+        .into_iter()
+        .map(|row| (row[0].clone(), row[1].parse().expect("flags")))
+        .collect();
+    let mut breathless = 0;
+    for row in raw_table(chain, "CreatureDisplayInfo", "uuuuuusssuuu") {
+        let Some(&model_flags) = flags.get(&row[1]) else {
+            continue;
+        };
+        let display: u32 = row[0].parse().expect("an id");
+        assert_eq!(
+            cat.breathes(display),
+            model_flags & 0x2 == 0,
+            "display {display}"
+        );
+        breathless += usize::from(model_flags & 0x2 != 0);
+    }
+    assert!(breathless > 800, "{breathless} breathless displays");
+    assert!(cat.breathes(49), "a human male");
+    assert!(cat.breathes(u32::MAX), "an unknown display");
+}

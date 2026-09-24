@@ -1,16 +1,18 @@
 //! Creatures and characters: a body's model dressed in its skins, skinned to its skeleton, lit by
 //! its own shade outdoors and by the room it stands in indoors, shadowed on the ground under it,
-//! and printing snow and sand where its feet plant.
+//! printing snow and sand where its feet plant, and breathing vapour in the cold.
 
 mod attach;
 mod batch_anim;
 mod body;
+mod breath;
 mod drive;
 mod fade;
 mod footprints;
 mod light;
 mod look;
 mod motion;
+mod one_shot;
 mod shade;
 mod shadow;
 mod twist;
@@ -45,7 +47,12 @@ impl Plugin for UnitPlugin {
             .init_resource::<footprints::Footprints>()
             .add_systems(
                 Startup,
-                (load_tables, shadow::load_texture, footprints::load_tables),
+                (
+                    load_tables,
+                    shadow::load_texture,
+                    footprints::load_tables,
+                    breath::load_tables,
+                ),
             )
             .add_systems(
                 Update,
@@ -66,6 +73,13 @@ impl Plugin for UnitPlugin {
                 (
                     shadow::update_shadows.after(UnitSystems),
                     footprints::spawn_footprints.after(crate::EventSystems),
+                    (
+                        breath::classify_breath,
+                        breath::fire_breath,
+                        one_shot::play_one_shots,
+                    )
+                        .chain()
+                        .after(crate::EventSystems),
                 ),
             )
             .add_systems(

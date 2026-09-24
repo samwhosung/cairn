@@ -108,6 +108,7 @@ struct DisplayRow {
 
 struct ModelRow {
     path: String,
+    flags: u32,
     scale: f32,
     collision_height: f32,
     footprint_texture: u32,
@@ -125,6 +126,8 @@ pub struct Footprint {
 }
 
 const INCHES_PER_YARD: f32 = 36.0;
+/// `CreatureModelData.Flags`: the model has no breath to see.
+const BREATHLESS: u32 = 0x2;
 
 /// Creature displays by id, resolved through their models. The default is empty: every lookup
 /// misses.
@@ -145,6 +148,7 @@ impl CreatureCatalog {
             if let (Some(id), Some(path)) = (u32_at(r, 0), nonempty_str_at(&rs, r, 2)) {
                 let row = ModelRow {
                     path,
+                    flags: u32_at(r, 1).unwrap_or(0),
                     scale: f32_at(r, 4).unwrap_or(1.0),
                     collision_height: f32_at(r, 15).unwrap_or(0.0),
                     footprint_texture: u32_at(r, 6).unwrap_or(u32::MAX),
@@ -224,6 +228,15 @@ impl CreatureCatalog {
             length,
             width,
         })
+    }
+
+    /// Whether a display's model breathes a visible breath, as all but the skeletons, ghosts,
+    /// elementals and their kind do. An unknown display breathes.
+    pub fn breathes(&self, display_id: u32) -> bool {
+        self.display
+            .get(&display_id)
+            .and_then(|row| self.models.get(&row.model_id))
+            .is_none_or(|m| m.flags & BREATHLESS == 0)
     }
 
     /// How many displays the catalog holds.
