@@ -12,7 +12,8 @@ use crate::view::WorldCamera;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PosePost;
 
-/// Where every rig's palette rows are written, after transform propagation.
+/// Where an unparked rig's palette rows are written each frame, after transform propagation; a
+/// rig given a slot mid-frame has its rows seeded before it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RigFinalize;
 

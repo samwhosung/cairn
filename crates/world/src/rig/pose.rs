@@ -129,9 +129,9 @@ struct PlayingClip {
     cursor: usize,
 }
 
-/// Samples every unparked rig's playing animations into its bone locals, reproducing what Bevy's
-/// own evaluation would write: per bone and property, the nodes with a nonzero weight whose mask
-/// spares the bone fold in node order; a property no playing clip keys keeps its value.
+/// Samples a rig's playing animations into its bone locals, reproducing what Bevy's own evaluation
+/// would write: per bone and property, the nodes with a nonzero weight whose mask spares the bone
+/// fold in node order; a property no playing clip keys keeps its value.
 fn evaluate_rig_poses(
     mut rigs: Query<
         '_,

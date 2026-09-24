@@ -12,7 +12,7 @@ pub(crate) use mat_anim::MatAnim;
 use mat_anim::{TintAnimMaterials, UvAnimMaterials};
 pub(crate) use placement::{MaterialLoops, RigBuilder};
 
-use crate::doodad_sound::idle_has_sound_keys;
+use crate::doodad_events::idle_has_sound_keys;
 use crate::m2::M2Model;
 use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
 use crate::rig::{

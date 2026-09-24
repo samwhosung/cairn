@@ -12,7 +12,7 @@ mod clouds;
 pub mod collision;
 pub mod coords;
 mod doodad_anim;
-mod doodad_sound;
+mod doodad_events;
 mod glow;
 mod ground;
 mod horizon;
@@ -149,7 +149,7 @@ impl Plugin for WorldPlugin {
                     interior::track_area_interior,
                     interior::update_current_area,
                     interior::track_unit_rooms,
-                    doodad_sound::fire_doodad_events,
+                    doodad_events::fire_doodad_events,
                 )
                     .chain()
                     .after(stream::stream_terrain),

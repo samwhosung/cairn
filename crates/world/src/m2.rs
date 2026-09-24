@@ -38,8 +38,8 @@ pub struct M2Model {
 }
 
 impl M2Model {
-    /// The header box every sequence keeps the model inside, model space in Bevy axes; `None`
-    /// for a model that authors none.
+    /// The header's bounding box, model space in Bevy axes; `None` for a model that authors none
+    /// or one with no extent.
     pub fn animated_bound(&self) -> Option<Aabb> {
         let b = self.bounds.as_ref()?;
         let (a, c) = (wow_to_bevy(b.bbox_min), wow_to_bevy(b.bbox_max));

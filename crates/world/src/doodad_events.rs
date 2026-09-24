@@ -1,5 +1,5 @@
-//! A drawn doodad fires the sound keys its armed clip crosses. The client scans only what it
-//! draws, so a doodad coming back into the frame re-arms rather than replaying what it missed.
+//! The client scans only the doodads it draws, so one coming back into the frame re-arms its
+//! clip rather than replaying the keys it missed.
 
 use bevy::prelude::*;
 

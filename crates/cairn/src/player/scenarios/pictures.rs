@@ -1,7 +1,7 @@
 //! Pictures of the walker from its own follow camera: the window's plugins drawn headless into an
-//! image, the body walked by scripted keys at a fixed step, and a PNG taken with the clocks held.
-//! They need a GPU as well as the install, so they run only when asked for, writing into the
-//! directory `CAIRN_PICTURES` names.
+//! image, the body walked by scripted keys at a fixed step, and a PNG taken with the clocks held,
+//! or the cost of its frames timed. They need a GPU as well as the install, so they run only when
+//! asked for, writing into the directory `CAIRN_PICTURES` names.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;

@@ -25,8 +25,8 @@ pub use pose::RigPose;
 pub use rng::AnimRng;
 pub use source::{PoseBone, PoseClip, PoseNode, PoseSource, PoseTrack};
 
-/// On a rig nobody sees: its pose is neither sampled nor composed, and its global sequences hold,
-/// until the marker goes.
+/// On a rig nobody sees: nothing samples, composes or finalizes its pose until the marker goes, and
+/// its global sequences then take up the world's clock where it stands.
 #[derive(Component)]
 pub struct AnimParked;
 
