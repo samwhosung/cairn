@@ -267,6 +267,8 @@ fn gate_doodad_anim(
     mut commands: Commands<'_, '_>,
 ) {
     let now = time.elapsed_secs();
+    // Bevy advances every clip by the frame's delta after this runs.
+    let resumes_at = now - time.delta_secs();
     let world_cam = cam.single().ok();
     let still = world_cam.as_ref().is_some_and(|(tf, _, proj, local)| {
         !tf.is_changed()
@@ -331,7 +333,7 @@ fn gate_doodad_anim(
             let anim = p.start(clip.node);
             anim.repeat();
             if clip.duration > 0.0 {
-                anim.seek_to((now - host.armed_at).rem_euclid(clip.duration));
+                anim.seek_to((resumes_at - host.armed_at).rem_euclid(clip.duration));
             }
         }
     }

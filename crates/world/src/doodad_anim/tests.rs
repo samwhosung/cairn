@@ -317,50 +317,58 @@ fn gate_app() -> App {
 
 #[test]
 fn a_hidden_doodad_stops_and_resumes_where_the_clock_says() {
-    let mut app = gate_app();
-    let mesh = app.world_mut().spawn(Visibility::Inherited).id();
-    let node = AnimationNodeIndex::new(1);
-    let mut player = AnimationPlayer::default();
-    player.play(node).repeat();
-    let mut h = host(vec![mesh], f32::INFINITY, Some(0), Gate::Drawn);
-    h.clip = Some(ArmedClip {
-        node,
-        duration: 2.0,
-    });
-    let h = app.world_mut().spawn((h, player)).id();
-    let playing = |app: &App| {
-        app.world()
+    for (resumed, resume_ms) in [("running", 700), ("held", 0)] {
+        let mut app = gate_app();
+        let mesh = app.world_mut().spawn(Visibility::Inherited).id();
+        let node = AnimationNodeIndex::new(1);
+        let mut player = AnimationPlayer::default();
+        player.play(node).repeat();
+        let mut h = host(vec![mesh], f32::INFINITY, Some(0), Gate::Drawn);
+        h.clip = Some(ArmedClip {
+            node,
+            duration: 2.0,
+        });
+        let h = app.world_mut().spawn((h, player)).id();
+        let playing = |app: &App| {
+            app.world()
+                .entity(h)
+                .get::<AnimationPlayer>()
+                .expect("a player")
+                .playing_animations()
+                .count()
+        };
+        let show = |app: &mut App, v: Visibility| {
+            *app.world_mut()
+                .entity_mut(mesh)
+                .get_mut::<Visibility>()
+                .expect("visibility") = v;
+        };
+        step(&mut app, 300);
+        assert_eq!(playing(&app), 1);
+        show(&mut app, Visibility::Hidden);
+        step(&mut app, 300);
+        assert_eq!(playing(&app), 0);
+        assert!(app.world().entity(h).contains::<crate::rig::AnimParked>());
+        show(&mut app, Visibility::Inherited);
+        step(&mut app, resume_ms);
+        assert_eq!(playing(&app), 1);
+        let seek = app
+            .world()
             .entity(h)
             .get::<AnimationPlayer>()
-            .expect("a player")
-            .playing_animations()
-            .count()
-    };
-    app.update();
-    assert_eq!(playing(&app), 1);
-    *app.world_mut()
-        .entity_mut(mesh)
-        .get_mut::<Visibility>()
-        .expect("visibility") = Visibility::Hidden;
-    app.update();
-    assert_eq!(playing(&app), 0);
-    assert!(app.world().entity(h).contains::<crate::rig::AnimParked>());
-    *app.world_mut()
-        .entity_mut(mesh)
-        .get_mut::<Visibility>()
-        .expect("visibility") = Visibility::Inherited;
-    app.update();
-    assert_eq!(playing(&app), 1);
-    let seek = app
-        .world()
-        .entity(h)
-        .get::<AnimationPlayer>()
-        .and_then(|p| {
-            p.animation(node)
-                .map(bevy::animation::ActiveAnimation::seek_time)
-        })
-        .expect("resumed");
-    assert!((0.0..2.0).contains(&seek), "{seek}");
+            .and_then(|p| {
+                p.animation(node)
+                    .map(bevy::animation::ActiveAnimation::seek_time)
+            })
+            .expect("resumed");
+        let time = app.world().resource::<Time>();
+        let advanced = (seek + time.delta_secs()).rem_euclid(2.0);
+        let clock = time.elapsed_secs().rem_euclid(2.0);
+        assert!(
+            (advanced - clock).abs() < 1e-4,
+            "resumed with the clock {resumed}: {advanced} against {clock}"
+        );
+    }
 }
 
 fn lazy_host(app: &mut App, visible: bool) -> (Entity, Entity) {
