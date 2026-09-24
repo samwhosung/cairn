@@ -150,6 +150,7 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         view: checker.then(HashMap::new),
         last_tick: None,
         next_sweep: now + SETTLE_MS,
+        late: Vec::new(),
     };
     reader.read(&mut r, frames).await;
     crowd.gone[id as usize].store(true, Ordering::Relaxed);
@@ -257,6 +258,8 @@ struct Reader {
     view: Option<HashMap<u32, Seen>>,
     last_tick: Option<u32>,
     next_sweep: u32,
+    /// How late each batch came against the tick clock while the window was open, ms.
+    late: Vec<i64>,
 }
 
 impl Reader {
@@ -302,7 +305,14 @@ impl Reader {
         self.last_tick = Some(batch.tick);
         let ticks = batch.tick.saturating_sub(self.welcome.tick);
         let due = self.welcomed_at + ticks * u32::from(self.welcome.tick_ms);
-        traffic.lag(now.saturating_sub(due));
+        if crowd.checks.is_open() {
+            self.late.push(i64::from(now) - i64::from(due));
+        } else if let Some(&soonest) = self.late.iter().min() {
+            for &late in &self.late {
+                traffic.lag((late - soonest) as u32);
+            }
+            self.late.clear();
+        }
         for record in batch {
             Checks::count(&traffic.records);
             match record {

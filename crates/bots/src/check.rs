@@ -114,7 +114,8 @@ pub struct Traffic {
     pub decode_errors: AtomicU64,
     pub welcomed: AtomicU64,
     pub closed: AtomicU64,
-    /// Batches by how late they arrived against the tick clock, in 5 ms buckets.
+    /// Batches by how much later than each bot's soonest batch of the window they arrived
+    /// against the tick clock, in 5 ms buckets.
     pub lag: Box<[AtomicU64]>,
 }
 
@@ -160,7 +161,7 @@ impl Traffic {
         [at(0.5), at(0.99), at(1.0)]
     }
 
-    /// A copy of every counter, to difference two moments.
+    /// A copy of the byte and message counters, to difference two moments.
     pub fn snapshot(&self) -> Vec<u64> {
         [
             &self.bytes_in,
@@ -171,10 +172,8 @@ impl Traffic {
             &self.gaps,
             &self.decode_errors,
         ]
-        .into_iter()
-        .chain(self.lag.iter())
         .map(|c| c.load(Ordering::Relaxed))
-        .collect()
+        .to_vec()
     }
 }
 

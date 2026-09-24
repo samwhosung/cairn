@@ -167,6 +167,7 @@ fn load(args: &[String]) -> Result<(), String> {
 struct Measured {
     before: Vec<u64>,
     after: Vec<u64>,
+    lag: Vec<u64>,
     secs: f64,
     cpu_ns: u64,
 }
@@ -196,26 +197,31 @@ async fn drive(
     crowd.checks.open.store(true, Ordering::Relaxed);
     tokio::time::sleep(Duration::from_secs(secs)).await;
     crowd.checks.open.store(false, Ordering::Relaxed);
-    let after = t.snapshot();
-    let measured = Measured {
+    let (after, secs, cpu_ns) = (
+        t.snapshot(),
+        t0.elapsed().as_secs_f64(),
+        server::process_cpu_ns() - cpu0,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let lag = t.lag.iter().map(|b| b.load(Ordering::Relaxed)).collect();
+    crowd.stop.store(true, Ordering::Relaxed);
+    Measured {
         before,
         after,
-        secs: t0.elapsed().as_secs_f64(),
-        cpu_ns: server::process_cpu_ns() - cpu0,
-    };
-    crowd.stop.store(true, Ordering::Relaxed);
-    measured
+        lag,
+        secs,
+        cpu_ns,
+    }
 }
 
 /// The header of [`report`]'s table.
-const HEADER: &str = "| run | bots in | checkers | batches/s per bot | lag p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions checked / off / worst yd | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lies / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
+const HEADER: &str = "| run | bots in | checkers | batches/s per bot | batch jitter p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions checked / off / worst yd | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lies / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
 
 fn report(label: &str, crowd: &Crowd, count: usize, m: &Measured) -> String {
     let d = |i: usize| m.after[i] - m.before[i];
     let bots = crowd.traffic.welcomed.load(Ordering::Relaxed);
     let per_bot = |v: u64| v as f64 / m.secs / bots.max(1) as f64;
-    let lag: Vec<u64> = (7..m.after.len()).map(d).collect();
-    let [l50, l99, lmax] = Traffic::lag_percentiles(&lag);
+    let [l50, l99, lmax] = Traffic::lag_percentiles(&m.lag);
     let c = &crowd.checks;
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     let tiers: Vec<String> = (0..3)
