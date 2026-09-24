@@ -31,6 +31,7 @@ pub mod particles;
 mod placements;
 mod portal;
 mod probes;
+pub mod ribbons;
 pub mod rig;
 pub mod rig_events;
 mod room;
@@ -123,7 +124,11 @@ impl Plugin for WorldPlugin {
             skybox::SkyboxPlugin,
             liquid::LiquidPlugin,
         ))
-        .add_plugins((effects::EffectsPlugin, particles::ParticlePlugin))
+        .add_plugins((
+            effects::EffectsPlugin,
+            particles::ParticlePlugin,
+            ribbons::RibbonPlugin,
+        ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()

@@ -26,6 +26,7 @@ use crate::particles::{DrawSetGate, EmitClock, EmitterFrames, OwnerLoss, spawn_e
 use crate::placements::{PlacedModel, Placement, Placements, prop_placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
+use crate::ribbons::{RibbonSeq, spawn_ribbon};
 use crate::stream::Streamer;
 use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::{DoodadBase, WmoModel};
@@ -469,6 +470,31 @@ impl Spawner<'_, '_, '_, '_> {
                 out.push(e);
             }
         }
+        let mut carrier = None;
+        for rb in &m.ribbons {
+            let anchor = rig
+                .as_deref_mut()
+                .and_then(|r| r.bone_anchor(self.commands, rb.def.bone));
+            let (owner, use_pivot) = if let Some(a) = anchor {
+                (a, true)
+            } else {
+                let c = *carrier.get_or_insert_with(|| self.commands.spawn(*transform).id());
+                (c, false)
+            };
+            if let Some(e) = spawn_ribbon(
+                self.commands,
+                rb,
+                owner,
+                use_pivot,
+                transform.scale.max_element(),
+                clock.map_or(RibbonSeq::Fixed(0), RibbonSeq::Host),
+                None,
+                Some(fade.clone()),
+            ) {
+                out.push(e);
+            }
+        }
+        out.extend(carrier);
         out
     }
 

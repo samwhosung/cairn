@@ -17,6 +17,7 @@ use crate::model_material::{
     BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
 };
 use crate::particles::{EmitClock, EmitterFrames, OwnerLoss, spawn_emitter};
+use crate::ribbons::{RibbonSeq, spawn_ribbon};
 use crate::rig::{GlobalSeqDrive, RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
@@ -255,6 +256,22 @@ fn spawn_effects(
             on_owner_loss: OwnerLoss::Free,
         };
         spawn_emitter(commands, em, placement, frames, EmitClock::Host(entity));
+    }
+    for rb in &m2.ribbons {
+        let (owner, use_pivot) = pose
+            .as_deref_mut()
+            .and_then(|p| p.anchor_for(commands, rb.def.bone))
+            .map_or((entity, false), |j| (j, true));
+        spawn_ribbon(
+            commands,
+            rb,
+            owner,
+            use_pivot,
+            placement.scale.max_element(),
+            RibbonSeq::Host(entity),
+            Some(entity),
+            None,
+        );
     }
 }
 

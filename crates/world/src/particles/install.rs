@@ -8,15 +8,16 @@ use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use model::{
-    ParticleEmitterDef, parse_m2_animations, parse_m2_particle_emitters,
-    parse_m2_playable_animation_lookup,
+    ParticleEmitterDef, RibbonEmitterDef, parse_m2_animations, parse_m2_particle_emitters,
+    parse_m2_playable_animation_lookup, parse_m2_ribbon_emitters,
 };
 
 use super::{EmitClock, EmitterFrames, MAX_PARTICLES, OwnerLoss, ParticleEmitter, spawn_emitter};
 use crate::effects::EffectQuads;
-use crate::m2::{M2Model, ModelEmitter};
+use crate::m2::{M2Model, ModelEmitter, ModelRibbon};
 use crate::model_material::{ModelMaterial, ModelMaterials};
 use crate::portal::{CameraInteriorClaim, ExteriorWindows};
+use crate::ribbons::{RibbonSeq, RibbonTrail, spawn_ribbon};
 
 struct RecursionModel {
     name: String,
@@ -25,6 +26,7 @@ struct RecursionModel {
 
 struct ModelRecords {
     emitters: Vec<ParticleEmitterDef>,
+    ribbons: Vec<RibbonEmitterDef>,
     idle_seq: usize,
     recursion_models: Vec<Option<RecursionModel>>,
 }
@@ -82,6 +84,7 @@ fn records() -> Option<Vec<ModelRecords>> {
             })
             .collect();
         out.push(ModelRecords {
+            ribbons: parse_m2_ribbon_emitters(&bytes),
             idle_seq: stand_seq(&bytes),
             emitters,
             recursion_models,
@@ -101,6 +104,7 @@ fn effects_model(emitters: Vec<ModelEmitter>) -> M2Model {
         animations: None,
         has_emitters: true,
         emitters,
+        ribbons: Vec::new(),
     }
 }
 
@@ -115,7 +119,11 @@ fn app(dt: Duration) -> App {
         .init_resource::<ModelMaterials>()
         .init_resource::<ExteriorWindows>()
         .init_resource::<CameraInteriorClaim>()
-        .add_plugins((crate::effects::EffectsPlugin, super::ParticlePlugin))
+        .add_plugins((
+            crate::effects::EffectsPlugin,
+            super::ParticlePlugin,
+            crate::ribbons::RibbonPlugin,
+        ))
         .insert_resource(TimeUpdateStrategy::ManualDuration(dt));
     app.finish();
     app.cleanup();
@@ -210,6 +218,25 @@ fn spawn_all(app: &mut App, models: &[ModelRecords]) -> Vec<Entity> {
             };
             spawn_emitter(&mut commands, &em, seat(k), frames, EmitClock::Pinned);
         }
+        for def in &m.ribbons {
+            let ribbon = ModelRibbon {
+                def: def.clone(),
+                texture: Some(texture.clone()),
+                bone_pivot: [0.0; 3],
+                owner_reach: 1.0,
+            };
+            let seq = RibbonSeq::Fixed(0);
+            spawn_ribbon(
+                &mut commands,
+                &ribbon,
+                carriers[k],
+                false,
+                1.0,
+                seq,
+                None,
+                None,
+            );
+        }
     }
     queue.apply(world);
     carriers
@@ -244,6 +271,13 @@ fn check(app: &mut App) -> FrameCounts {
             particles += pool.len();
         }
     }
+    let mut trails = app.world_mut().query::<&RibbonTrail>();
+    for t in trails.iter(app.world()) {
+        assert!(
+            t.edge_count() <= crate::ribbons::MAX_EDGES,
+            "a trail outgrew its cap"
+        );
+    }
     let quads = app.world().resource::<EffectQuads>();
     for v in &quads.verts {
         assert!(
@@ -263,6 +297,7 @@ fn every_emitter_of_the_install_runs_at_30_and_144_hz() {
         return;
     };
     let emitters: usize = models.iter().map(|m| m.emitters.len()).sum();
+    let ribbons: usize = models.iter().map(|m| m.ribbons.len()).sum();
     for (hz, seconds) in [(30u32, 3), (144, 2)] {
         let started = Instant::now();
         let dt = Duration::from_nanos(1_000_000_000 / u64::from(hz));
@@ -285,7 +320,7 @@ fn every_emitter_of_the_install_runs_at_30_and_144_hz() {
             verts += counts.vertices;
         }
         eprintln!(
-            "{hz} Hz: {} models, {emitters} emitters, {frames} frames: at most \
+            "{hz} Hz: {} models, {emitters} emitters, {ribbons} ribbons, {frames} frames: at most \
              {most} particles live, {verts} vertices drawn [{:.1?}]",
             models.len(),
             started.elapsed()

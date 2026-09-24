@@ -19,6 +19,7 @@ use crate::portal::{
 use crate::visibility::doodad_fade_alpha;
 
 pub(crate) use emit::{rand_signed, rand01, xorshift32};
+pub(crate) use sim::playing_seq;
 
 const MAX_PARTICLES: usize = 1024;
 const MAX_RECURSION_EMITTERS: usize = 4;

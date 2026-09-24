@@ -10,10 +10,11 @@ use bevy::math::{Mat4, Vec3};
 use bevy::prelude::Handle;
 use bevy::reflect::TypePath;
 use model::{
-    M2Bounds, M2Light, ParticleEmitterDef, Skeleton, m2_owner_reach, parse_m2_animation_lookup,
-    parse_m2_animation_summary, parse_m2_animations, parse_m2_attachments, parse_m2_bounds,
-    parse_m2_global_sequence_bones, parse_m2_lights, parse_m2_particle_emitters,
-    parse_m2_playable_animation_lookup, parse_m2_render_submeshes, parse_m2_skeleton,
+    M2Bounds, M2Light, ParticleEmitterDef, RibbonEmitterDef, Skeleton, m2_owner_reach,
+    parse_m2_animation_lookup, parse_m2_animation_summary, parse_m2_animations,
+    parse_m2_attachments, parse_m2_bounds, parse_m2_global_sequence_bones, parse_m2_lights,
+    parse_m2_particle_emitters, parse_m2_playable_animation_lookup, parse_m2_render_submeshes,
+    parse_m2_ribbon_emitters, parse_m2_skeleton,
 };
 
 use crate::coords::wow_to_bevy;
@@ -40,6 +41,7 @@ pub struct M2Model {
     pub animations: Option<ModelAnimations>,
     pub has_emitters: bool,
     pub(crate) emitters: Vec<ModelEmitter>,
+    pub(crate) ribbons: Vec<ModelRibbon>,
 }
 
 #[derive(Clone)]
@@ -52,6 +54,14 @@ pub(crate) struct ModelEmitter {
     pub geometry: Option<Handle<M2Model>>,
     pub owner_reach: f32,
     pub idle_seq_index: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct ModelRibbon {
+    pub def: RibbonEmitterDef,
+    pub texture: Option<Handle<Image>>,
+    pub bone_pivot: [f32; 3],
+    pub owner_reach: f32,
 }
 
 impl M2Model {
@@ -119,7 +129,7 @@ impl AssetLoader for M2Loader {
             .as_ref()
             .and_then(ModelAnimations::idle_clip)
             .map_or(0, |c| c.seq_index);
-        let emitters = load_effects(ctx, &bytes, &raw_skeleton, owner_reach, idle_seq);
+        let (emitters, ribbons) = load_effects(ctx, &bytes, &raw_skeleton, owner_reach, idle_seq);
         Ok(M2Model {
             submeshes,
             bounds: parse_m2_bounds(&bytes).ok(),
@@ -130,6 +140,7 @@ impl AssetLoader for M2Loader {
             animations,
             has_emitters,
             emitters,
+            ribbons,
         })
     }
 
@@ -144,7 +155,7 @@ fn load_effects(
     skeleton: &Skeleton,
     owner_reach: f32,
     idle_seq: usize,
-) -> Vec<ModelEmitter> {
+) -> (Vec<ModelEmitter>, Vec<ModelRibbon>) {
     let pivot = |bone: u16| {
         skeleton
             .bones
@@ -156,8 +167,18 @@ fn load_effects(
             .map(|t| ctx.load::<Image>(texture_url(t, Repeat::BOTH)))
     };
     let emitter_defs = parse_m2_particle_emitters(bytes);
+    let ribbon_defs = parse_m2_ribbon_emitters(bytes);
     let emitter_textures: Vec<_> = emitter_defs.iter().map(|d| texture(&d.texture)).collect();
-    emitter_defs
+    let ribbons = ribbon_defs
+        .into_iter()
+        .map(|def| ModelRibbon {
+            texture: texture(&def.texture),
+            bone_pivot: pivot(def.bone),
+            owner_reach,
+            def,
+        })
+        .collect();
+    let emitters = emitter_defs
         .into_iter()
         .zip(emitter_textures)
         .map(|(def, texture)| ModelEmitter {
@@ -175,7 +196,8 @@ fn load_effects(
             idle_seq_index: idle_seq,
             def,
         })
-        .collect()
+        .collect();
+    (emitters, ribbons)
 }
 
 fn animations(
