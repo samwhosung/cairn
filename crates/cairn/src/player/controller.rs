@@ -5,13 +5,14 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use world::WorldCamera;
 use world::collision::{CollisionResidency, Liquids, WorldCollision};
-use world::unit::{UnitAlpha, UnitMotion};
+use world::unit::{BodyTwist, UnitAlpha, UnitMotion};
 
 use super::camera::{
     self, CameraControl, CameraPivot, CameraRig, FollowInput, Subject, model_pivot_height,
 };
 use super::camera_dynamics::{CameraOptions, DynamicsInput, SubjectState};
 use super::flags::{self, BACKWARD, FORWARD, SWIMMING, WALK_MODE};
+use super::gait::wrap_pi;
 use super::input::{self, Binding, Keys};
 use super::state::{
     CAPSULE_HEIGHT, CAPSULE_RADIUS, MOUSELOOK_PITCH_CLAMP, Player, RUN_BACK_RATIO, RUN_SPEED,
@@ -47,6 +48,7 @@ pub type BodyQuery<'w, 's> = Query<
         &'static mut UnitMotion,
         &'static mut UnitAlpha,
         Option<&'static CameraPivot>,
+        Option<&'static mut BodyTwist>,
     ),
     (With<PlayerBody>, Without<WorldCamera>),
 >;
@@ -237,7 +239,9 @@ pub fn control(
     let (scale, pivot) = body
         .single()
         .ok()
-        .map_or((1.0, None), |(t, .., pivot)| (t.scale.x, pivot.copied()));
+        .map_or((1.0, None), |(t, _, _, pivot, _)| {
+            (t.scale.x, pivot.copied())
+        });
     let subject = Subject {
         feet: player.pos,
         head: player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS),
@@ -259,7 +263,7 @@ pub fn control(
         &follow,
         &dynamics,
     );
-    if let Ok((mut t, mut motion, mut alpha, _)) = body.single_mut() {
+    if let Ok((mut t, mut motion, mut alpha, _, twist)) = body.single_mut() {
         t.translation = player.pos;
         let stroking = frame.live & SWIMMING != 0 && frame.live & (FORWARD | BACKWARD) != 0;
         t.rotation = if stroking {
@@ -277,6 +281,9 @@ pub fn control(
             flags: anim_flags,
         };
         alpha.alpha = rig.self_fade_alpha;
+        if let Some(mut twist) = twist {
+            twist.yaw_gap = wrap_pi(player.face_yaw - player.model_yaw);
+        }
     }
 }
 

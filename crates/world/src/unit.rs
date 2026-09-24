@@ -8,6 +8,7 @@ mod fade;
 mod look;
 mod motion;
 mod shade;
+mod twist;
 
 use bevy::prelude::*;
 
@@ -18,6 +19,7 @@ pub use fade::{UnitAlpha, UnitAppear};
 pub use look::{BodySkin, CharacterLook, CharacterTables};
 pub use motion::{UnitMotion, move_flags};
 pub use shade::UnitShade;
+pub use twist::BodyTwist;
 
 /// A unit's per-frame work in `Update`: dress what arrived, hang what it wears, drive its
 /// animation from its movement, ramp its shade, carry its alpha.
@@ -42,6 +44,10 @@ impl Plugin for UnitPlugin {
                 )
                     .chain()
                     .in_set(UnitSystems),
+            )
+            .add_systems(
+                PostUpdate,
+                twist::apply_body_twist.in_set(crate::rig::PosePost),
             );
     }
 }

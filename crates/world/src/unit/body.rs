@@ -188,11 +188,17 @@ pub(crate) fn dress_bodies(
 }
 
 fn insert_rig_and_players(root: &mut EntityCommands<'_>, m2: &M2Model, skin: Option<RigSkin>) {
-    let rigged = !m2.skeleton.joints.is_empty();
+    let skeleton = &m2.skeleton;
+    let rigged = !skeleton.joints.is_empty();
     if rigged {
-        root.insert(RigPose::new(root.id(), &m2.skeleton));
+        root.insert(RigPose::new(root.id(), skeleton));
         if let Some(skin) = skin {
             root.insert(skin);
+            let bone = |b: Option<u16>| b.filter(|&b| usize::from(b) < skeleton.joints.len());
+            let (spine, head) = (bone(skeleton.spine_bone), bone(skeleton.head_bone));
+            if spine.is_some() || head.is_some() {
+                root.insert(super::BodyTwist::new(spine, head));
+            }
         }
     }
     if let Some(anims) = &m2.animations {
