@@ -16,12 +16,13 @@ use crate::shot::ReadyToShoot;
 pub const FRAME_STEP: Duration = Duration::from_nanos(16_666_667);
 const SEAT_REACH: f32 = 500.0;
 
-/// A display to stand at `at` and shoot from the orbit `az`, `el`, `dist` around the point a yard
-/// above its feet, `age` seconds after it appears.
+/// A display to stand at `at`, `scale` times its model's size, and shoot from the orbit `az`,
+/// `el`, `dist` around the point a yard above its feet, `age` seconds after it appears.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Fixture {
     pub display: u32,
     pub age: f32,
+    pub scale: f32,
     /// WoW world coordinates; the display stands on whatever is below.
     pub at: Vec3,
     pub az_deg: f32,
@@ -129,6 +130,7 @@ fn seat(
 fn spawn_subject(
     mut commands: Commands<'_, '_>,
     time: Res<'_, Time>,
+    fixture: Res<'_, Fixture>,
     mut stage: ResMut<'_, Stage>,
 ) {
     if !stage.clock_released || stage.born.is_some() {
@@ -141,7 +143,7 @@ fn spawn_subject(
     let body = UnitBody::clone(body);
     let root = commands
         .spawn((
-            Transform::from_translation(seat),
+            Transform::from_translation(seat).with_scale(Vec3::splat(fixture.scale)),
             Visibility::default(),
             body,
             UnitShade::default(),

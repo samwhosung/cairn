@@ -17,10 +17,11 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
          world has run S seconds (2.5 by default)
-       cairn shot --display ID [--age S] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
-         stand a CreatureDisplayInfo display on the ground below AT and shoot it S seconds
-         (1 by default) after it appears, from the orbit around the point a yard above its
-         feet; without a camera, a Northshire hillside from 5 yd south, 10 degrees up
+       cairn shot --display ID [--age S] [--scale K] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
+         stand a CreatureDisplayInfo display on the ground below AT, K times its model's
+         size (1 by default), and shoot it S seconds (1 by default) after it appears, from
+         the orbit around the point a yard above its feet; without a camera, a Northshire
+         hillside from 5 yd south, 10 degrees up
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's
@@ -44,7 +45,7 @@ Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, 
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 19] = [
+const FLAGS: [&str; 20] = [
     "age",
     "at",
     "az",
@@ -60,6 +61,7 @@ const FLAGS: [&str; 19] = [
     "map",
     "out",
     "race",
+    "scale",
     "sex",
     "size",
     "skin",
@@ -271,7 +273,11 @@ fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String
 
 fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fixture>, String> {
     let Some(id) = given.remove("display") else {
-        return Ok(None);
+        return if given.contains_key("scale") {
+            Err("--scale is for a display shot".into())
+        } else {
+            Ok(None)
+        };
     };
     if !shot {
         return Err("--display is for a shot: cairn shot --display ID ...".into());
@@ -285,6 +291,12 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
         .map_or(Ok(1.0), |a| parse_number("age", &a))?;
     if age < 0.0 {
         return Err("--age must not be negative".into());
+    }
+    let scale = given
+        .remove("scale")
+        .map_or(Ok(1.0), |k| parse_number("scale", &k))?;
+    if scale <= 0.0 {
+        return Err("--scale must be above 0".into());
     }
     let orbit = ["at", "az", "el", "dist"];
     let (at, az_deg, el_deg, dist) = if orbit.iter().all(|f| given.contains_key(*f)) {
@@ -305,6 +317,7 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
     Ok(Some(Fixture {
         display,
         age,
+        scale,
         at,
         az_deg,
         el_deg,
@@ -479,18 +492,21 @@ mod tests {
             Some(Fixture {
                 display: 3167,
                 age: 2.5,
+                scale: 1.0,
                 at: NORTHSHIRE_HILLSIDE,
                 az_deg: 0.0,
                 el_deg: 10.0,
                 dist: 5.0,
             })
         );
-        let args = parsed("shot --display 10913 --at 1,2,3 --az 90 --el 20 --dist 7 --out a.png")
-            .expect("parses");
+        let args = parsed(
+            "shot --display 10913 --scale 1.35 --at 1,2,3 --az 90 --el 20 --dist 7 --out a.png",
+        )
+        .expect("parses");
         let f = args.display.expect("a display");
         assert_eq!(
-            (f.age, f.at, f.az_deg, f.el_deg, f.dist),
-            (1.0, Vec3::new(1.0, 2.0, 3.0), 90.0, 20.0, 7.0)
+            (f.age, f.scale, f.at, f.az_deg, f.el_deg, f.dist),
+            (1.0, 1.35, Vec3::new(1.0, 2.0, 3.0), 90.0, 20.0, 7.0)
         );
     }
 
@@ -527,6 +543,8 @@ mod tests {
             "shot --age -1 --out a.png",
             "shot --display x --out a.png",
             "shot --display 1 --age -1 --out a.png",
+            "shot --scale 2 --out a.png",
+            "shot --display 1 --scale 0 --out a.png",
             "shot --display 1 --at 0,0,0 --out a.png",
             "shot --display 1 --at 0,0,0 --az 0 --el 10 --dist 0 --out a.png",
         ] {
