@@ -1,6 +1,6 @@
 use bevy::math::{Affine3A, Mat3, Mat3A, Vec3A};
 use bevy::prelude::*;
-use model::{BillboardKind, ParentArm, ParentBasis};
+use model::{BillboardKind, BoneScaleAnim, ParentArm, ParentBasis};
 
 use crate::model::BillboardInfo;
 use crate::view::WorldCamera;
@@ -8,21 +8,23 @@ use crate::view::WorldCamera;
 #[derive(Component)]
 #[require(Transform, Visibility)]
 pub(crate) struct BillboardCard {
-    world_pivot: Vec3,
-    scale: Vec3,
     kind: BillboardKind,
-    placement_rot: Quat,
-    placed: bool,
+    pivot: Vec3,
+    rotation: Quat,
+    scale: Vec3,
+    pulse: Option<BoneScaleAnim>,
+    placed_at_ms: Option<u32>,
 }
 
 impl BillboardCard {
     pub(crate) fn new(info: &BillboardInfo, placement: &Transform) -> Self {
         Self {
-            world_pivot: placement.transform_point(info.pivot),
-            scale: placement.scale,
             kind: info.kind,
-            placement_rot: placement.rotation,
-            placed: false,
+            pivot: placement.transform_point(info.pivot),
+            rotation: placement.rotation,
+            scale: placement.scale,
+            pulse: info.global_seq_scale.clone(),
+            placed_at_ms: None,
         }
     }
 }
@@ -104,30 +106,57 @@ fn rotation_onto_wow_axes(x: Vec3, y: Vec3, z: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(-y, z, -x))
 }
 
+type Camera<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Ref<'static, GlobalTransform>,
+        Option<Ref<'static, Transform>>,
+    ),
+    With<WorldCamera>,
+>;
+
+type Cards<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut BillboardCard,
+        &'static mut Transform,
+        &'static mut GlobalTransform,
+    ),
+    Without<WorldCamera>,
+>;
+
 /// Writes each card's world transform after propagation, so the frame draws what it computes.
 pub(crate) fn face_billboards(
-    camera: Query<'_, '_, Ref<'_, GlobalTransform>, With<WorldCamera>>,
-    mut cards: Query<
-        '_,
-        '_,
-        (&mut BillboardCard, &mut Transform, &mut GlobalTransform),
-        Without<WorldCamera>,
-    >,
+    time: Res<'_, Time>,
+    camera: Camera<'_, '_>,
+    mut cards: Cards<'_, '_>,
 ) {
-    let Ok(cam) = camera.single() else {
+    let Ok((cam, cam_local)) = camera.single() else {
         return;
     };
-    let moved = cam.is_changed();
+    let moved = cam.is_changed() || cam_local.is_some_and(|l| l.is_changed());
     let (fwd, right, up) = (*cam.forward(), *cam.right(), *cam.up());
+    let now_ms = time.elapsed().as_millis() as u32;
     for (mut card, mut tf, mut global) in &mut cards {
-        if card.placed && !moved {
+        let first = card.placed_at_ms.is_none();
+        if !first && !moved && card.pulse.is_none() {
             continue;
         }
-        card.placed = true;
+        // The client runs a model's global sequences from its creation.
+        let age_ms = now_ms.wrapping_sub(card.placed_at_ms.unwrap_or(now_ms));
+        let pulse = card
+            .pulse
+            .as_ref()
+            .map_or(Vec3::ONE, |p| Vec3::from_array(p.sample(age_ms)));
+        if first {
+            card.placed_at_ms = Some(now_ms);
+        }
         let placed = Transform {
-            translation: card.world_pivot,
-            rotation: billboard_basis(card.kind, card.placement_rot, fwd, right, up),
-            scale: card.scale,
+            translation: card.pivot,
+            rotation: billboard_basis(card.kind, card.rotation, fwd, right, up),
+            scale: card.scale * pulse,
         };
         if *tf != placed {
             *tf = placed;
@@ -170,5 +199,60 @@ mod tests {
         let q = billboard_basis(BillboardKind::LockZ, tilted, fwd, Vec3::X, Vec3::Y);
         let bone_z = q * wow_to_bevy([0.0, 0.0, 1.0]);
         assert!((bone_z - tilted * Vec3::Y).length() < 1e-5);
+    }
+
+    fn info(global_seq_scale: Option<BoneScaleAnim>) -> BillboardInfo {
+        BillboardInfo {
+            pivot: Vec3::new(0.0, 1.7, 0.0),
+            kind: BillboardKind::Spherical,
+            bone: 0,
+            global_seq_scale,
+        }
+    }
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, face_billboards);
+        app.world_mut().spawn((
+            WorldCamera,
+            GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0)),
+        ));
+        app
+    }
+
+    #[test]
+    fn a_placed_card_pulses_from_its_first_frame() {
+        let mut app = app();
+        let pulse = BoneScaleAnim {
+            duration_ms: 1000,
+            interp: true,
+            keys: vec![(0, [1.0; 3]), (500, [3.0; 3]), (1000, [1.0; 3])],
+        };
+        let card = app
+            .world_mut()
+            .spawn(BillboardCard::new(&info(Some(pulse)), &Transform::IDENTITY))
+            .id();
+        let scale = |app: &App| {
+            app.world()
+                .entity(card)
+                .get::<Transform>()
+                .expect("a card")
+                .scale
+        };
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(7));
+        app.update();
+        assert_eq!(
+            scale(&app),
+            Vec3::ONE,
+            "the loop starts where the card appears"
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.update();
+        assert!((scale(&app) - Vec3::splat(2.0)).length() < 1e-5);
     }
 }

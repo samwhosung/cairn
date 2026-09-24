@@ -5,7 +5,7 @@ use bevy::camera::primitives::Aabb;
 use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::VertexFormat;
-use model::{BillboardKind, RenderSubmesh};
+use model::{BillboardKind, BoneScaleAnim, RenderSubmesh};
 
 use crate::coords::wow_to_bevy;
 use crate::source::{Repeat, texture_url};
@@ -24,10 +24,12 @@ pub struct ModelSubmesh {
 
 /// A batch riding an M2 billboard bone: the mesh is built about `pivot` (model space, Bevy axes)
 /// so it can be turned to the camera there.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BillboardInfo {
     pub pivot: Vec3,
     pub kind: BillboardKind,
+    pub bone: u16,
+    pub global_seq_scale: Option<BoneScaleAnim>,
 }
 
 impl ModelSubmesh {
@@ -44,6 +46,8 @@ impl ModelSubmesh {
         let billboard = sub.billboard.as_ref().map(|b| BillboardInfo {
             pivot: wow_to_bevy(b.pivot),
             kind: b.kind,
+            bone: b.bone,
+            global_seq_scale: b.scale_anim.clone(),
         });
         Self {
             geometry: Arc::new(sub),
