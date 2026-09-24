@@ -25,7 +25,9 @@ jobs:
       - name: commit messages
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: cargo xtask commits "${BASE}..HEAD"
+          # On a pull request HEAD is GitHub's merge of it; its own commits end at its head.
+          TIP: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: cargo xtask commits "${BASE}..${TIP}"
 
   test:
     strategy:
