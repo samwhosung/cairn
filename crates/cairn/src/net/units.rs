@@ -93,6 +93,20 @@ impl Relayed {
 #[derive(Default)]
 pub struct Others {
     by_slot: HashMap<u16, Relayed>,
+    #[cfg(test)]
+    pub faults: Faults,
+    #[cfg(test)]
+    dropped: bool,
+}
+
+/// Ways a test breaks the view on purpose, to show its checks can fail.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Faults {
+    /// Every other move, turn or state is lost.
+    pub drop_every_other: bool,
+    /// Every move is shown where it was made and never stepped on from there.
+    pub no_dead_reckoning: bool,
 }
 
 /// What a batch's records need beyond themselves: the batch's stamp, where this window's player
@@ -169,7 +183,18 @@ impl Others {
             return;
         };
         change(r);
-        let (mv, now_ms) = (r.relay_move(at.wire_ms), at.now_ms);
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let (mut mv, now_ms) = (r.relay_move(at.wire_ms), at.now_ms);
+        #[cfg(test)]
+        {
+            self.dropped = self.faults.drop_every_other && !self.dropped;
+            if self.dropped {
+                return;
+            }
+            if self.faults.no_dead_reckoning {
+                (mv.flags, mv.jump) = (0, None);
+            }
+        }
         commands
             .entity(r.entity)
             .queue(move |mut entity: EntityWorldMut<'_>| {

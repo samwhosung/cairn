@@ -3,6 +3,8 @@
 
 mod heard;
 mod honest;
+mod liar;
+mod pair;
 mod pictures;
 mod walker;
 

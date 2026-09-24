@@ -59,17 +59,28 @@ impl Walker {
     /// A client on Azeroth that joins the server at `server` as `look` and stands where its
     /// welcome places it, stepped at `hz` and paced to the wall clock.
     pub fn joined(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
-        let hello = crate::net::hello(name.to_owned(), &look);
-        let mut walker = Self::build(
-            "Azeroth",
-            [0.0, 0.0, 0.0],
-            0.0,
-            hz,
-            None,
-            Some(Net::connect(server, hello)),
-        )?;
-        walker.paced = Some((Instant::now(), 0));
+        let mut walker = Self::welcomed(server, name, look, hz)?;
+        walker.settle();
+        walker.pace();
         Some(walker)
+    }
+
+    /// [`Walker::joined`], but not yet settled or paced. Its clocks are the wall clock's, as a
+    /// window's are, for the server ticks by it.
+    pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
+        let hello = crate::net::hello(name.to_owned(), &look);
+        let net = Net::connect(server, hello);
+        Self::build("Azeroth", [0.0; 3], 0.0, hz, None, Some(net))
+    }
+
+    /// From now on each frame waits for its time on the wall clock.
+    pub fn pace(&mut self) {
+        self.paced = Some((Instant::now(), 0));
+    }
+
+    /// The body is let go and the collision around it is resident.
+    pub fn settled(&self) -> bool {
+        !self.player().settling && self.app.world().resource::<CollisionResidency>().settled()
     }
 
     fn build(
@@ -99,7 +110,11 @@ impl Walker {
             .init_asset::<StandardMaterial>()
             .add_plugins(world::LoadersPlugin)
             .insert_resource(current)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(step))
+            .insert_resource(if net.is_some() {
+                TimeUpdateStrategy::Automatic
+            } else {
+                TimeUpdateStrategy::ManualDuration(step)
+            })
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
@@ -124,8 +139,9 @@ impl Walker {
         };
         if joining {
             walker.welcome();
+        } else {
+            walker.settle();
         }
-        walker.settle();
         Some(walker)
     }
 
@@ -170,8 +186,7 @@ impl Walker {
     /// update waits out its own step on the wall clock.
     pub fn settle(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(300);
-        while self.player().settling || !self.app.world().resource::<CollisionResidency>().settled()
-        {
+        while !self.settled() {
             assert!(Instant::now() < deadline, "the collision never settled");
             self.app.update();
             std::thread::sleep(self.step);
@@ -257,6 +272,15 @@ impl Walker {
     /// Turns the aim to a heading, as the mouse would.
     pub fn aim(&mut self, heading_deg: f32) {
         self.app.world_mut().resource_mut::<Player>().face_yaw = heading_deg.to_radians();
+    }
+
+    /// Tilts the aim a swimmer steers by, as the mouse would.
+    pub fn pitch(&mut self, deg: f32) {
+        self.app.world_mut().resource_mut::<Player>().mover_pitch = deg.to_radians();
+    }
+
+    pub fn net_mut(&mut self) -> Option<Mut<'_, Net>> {
+        self.app.world_mut().get_resource_mut::<Net>()
     }
 
     /// The first front face along a WoW-space ray, as `(distance, normal in WoW axes)`.

@@ -24,6 +24,10 @@ use crate::args::Join;
 use crate::player::{CameraRig, Player};
 use claims::Claims;
 use link::{Arrival, Link};
+#[cfg(test)]
+pub use remote::RemoteMotion;
+#[cfg(test)]
+pub use units::{Faults, Remote};
 use units::{Others, Stamp};
 
 /// Yards between the places a host sets its players, across its own heading.
@@ -102,6 +106,11 @@ impl Net {
     #[cfg(test)]
     pub fn claims_sent(&self) -> u32 {
         self.claims.as_ref().map_or(0, |c| c.sent)
+    }
+
+    #[cfg(test)]
+    pub fn faults(&mut self) -> &mut Faults {
+        &mut self.others.faults
     }
 }
 
