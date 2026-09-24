@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use body::MeshCache;
 pub use body::{BodyDressed, BodyModel, BodyPart, CharacterDress, UnitBody, WornModel};
 pub use drive::UnitDriver;
-pub use fade::UnitAlpha;
+pub use fade::{UnitAlpha, UnitAppear};
 pub use look::{BodySkin, CharacterLook, CharacterTables};
 pub use motion::{UnitMotion, move_flags};
 pub use shade::UnitShade;

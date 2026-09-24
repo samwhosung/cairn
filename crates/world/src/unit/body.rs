@@ -18,7 +18,7 @@ use crate::rig::{GlobalSeqDrive, RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
 
-use super::fade::PartFade;
+use super::fade::{PartFade, UnitAppear};
 
 /// A body to draw at this entity's transform: its model, the creature skins it fills from its
 /// display, and for a character the textures and geosets its appearance chose.
@@ -87,6 +87,7 @@ pub(crate) fn rig_bits(slot: u16) -> u32 {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn dress_bodies(
     mut commands: Commands<'_, '_>,
+    time: Res<'_, Time>,
     server: Res<'_, AssetServer>,
     m2s: Res<'_, Assets<M2Model>>,
     light: Option<Res<'_, LightBuffer>>,
@@ -174,7 +175,11 @@ pub(crate) fn dress_bodies(
             .as_ref()
             .map_or_else(Vec::new, |c| c.worn.clone());
         let mut root = commands.entity(entity);
-        root.insert((BodyDressed { parts, slot }, HoldMeshes(form)));
+        root.insert((
+            BodyDressed { parts, slot },
+            HoldMeshes(form),
+            UnitAppear::at(time.elapsed_secs()),
+        ));
         if !worn.is_empty() {
             root.insert(super::attach::WornPending::new(worn, &server));
         }
