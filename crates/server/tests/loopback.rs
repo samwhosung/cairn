@@ -6,7 +6,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, Spawn};
+use server::{Config, Spawn, Window};
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -153,4 +153,26 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
         [0, 0, 1, 0, 0, 0],
         "one refusal, for speed"
     );
+}
+
+#[test]
+fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
+    let running = server::start(Config {
+        tick_threads: 1,
+        window: Some(Window {
+            players: 1,
+            settle: 10_000,
+            measure: 10_000,
+        }),
+        ..Config::default()
+    })
+    .expect("a server");
+    drop(Client::join(running.addr(), "Ada"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(running.wait().map(|s| s.ticks)));
+    let measured = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the server stops")
+        .expect("a clean stop");
+    assert_eq!(measured, 0, "the window never opened");
 }

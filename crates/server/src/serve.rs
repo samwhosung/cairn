@@ -47,8 +47,8 @@ impl Default for Config {
     }
 }
 
-/// Once `players` are in, wait `settle` ticks and measure `measure` ticks; then run on until
-/// every player has left.
+/// Once `players` are in, wait `settle` ticks and measure `measure` ticks; run on until every
+/// player has left, and if they leave sooner, report what was measured by then.
 #[derive(Clone, Copy, Debug)]
 pub struct Window {
     pub players: u32,
@@ -111,7 +111,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     let period = Duration::from_millis(u64::from(cfg.tick_ms));
     let mut due = Instant::now();
     let mut ticks: Vec<TickStats> = Vec::new();
-    let (mut mark, mut full_at) = (None::<WindowStart>, None::<usize>);
+    let (mut mark, mut crowd_in_at) = (None::<WindowStart>, None::<usize>);
     let mut measured = None;
     while !shared.stop.load(Ordering::Relaxed) {
         due = (due + period).max(Instant::now());
@@ -127,16 +127,13 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         ticks.push(st);
         let n = ticks.len();
         match cfg.window {
-            Some(_) if measured.is_some() => {
-                if st.players == 0 {
-                    break;
-                }
-            }
+            Some(_) if crowd_in_at.is_some() && st.players == 0 => break,
+            Some(_) if measured.is_some() => {}
             Some(w) => {
-                if full_at.is_none() && st.players >= w.players {
-                    full_at = Some(n);
+                if crowd_in_at.is_none() && st.players >= w.players {
+                    crowd_in_at = Some(n);
                 }
-                let start = full_at.map(|f| f + w.settle as usize);
+                let start = crowd_in_at.map(|f| f + w.settle as usize);
                 if mark.is_none() && start == Some(n) {
                     mark = Some(WindowStart::now(n, shared));
                 }

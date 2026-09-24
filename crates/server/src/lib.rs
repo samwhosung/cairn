@@ -70,8 +70,8 @@ impl Running {
         self.wait()
     }
 
-    /// Waits until the measured window is over and every player has left, then closes every
-    /// connection. Without a window it never returns: use [`Running::stop`].
+    /// Waits until the window's [`Window::players`] have come and all have left, then drops every
+    /// connection. Without a window it returns only on an error: use [`Running::stop`].
     pub fn wait(self) -> io::Result<Summary> {
         let summary = self
             .tick
