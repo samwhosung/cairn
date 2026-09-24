@@ -3,6 +3,7 @@
 //! or the cost of its frames timed. They need a GPU as well as the install, so they run only when
 //! asked for, writing into the directory `CAIRN_PICTURES` names.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -22,6 +23,7 @@ use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
+use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerBody, PlayerPlugin};
@@ -33,8 +35,8 @@ const SIZE: UVec2 = UVec2::new(1280, 720);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
 
-const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
-const EAST: f32 = 270.0;
+pub(super) const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
+pub(super) const EAST: f32 = 270.0;
 const HILLTOP_SOUTH_OF_GOLDSHIRE: [f32; 2] = [-9200.0, -420.0];
 const SUN_BEARING: f32 = 45.0;
 struct Stand {
@@ -68,8 +70,8 @@ const ON_THE_SAND_OF_THE_WESTFALL_COAST: Stand = Stand {
     heading: 0.0,
 };
 
-struct Painter {
-    app: App,
+pub(super) struct Painter {
+    pub(super) app: App,
     target: Handle<Image>,
     out: PathBuf,
 }
@@ -77,6 +79,29 @@ struct Painter {
 impl Painter {
     /// Headings in degrees: 0 north, 90 west.
     fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
+        let mut painter = Self::build([xy[0], xy[1], 500.0], heading_deg, look, None)?;
+        painter.stand_on(xy);
+        Some(painter)
+    }
+
+    /// A painter that joins `server` and stands where its welcome places it, near `feet`, on the
+    /// wall clock the server ticks by. It is not yet settled.
+    pub(super) fn joined(
+        server: SocketAddr,
+        feet: [f32; 3],
+        heading_deg: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
+        let hello = crate::net::hello("Painter".into(), &look);
+        Self::build(feet, heading_deg, look, Some(Net::connect(server, hello)))
+    }
+
+    fn build(
+        feet: [f32; 3],
+        heading_deg: f32,
+        look: CharacterLook,
+        net: Option<Net>,
+    ) -> Option<Self> {
         let (Some(data), Some(out)) = (
             std::env::var_os("WOW_DATA"),
             std::env::var_os("CAIRN_PICTURES"),
@@ -93,17 +118,24 @@ impl Painter {
             .insert_resource(map)
             .insert_resource(tables)
             .insert_resource(TimeOfDay { minute: 12 * 60 })
-            .insert_resource(TimeUpdateStrategy::ManualDuration(STEP))
+            .insert_resource(if net.is_some() {
+                TimeUpdateStrategy::Automatic
+            } else {
+                TimeUpdateStrategy::ManualDuration(STEP)
+            })
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
-                    pose: Pose::orbit(Vec3::new(xy[0], xy[1], 500.0), heading_deg, 12.0, 16.0),
+                    pose: Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0),
                     mode: Mode::Walk,
                     look,
                 },
                 world::LoadersPlugin,
                 world::WorldPlugin,
             ));
+        if let Some(net) = net {
+            app.insert_resource(net).add_plugins(NetPlugin);
+        }
         let pipelines = watch_pipelines(&mut app);
         app.insert_resource(pipelines);
         app.finish();
@@ -131,7 +163,6 @@ impl Painter {
             .expect("the follow camera");
         let view = RenderTarget::Image(painter.target.clone().into());
         painter.app.world_mut().entity_mut(camera).insert(view);
-        painter.stand_on(xy);
         Some(painter)
     }
 
@@ -176,7 +207,7 @@ impl Painter {
         }
     }
 
-    fn arrived(&mut self) -> bool {
+    pub(super) fn arrived(&mut self) -> bool {
         let world = self.app.world_mut();
         let pipelines = world.resource::<Pipelines>();
         assert!(
@@ -204,7 +235,7 @@ impl Painter {
         })
     }
 
-    fn key(&mut self, key_code: KeyCode, state: ButtonState) {
+    pub(super) fn key(&mut self, key_code: KeyCode, state: ButtonState) {
         self.app.world_mut().write_message(KeyboardInput {
             key_code,
             logical_key: Key::Unidentified(NativeKey::Unidentified),
@@ -215,7 +246,7 @@ impl Painter {
         });
     }
 
-    fn orbit(&mut self, yaw_by: f32, distance: f32) {
+    pub(super) fn orbit(&mut self, yaw_by: f32, distance: f32) {
         let mut control = self.app.world_mut().resource_mut::<CameraControl>();
         control.distance = distance;
         control.target_distance = distance;
@@ -227,11 +258,11 @@ impl Painter {
         rig.yaw += yaw_by;
     }
 
-    fn set_time(&mut self, hour: u32, minute: u32) {
+    pub(super) fn set_time(&mut self, hour: u32, minute: u32) {
         self.app.world_mut().resource_mut::<TimeOfDay>().minute = hour * 60 + minute;
     }
 
-    fn tilt_up(&mut self, radians: f32) {
+    pub(super) fn tilt_up(&mut self, radians: f32) {
         let world = self.app.world_mut();
         let mut rig = world
             .query_filtered::<&mut CameraRig, With<WorldCamera>>()
@@ -250,7 +281,7 @@ impl Painter {
         self.run((secs / STEP.as_secs_f32()).round() as usize);
     }
 
-    fn shoot(&mut self, name: &str) {
+    pub(super) fn shoot(&mut self, name: &str) {
         self.clock().pause();
         self.run(FRAMES_TO_REACH_THE_IMAGE);
         let shot: Arc<Mutex<Option<Image>>> = Arc::default();

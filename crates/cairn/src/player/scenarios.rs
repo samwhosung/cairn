@@ -6,6 +6,7 @@ mod honest;
 mod liar;
 mod pair;
 mod pictures;
+mod together;
 mod walker;
 
 use avian3d::prelude::PhysicsLayer;
