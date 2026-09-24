@@ -8,7 +8,7 @@ use terrain::{LiquidKind, LiquidMesh};
 
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::interior::WmoRoom;
-use crate::wmo::WmoGroupNav;
+use crate::wmo::{WmoGroupNav, WmoRooms};
 
 /// A query landing this far outside the grid, in cells, still counts as on it.
 const GRID_EDGE_TOLERANCE: f32 = 1e-3;
@@ -27,6 +27,22 @@ pub struct WmoPool {
 }
 
 impl WmoPool {
+    /// Group `group`'s pool in a building placed by `transform`. The building's room owns it when
+    /// the building has portals or an area id; otherwise no subject is ever inside it.
+    pub(crate) fn of(
+        rooms: &WmoRooms,
+        group: usize,
+        instance: Entity,
+        transform: &Transform,
+    ) -> Self {
+        let owned = rooms.has_portals() || rooms.wmo_id != 0;
+        let room = WmoRoom {
+            instance,
+            group: group as u16,
+        };
+        Self::new(owned.then_some(room), transform, rooms.group_nav.get(group))
+    }
+
     /// The floor is the group box's lowest corner under the placement; with no box, none.
     pub(crate) fn new(
         owner: Option<WmoRoom>,
@@ -185,6 +201,12 @@ impl LiquidGrid {
         let cx = x.clamp(self.min[0], self.max[0]);
         let cy = y.clamp(self.min[1], self.max[1]);
         Some([cx, cy, self.surface_z_at(cx, cy).unwrap_or(self.fallback_z)])
+    }
+
+    /// The highest wet vertex, which a surface once answered from anywhere over its box.
+    #[cfg(test)]
+    pub(super) fn highest_wet_z(&self) -> f32 {
+        self.fallback_z
     }
 
     /// The surface height (WoW Z) at a WoW XY, or `None` where this liquid is not.

@@ -14,7 +14,6 @@ use super::weld::HullWelds;
 use super::{camera_layers, liquid_layers, walk_layers};
 use crate::CurrentMap;
 use crate::coords::{bevy_to_wow, placement_rotation, wmo_doodad_local, wow_to_bevy};
-use crate::interior::WmoRoom;
 use crate::liquid::{LiquidSource, WmoPool, wet_footprint};
 use crate::source::{MPQ_SOURCE, m2_url, wmo_url};
 use crate::stream::Window;
@@ -221,15 +220,10 @@ fn spawn_wmo_liquids(
             world_from_local: at.compute_affine(),
         })
         .id();
-    let owned = rooms.has_portals() || rooms.wmo_id != 0;
     let mut entities = vec![instance];
     for (gi, liquid) in rooms.group_liquids.iter().enumerate() {
         let Some(liquid) = liquid else { continue };
-        let room = WmoRoom {
-            instance,
-            group: gi as u16,
-        };
-        let pool = WmoPool::new(owned.then_some(room), at, rooms.group_nav.get(gi));
+        let pool = WmoPool::of(rooms, gi, instance, at);
         let grid = wet_footprint(liquid, at, LiquidSource::WmoGroup(pool));
         let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface(grid)));
         if let Some(collider) = liquid_collider(liquid, at) {

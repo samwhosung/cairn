@@ -6,6 +6,8 @@ mod foam;
 mod frames;
 mod interleave;
 mod query;
+#[cfg(test)]
+mod real_data;
 mod spatial;
 mod surface;
 

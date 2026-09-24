@@ -23,7 +23,6 @@ use super::query::{LiquidSource, WmoPool, wet_footprint};
 use super::{FoamPatch, LiquidClock, frames};
 use crate::Install;
 use crate::coords::wow_to_bevy;
-use crate::interior::WmoRoom;
 use crate::light::LightBuffer;
 use crate::portal::WmoGroupVis;
 use crate::wmo::WmoRooms;
@@ -107,7 +106,7 @@ impl LiquidPath {
 }
 
 /// Only a building's magma and slime of type 6 and 7 scroll; terrain magma never does.
-fn scrolls(nibble: u8) -> bool {
+pub(super) fn scrolls(nibble: u8) -> bool {
     matches!(nibble, 6 | 7)
 }
 
@@ -289,7 +288,6 @@ pub(crate) fn spawn_wmo_liquids(
     transform: Transform,
     instance: Entity,
 ) -> Vec<Entity> {
-    let owned = rooms.has_portals() || rooms.wmo_id != 0;
     let mut out = Vec::new();
     for (gi, lq) in rooms.group_liquids.iter().enumerate() {
         let Some(lq) = lq else { continue };
@@ -306,11 +304,7 @@ pub(crate) fn spawn_wmo_liquids(
                     .copied()
             })
             .flatten();
-        let room = WmoRoom {
-            instance,
-            group: gi as u16,
-        };
-        let pool = WmoPool::new(owned.then_some(room), &transform, nav);
+        let pool = WmoPool::of(rooms, gi, instance, &transform);
         let e = spawn_surface(
             commands,
             meshes,
@@ -321,7 +315,7 @@ pub(crate) fn spawn_wmo_liquids(
             LiquidSource::WmoGroup(pool),
         );
         commands.entity(e).insert(MeshTag(0));
-        if owned {
+        if pool.owner.is_some() {
             commands.entity(e).insert(WmoGroupVis {
                 instance,
                 groups: Arc::from([gi as u16].as_slice()),
