@@ -145,8 +145,8 @@ pub fn write_vanish(out: &mut Vec<u8>, slot: u16) {
 /// Appends a record and returns how many of its bytes it copied from `relay`.
 pub fn write_move(out: &mut Vec<u8>, slot: u16, relay: &Relay) -> usize {
     head(out, MOVE, slot);
-    out.extend_from_slice(relay.moved.bytes());
-    relay.moved.bytes().len()
+    out.extend_from_slice(&relay.moved);
+    relay.moved.len()
 }
 
 /// Appends a record and returns how many of its bytes it copied from `relay`.

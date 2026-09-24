@@ -2,7 +2,7 @@ use crate::message::write_name;
 use crate::reader::Reader;
 use crate::{Angle, Appearance, Error, Jump, Movement, Pos, Wrapped, flags};
 
-const MOVE_LEN: usize = Wrapped::ENCODED_LEN + 1;
+pub(crate) const MOVE_LEN: usize = Wrapped::ENCODED_LEN + 1;
 const STATE_MAX: usize = 4 + Wrapped::ENCODED_LEN + 1 + 1 + 4 + 16;
 
 /// How an entity moves, as a batch relays it: its [`Movement`] without the client's clock, the
@@ -128,7 +128,7 @@ impl<const N: usize> Body<N> {
 pub struct Relay {
     pos: Pos,
     state: State,
-    pub(crate) moved: Body<MOVE_LEN>,
+    pub(crate) moved: [u8; MOVE_LEN],
     pub(crate) stated: Body<STATE_MAX>,
 }
 
@@ -144,9 +144,10 @@ pub struct Changed {
 impl Relay {
     pub fn of(m: &Movement) -> Self {
         let state = State::of(m);
-        let mut moved = Body::default();
-        moved.put_pos(state.pos);
-        moved.put(&[state.facing.0]);
+        let mut moved = [state.facing.0; MOVE_LEN];
+        for (bytes, v) in moved.as_chunks_mut::<2>().0.iter_mut().zip(state.pos.0) {
+            *bytes = v.to_le_bytes();
+        }
         Self {
             pos: Pos::of(m.pos),
             state,
