@@ -284,3 +284,63 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
         "ten ticks behind it gets only the stop and the start"
     );
 }
+
+#[test]
+fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
+    let xs = [0.0, 150.0, 20.0, 40.0, 60.0, 80.0, 160.0];
+    let spawns = xs.iter().map(|&x| spawn(x, 0.0)).collect();
+    let rules = Rules {
+        check: false,
+        ..Rules::default()
+    };
+    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let shared = Shared::new();
+    let (outbox, rx) = Outbox::channel();
+    shared.hold_outbox(0, outbox);
+    let mut client = Client::new(rx);
+    let pool = pool(2);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
+    run((0..xs.len() as u32).map(join).collect());
+    client.welcome();
+    assert_eq!(
+        client.next_batch(0),
+        [
+            Got::Appear(2),
+            Got::Appear(3),
+            Got::Appear(4),
+            Got::Appear(5)
+        ]
+    );
+    for t in 1..=10u32 {
+        let time = t * 50;
+        let inputs = if t == 1 {
+            vec![
+                claim(2, 1, time, 0, running(time, [200.0, 0.0, 0.0])),
+                claim(1, 1, time, 0, running(time, [90.0, 0.0, 0.0])),
+            ]
+        } else {
+            Vec::new()
+        };
+        run(inputs);
+        client.next_batch(t);
+    }
+    let mut viewed: Vec<u32> = client.slots.values().copied().collect();
+    viewed.sort_unstable();
+    assert_eq!(
+        viewed,
+        [1, 3, 4, 5],
+        "the one that came, and all that stayed"
+    );
+    assert!(
+        client.slots.keys().all(|&slot| slot < 4),
+        "the one that came took the slot of the one that left: {:?}",
+        client.slots
+    );
+}

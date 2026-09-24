@@ -167,7 +167,12 @@ impl Built {
 #[derive(Default)]
 pub struct Scratch {
     near: Vec<u32>,
+    kept: Vec<Seen>,
+    came: Vec<u32>,
     seen: Vec<Seen>,
+    near_at: Vec<u32>,
+    kept_at: Vec<u32>,
+    recheck: u32,
 }
 
 pub struct Scene<'a> {
@@ -219,8 +224,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
             &mut s.near,
         );
         s.near.retain(|&n| n != o.id);
-        s.near.sort_unstable();
-        pass.recheck(&o.seen, &s.near, &mut s.seen);
+        pass.recheck(&o.seen, s);
         std::mem::swap(&mut o.seen, &mut s.seen);
         o.fresh = false;
     } else {
@@ -251,42 +255,51 @@ impl Pass<'_> {
         (self.me[0] - h.xy[0]).powi(2) + (self.me[1] - h.xy[1]).powi(2)
     }
 
-    fn recheck(&mut self, seen: &[Seen], near: &[u32], next: &mut Vec<Seen>) {
-        debug_assert!(seen.is_sorted_by_key(|e| e.id) && near.is_sorted());
-        next.clear();
-        let r2 = self.view.radius * self.view.radius;
-        let (mut i, mut j) = (0, 0);
-        loop {
-            match (seen.get(i), near.get(j)) {
-                (Some(&e), Some(&n)) if e.id == n => {
-                    let mut e = e;
-                    self.refresh(&mut e);
-                    next.push(e);
-                    i += 1;
-                    j += 1;
-                }
-                (Some(&e), n) if n.is_none_or(|&n| e.id < n) => {
-                    self.vanish(e.slot);
-                    i += 1;
-                }
-                (_, Some(&n)) => {
-                    if self.dist2(&self.relays.hot[n as usize]) <= r2 {
-                        if let Some(slot) = self.slots.take() {
-                            self.appear(n, slot);
-                            next.push(Seen {
-                                id: n,
-                                sent_tick: self.tick,
-                                slot,
-                            });
-                        } else {
-                            self.built.appears_without_slot += 1;
-                        }
-                    }
-                    j += 1;
-                }
-                _ => break,
+    fn recheck(&mut self, seen: &[Seen], s: &mut Scratch) {
+        debug_assert!(seen.is_sorted_by_key(|e| e.id));
+        let entities = self.relays.hot.len();
+        s.near_at.resize(entities, 0);
+        s.kept_at.resize(entities, 0);
+        s.recheck += 1;
+        let r = s.recheck;
+        for &n in &s.near {
+            s.near_at[n as usize] = r;
+        }
+        s.kept.clear();
+        for &e in seen {
+            if s.near_at[e.id as usize] == r {
+                s.kept_at[e.id as usize] = r;
+                let mut e = e;
+                self.refresh(&mut e);
+                s.kept.push(e);
+            } else {
+                self.vanish(e.slot);
             }
         }
+        let r2 = self.view.radius * self.view.radius;
+        s.came.clear();
+        s.came.extend(s.near.iter().copied().filter(|&n| {
+            s.kept_at[n as usize] != r && self.dist2(&self.relays.hot[n as usize]) <= r2
+        }));
+        s.came.sort_unstable();
+        s.seen.clear();
+        let mut kept = s.kept.iter().copied().peekable();
+        for &n in &s.came {
+            let Some(slot) = self.slots.take() else {
+                self.built.appears_without_slot += 1;
+                continue;
+            };
+            self.appear(n, slot);
+            while let Some(e) = kept.next_if(|e| e.id < n) {
+                s.seen.push(e);
+            }
+            s.seen.push(Seen {
+                id: n,
+                sent_tick: self.tick,
+                slot,
+            });
+        }
+        s.seen.extend(kept);
     }
 
     fn appear(&mut self, id: u32, slot: u16) {
