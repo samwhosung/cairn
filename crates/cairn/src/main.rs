@@ -84,6 +84,7 @@ fn main() -> AppExit {
                 },
                 look: character_look(args.look),
             },
+            sound_plugin(args.mute),
         )),
         args::Mode::Shot(out) => {
             app.add_plugins((
@@ -113,6 +114,22 @@ fn main() -> AppExit {
         .insert_resource(world::FullScreenGlow(args.glow))
         .add_plugins((world::LoadersPlugin, world::WorldPlugin))
         .run()
+}
+
+/// The window's sound, on the default output device, or rendered and dropped when muted.
+fn sound_plugin(mute: bool) -> sound::SoundPlugin {
+    sound::SoundPlugin {
+        output: if mute {
+            sound::Output::Offline {
+                sample_rate: sound::OFFLINE_SAMPLE_RATE,
+            }
+        } else {
+            sound::Output::Device
+        },
+        mix_tap: None,
+        record: None,
+        log: None,
+    }
 }
 
 fn character_look(look: args::Look) -> CharacterLook {

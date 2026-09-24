@@ -11,6 +11,7 @@ mod controller;
 mod fixture;
 mod flags;
 mod gait;
+mod hearing;
 mod input;
 mod mover;
 #[cfg(test)]
@@ -86,6 +87,7 @@ impl Plugin for PlayerPlugin {
                     switch_mode,
                     controller::control.run_if(resource_equals(Mode::Walk)),
                     fly.run_if(resource_equals(Mode::Fly)),
+                    hearing::publish_body,
                 )
                     .chain()
                     .before(WorldSystems)

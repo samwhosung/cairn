@@ -8,8 +8,9 @@ use crate::fixture::Fixture;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [LOOK]
-         walk the install at $WOW_DATA, starting where the camera looks
+usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
+         walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
+         --mute keeps the window silent
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] --out FILE.png
          render one frame without a window, once everything in it has loaded and the
          world has run 2.5 seconds
@@ -80,6 +81,7 @@ pub struct Args {
     pub mode: Mode,
     pub start_flying: bool,
     pub glow: bool,
+    pub mute: bool,
     pub display: Option<Fixture>,
     pub look: Look,
 }
@@ -133,6 +135,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut given = BTreeMap::new();
     let mut start_flying = false;
     let mut glow = true;
+    let mut mute = false;
     while let Some(arg) = args.next() {
         if arg == "--fly" && !start_flying {
             start_flying = true;
@@ -140,6 +143,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         }
         if arg == "--no-glow" && glow {
             glow = false;
+            continue;
+        }
+        if arg == "--mute" && !mute {
+            mute = true;
             continue;
         }
         let flag = arg
@@ -171,6 +178,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     if shot && start_flying {
         return Err("--fly is for the window".into());
     }
+    if shot && mute {
+        return Err("--mute is for the window".into());
+    }
     if let Some(path) = &out
         && !path
             .extension()
@@ -188,6 +198,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         mode: out.map_or(Mode::Window, Mode::Shot),
         start_flying,
         glow,
+        mute,
         display,
         look,
     })
@@ -412,6 +423,14 @@ mod tests {
         assert!(args.start_flying && args.mode == Mode::Window);
         assert!(parsed("--fly --fly").is_err());
         assert!(parsed("shot --fly --out a.png").is_err());
+    }
+
+    #[test]
+    fn the_window_can_be_muted() {
+        assert!(!parsed("").expect("parses").mute);
+        assert!(parsed("--mute --fly").expect("parses").mute);
+        assert!(parsed("--mute --mute").is_err());
+        assert!(parsed("shot --mute --out a.png").is_err());
     }
 
     #[test]

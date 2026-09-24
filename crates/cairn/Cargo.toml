@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true
+sound = { path = "../sound" }
 world = { path = "../world" }
 
 [lints]
