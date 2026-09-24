@@ -66,7 +66,9 @@ fn main() -> AppExit {
             eprintln!("cairn: {e}");
             return AppExit::from_code(2);
         }
-        app.insert_resource(tables);
+        let mut rng = world::rig::AnimRng::default();
+        rng.seed_for_session(false);
+        app.insert_resource(tables).insert_resource(rng);
     }
     world::register_source(&mut app, &install);
     match args.mode {
