@@ -19,6 +19,7 @@ pub enum Binding {
     Jump,
     ToggleAutorun,
     ToggleRun,
+    SitOrStand,
 }
 
 impl Binding {
@@ -34,6 +35,7 @@ impl Binding {
             Self::Jump => &[KeyCode::Space, KeyCode::Numpad0],
             Self::ToggleAutorun => &[KeyCode::NumLock],
             Self::ToggleRun => &[KeyCode::NumpadDivide],
+            Self::SitOrStand => &[KeyCode::KeyX],
         }
     }
 

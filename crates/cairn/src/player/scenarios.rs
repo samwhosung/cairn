@@ -13,7 +13,7 @@ use world::collision::CollisionLayer;
 use world::unit::CharacterLook;
 
 use super::PlayerBody;
-use super::flags::{FALLING, SWIMMING};
+use super::flags::{FALLING, FORWARD, SWIMMING};
 use super::state::{
     CAPSULE_HEIGHT, CAPSULE_RADIUS, GRAVITY, JUMP_SPEED, RUN_SPEED, SKIN_WIDTH, TERMINAL_VELOCITY,
 };
@@ -385,6 +385,28 @@ fn a_tauren_and_a_gnome_are_drawn_and_collide_at_their_size() {
         assert!((drawn - Vec3::splat(scale)).abs().max_element() < 1e-6);
         assert!((h - height).abs() < 1e-5, "{h} against {height}");
     }
+}
+
+/// X sits the body and moving stands it; a sit asked for on the run is refused.
+#[test]
+fn x_sits_the_body_down_and_walking_stands_it_up() {
+    let Some(mut w) = Walker::on_ground(MEADOW, 0.0, 60.0) else {
+        return;
+    };
+    w.tap(KeyCode::KeyX);
+    w.run(30);
+    assert_eq!(w.player().stand_state, 1, "seated");
+    w.press(KeyCode::KeyW);
+    let moved = w.run(1)[0];
+    assert_eq!(w.player().stand_state, 0, "the first step stands it");
+    assert!(moved.flags & FORWARD != 0);
+    w.tap(KeyCode::KeyX);
+    assert_eq!(w.player().stand_state, 0, "no sitting on the run");
+    w.release(KeyCode::KeyW);
+    w.run(2);
+    w.tap(KeyCode::KeyX);
+    w.tap(KeyCode::KeyX);
+    assert_eq!(w.player().stand_state, 0, "X again stands it");
 }
 
 /// Walks `look` from Crystal Lake's shore into the water until it swims: the height it collides

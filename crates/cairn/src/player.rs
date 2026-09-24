@@ -14,6 +14,7 @@ mod gait;
 mod hearing;
 mod input;
 mod mover;
+mod posture;
 #[cfg(test)]
 mod scenarios;
 mod state;

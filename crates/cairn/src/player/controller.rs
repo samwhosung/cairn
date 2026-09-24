@@ -18,7 +18,7 @@ use super::state::{
     CAPSULE_HEIGHT, CAPSULE_RADIUS, MOUSELOOK_PITCH_CLAMP, Player, RUN_BACK_RATIO, RUN_SPEED,
     TURN_RATE, TURN_RATE_MOVING, WALK_RATIO,
 };
-use super::{PlayerBody, PlayerCapsule, mover, swim};
+use super::{PlayerBody, PlayerCapsule, mover, posture, swim};
 
 /// Wheel pixels per notch, for trackpads.
 const PIXELS_PER_NOTCH: f32 = 20.0;
@@ -156,6 +156,8 @@ pub fn control(
     let (move_fwd, move_right) = (flat(face_rot * Vec3::NEG_Z), flat(face_rot * Vec3::X));
     let dir = move_fwd * axes.fwd.signum() as f32 + move_right * axes.side.signum() as f32;
     let moving = dir != Vec3::ZERO;
+    let live_flags = player.move_flags;
+    posture::update(&mut player, keys, moving, turn_delta != 0.0, live_flags);
     let speed = current_speed(
         if axes.fwd < 0 {
             BACKWARD
@@ -279,7 +281,7 @@ pub fn control(
             },
             vertical_speed: player.vel_y,
             flags: anim_flags,
-            stand_state: 0,
+            stand_state: player.stand_state,
         };
         alpha.alpha = rig.self_fade_alpha;
         if let Some(mut twist) = twist {
