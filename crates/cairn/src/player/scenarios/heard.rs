@@ -1,9 +1,7 @@
-//! The walk from Northshire Abbey through the vineyard and Goldshire's inn into Crystal Lake, heard:
-//! the window's plugins drawn headless, the body steered along the route by scripted keys at a
-//! fixed step, and the sound rendered offline. Into the directory `CAIRN_SOUND_WALK` names go the
-//! mix as a WAV, every play as a JSON line, and every frame's answers the sound was given (where
-//! the listener stands, the area and building, the eye's liquid, the event keys fired, and for each
-//! sounding body its pose, room, water and surface) as a JSON line each.
+//! The walk from Northshire Abbey through the vineyard and Goldshire's inn into Crystal Lake,
+//! heard: the window's plugins headless and the sound rendered offline, with W held while the
+//! heading and the swim pitch are written to the player. Into the directory `CAIRN_SOUND_WALK`
+//! names go the mix, every play, and every frame's world answers to the sound, a JSON line each.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -39,60 +37,76 @@ use crate::view::Pose;
 const STEP: Duration = Duration::from_nanos(16_666_667);
 const SIZE: UVec2 = UVec2::new(1280, 720);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
-/// The liquid loops' reach, which the frame's liquid answer is asked at.
-const LIQUID_REACH: f32 = 9.0;
+const ABBEY_NAVE_FLOOR: [f32; 3] = [-8908.6, -190.5, 82.5];
+const STALL_FRAMES: usize = 90;
+const PROGRESS_YD: f32 = 0.2;
+const DETOUR_FRAMES: usize = 45;
+const DETOUR_DEG: f32 = 70.0;
+const MAX_DETOURS: usize = 12;
 
-/// Where the walk begins: the abbey's nave, on its floor.
-const START: [f32; 3] = [-8908.6, -190.5, 82.5];
+struct Waypoint {
+    at: [f32; 2],
+    reach: f32,
+    pause_secs: f32,
+}
 
-/// The route in WoW `(x, y)`, each point with how near counts as reached and how long to stand
-/// there, seconds.
-const ROUTE: [([f32; 2], f32, f32); 42] = [
-    ([-8911.0, -170.0], 1.0, 0.0),
-    ([-8912.0, -150.0], 1.0, 0.0),
-    ([-8913.0, -141.0], 1.0, 0.0),
-    ([-8913.5, -134.0], 1.0, 0.0),
-    ([-8922.0, -127.0], 1.5, 0.0),
-    ([-8950.0, -120.0], 2.0, 0.0),
-    ([-8962.0, -160.0], 2.0, 0.0),
-    ([-8970.0, -250.0], 2.0, 0.0),
-    ([-8978.0, -288.5], 1.5, 0.0),
-    ([-8995.0, -310.5], 1.5, 0.0),
-    ([-9012.0, -320.0], 2.0, 0.0),
-    ([-8995.0, -310.5], 1.5, 0.0),
-    ([-8978.0, -288.5], 1.5, 0.0),
-    ([-8985.0, -200.0], 2.0, 0.0),
-    ([-8988.0, -100.0], 2.0, 0.0),
-    ([-9005.0, -92.0], 2.0, 0.0),
-    ([-9040.0, -95.0], 2.0, 0.0),
-    ([-9050.0, -70.0], 2.0, 0.0),
-    ([-9050.0, -43.0], 1.5, 0.0),
-    ([-9062.0, -43.0], 1.5, 0.0),
-    ([-9075.0, -45.0], 1.5, 0.0),
-    ([-9085.0, -50.0], 2.0, 0.0),
-    ([-9116.0, -71.0], 2.0, 0.0),
-    ([-9158.0, -102.0], 2.0, 0.0),
-    ([-9179.1, -116.0], 2.0, 0.0),
-    ([-9234.7, -105.6], 2.0, 0.0),
-    ([-9276.3, -70.9], 2.0, 0.0),
-    ([-9331.9, -53.5], 2.0, 0.0),
-    ([-9373.6, -15.3], 2.0, 0.0),
-    ([-9415.2, 33.3], 2.0, 0.0),
-    ([-9443.0, 61.1], 2.0, 0.0),
-    ([-9455.0, 50.0], 1.0, 0.0),
-    ([-9459.5, 44.5], 1.0, 0.0),
-    ([-9463.0, 36.0], 1.0, 4.0),
-    ([-9459.5, 44.5], 1.0, 0.0),
-    ([-9452.0, 52.0], 1.0, 0.0),
-    ([-9440.0, 30.0], 2.0, 0.0),
-    ([-9440.0, -40.0], 2.0, 0.0),
-    ([-9440.0, -75.0], 2.0, 0.0),
-    ([-9440.0, -110.0], 2.0, 0.0),
-    ([-9440.0, -140.0], 2.0, 0.0),
-    ([-9440.0, -150.0], 2.0, 0.0),
+const fn to(x: f32, y: f32, reach: f32) -> Waypoint {
+    Waypoint {
+        at: [x, y],
+        reach,
+        pause_secs: 0.0,
+    }
+}
+
+const ROUTE: [Waypoint; 42] = [
+    to(-8911.0, -170.0, 1.0),
+    to(-8912.0, -150.0, 1.0),
+    to(-8913.0, -141.0, 1.0),
+    to(-8913.5, -134.0, 1.0),
+    to(-8922.0, -127.0, 1.5),
+    to(-8950.0, -120.0, 2.0),
+    to(-8962.0, -160.0, 2.0),
+    to(-8970.0, -250.0, 2.0),
+    to(-8978.0, -288.5, 1.5),
+    to(-8995.0, -310.5, 1.5),
+    to(-9012.0, -320.0, 2.0),
+    to(-8995.0, -310.5, 1.5),
+    to(-8978.0, -288.5, 1.5),
+    to(-8985.0, -200.0, 2.0),
+    to(-8988.0, -100.0, 2.0),
+    to(-9005.0, -92.0, 2.0),
+    to(-9040.0, -95.0, 2.0),
+    to(-9050.0, -70.0, 2.0),
+    to(-9050.0, -43.0, 1.5),
+    to(-9062.0, -43.0, 1.5),
+    to(-9075.0, -45.0, 1.5),
+    to(-9085.0, -50.0, 2.0),
+    to(-9116.0, -71.0, 2.0),
+    to(-9158.0, -102.0, 2.0),
+    to(-9179.1, -116.0, 2.0),
+    to(-9234.7, -105.6, 2.0),
+    to(-9276.3, -70.9, 2.0),
+    to(-9331.9, -53.5, 2.0),
+    to(-9373.6, -15.3, 2.0),
+    to(-9415.2, 33.3, 2.0),
+    to(-9443.0, 61.1, 2.0),
+    to(-9455.0, 50.0, 1.0),
+    to(-9459.5, 44.5, 1.0),
+    Waypoint {
+        at: [-9463.0, 36.0],
+        reach: 1.0,
+        pause_secs: 4.0,
+    },
+    to(-9459.5, 44.5, 1.0),
+    to(-9452.0, 52.0, 1.0),
+    to(-9440.0, 30.0, 2.0),
+    to(-9440.0, -40.0, 2.0),
+    to(-9440.0, -75.0, 2.0),
+    to(-9440.0, -110.0, 2.0),
+    to(-9440.0, -140.0, 2.0),
+    to(-9440.0, -150.0, 2.0),
 ];
 
-/// The frame's answers, one JSON line a frame.
 #[derive(Resource)]
 struct Tape {
     out: std::io::BufWriter<std::fs::File>,
@@ -136,10 +150,8 @@ type Place<'a> = (
     Res<'a, TimeOfDay>,
 );
 
-/// One sounding body as the sound saw it: where its feet were last frame and are now, what it
-/// is, its room, the water over both, and the surface under the first.
 fn body_line(
-    (entity, transform, global, body, room, listening): (
+    (entity, feet_now, feet_last_frame, body, room, listening): (
         Entity,
         Ref<'_, Transform>,
         &GlobalTransform,
@@ -150,11 +162,11 @@ fn body_line(
     liquids: &Liquids<'_, '_>,
     surface: &SurfaceUnderfoot<'_, '_>,
 ) -> String {
-    let feet = global.translation();
+    let last_frame = feet_last_frame.translation();
     let claim = claim_of(room);
-    let water_global = liquids.water_surface_at(bevy_to_wow(feet), claim);
-    let water_local = liquids.water_surface_at(bevy_to_wow(transform.translation), claim);
-    let under = match surface.at(room.and_then(UnitRoom::room), feet) {
+    let water_last_frame = liquids.water_surface_at(bevy_to_wow(last_frame), claim);
+    let water_now = liquids.water_surface_at(bevy_to_wow(feet_now.translation), claim);
+    let under = match surface.at(room.and_then(UnitRoom::room), last_frame) {
         Some(Underfoot::Terrain(t)) => format!(r#"{{"t":{t}}}"#),
         Some(Underfoot::GroundEffect(g)) => format!(r#"{{"g":{g}}}"#),
         None => "null".to_owned(),
@@ -165,18 +177,18 @@ fn body_line(
         Some(Some(r)) => format!("[{},{}]", r.instance.to_bits(), r.group),
     };
     format!(
-        r#"{{"e":{},"g":{},"l":{},"moved":{},"new":{},"display":{},"h":{},"wade":{},"room":{},"wg":{},"wl":{},"under":{},"me":{}}}"#,
+        r#"{{"e":{},"feet_last_frame":{},"feet_now":{},"moved":{},"new":{},"display":{},"h":{},"wade":{},"room":{},"water_last_frame":{},"water_now":{},"under":{},"me":{}}}"#,
         entity.to_bits(),
-        vec(feet),
-        vec(transform.translation),
-        transform.is_changed(),
+        vec(last_frame),
+        vec(feet_now.translation),
+        feet_now.is_changed(),
         body.is_changed(),
         body.display,
         body.collision_height,
         body.wade_max,
         room,
-        opt(water_global, |w| w.to_string()),
-        opt(water_local, |w| w.to_string()),
+        opt(water_last_frame, |w| w.to_string()),
+        opt(water_now, |w| w.to_string()),
         under,
         listening,
     )
@@ -248,7 +260,7 @@ fn record(
     line.push_str(&lines.join(","));
     line.push(']');
     let liquid = listening_at.map(|at| {
-        let near = liquids.nearest_per_class(bevy_to_wow(at), LIQUID_REACH);
+        let near = liquids.nearest_per_class(bevy_to_wow(at), sound::LIQUID_LOOP_REACH);
         let near: Vec<String> = near
             .iter()
             .map(|n| {
@@ -304,7 +316,7 @@ impl Walk {
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
-                    pose: Pose::orbit(Vec3::from_array(START), 90.0, 12.0, 16.0),
+                    pose: Pose::orbit(Vec3::from_array(ABBEY_NAVE_FLOOR), 90.0, 12.0, 16.0),
                     mode: Mode::Walk,
                     look: CharacterLook::naked(1, 0),
                 },
@@ -400,40 +412,50 @@ impl Walk {
         }
     }
 
-    /// Steers at each point in turn; a body that stops closing on its point turns aside for a
-    /// moment, alternating sides, and tries again.
     fn walk(&mut self) {
         self.key(KeyCode::KeyW, ButtonState::Pressed);
-        for (n, &(point, near, pause)) in ROUTE.iter().enumerate() {
+        for (
+            n,
+            &Waypoint {
+                at: point,
+                reach,
+                pause_secs,
+            },
+        ) in ROUTE.iter().enumerate()
+        {
             let (mut best, mut since, mut detours) = (f32::MAX, 0usize, 0usize);
             loop {
                 let [x, y, z] = self.wow();
                 let dist = (point[0] - x).hypot(point[1] - y);
-                if dist < near {
+                if dist < reach {
                     eprintln!("point {n} ({point:?}) reached at ({x:.1}, {y:.1}, {z:.1})");
-                    if pause > 0.0 {
+                    if pause_secs > 0.0 {
                         self.key(KeyCode::KeyW, ButtonState::Released);
-                        self.run((pause / STEP.as_secs_f32()).round() as usize);
+                        self.run((pause_secs / STEP.as_secs_f32()).round() as usize);
                         self.key(KeyCode::KeyW, ButtonState::Pressed);
                     }
                     break;
                 }
-                if dist < best - 0.2 {
+                if dist < best - PROGRESS_YD {
                     (best, since) = (dist, 0);
                 } else {
                     since += 1;
                 }
                 let heading = (point[1] - y).atan2(point[0] - x).to_degrees();
-                if since > 90 {
+                if since > STALL_FRAMES {
                     detours += 1;
                     assert!(
-                        detours <= 12,
+                        detours <= MAX_DETOURS,
                         "stuck short of point {n} ({point:?}) at ({x:.1}, {y:.1}, {z:.1})"
                     );
                     eprintln!("point {n}: stalled at ({x:.1}, {y:.1}, {z:.1}), stepping aside");
-                    let side = if detours % 2 == 1 { 70.0 } else { -70.0 };
+                    let side = if detours % 2 == 1 {
+                        DETOUR_DEG
+                    } else {
+                        -DETOUR_DEG
+                    };
                     self.aim(heading + side);
-                    self.run(45);
+                    self.run(DETOUR_FRAMES);
                     (best, since) = (f32::MAX, 0);
                     continue;
                 }
@@ -444,9 +466,7 @@ impl Walk {
         self.key(KeyCode::KeyW, ButtonState::Released);
     }
 
-    /// From the surface, the eye zoomed into the head: down, level, and back up, so the eye goes
-    /// under and comes out. Whether it went under.
-    fn dive(&mut self) -> bool {
+    fn dive_went_under(&mut self) -> bool {
         {
             let mut control = self.app.world_mut().resource_mut::<CameraControl>();
             control.distance = 0.0;
@@ -475,7 +495,7 @@ fn the_walk_from_the_abbey_into_crystal_lake_is_heard() {
     };
     let begun = walk.app.world().resource::<Time>().elapsed_secs();
     walk.walk();
-    let under = walk.dive();
+    let under = walk.dive_went_under();
     walk.run(300);
     let t = walk.app.world().resource::<Time>().elapsed_secs() - begun;
     walk.app

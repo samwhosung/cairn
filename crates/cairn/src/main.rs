@@ -116,7 +116,6 @@ fn main() -> AppExit {
         .run()
 }
 
-/// The window's sound, on the default output device, or rendered and dropped when muted.
 fn sound_plugin(mute: bool) -> sound::SoundPlugin {
     sound::SoundPlugin {
         output: if mute {

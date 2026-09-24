@@ -1,6 +1,3 @@
-//! What the world's sound needs of the player: where the body stands, what it is, and where its
-//! head is and faces.
-
 use bevy::prelude::*;
 use sound::{ListenerCharacter, Listening, SoundBody};
 use world::interior::Viewer;
@@ -12,8 +9,7 @@ use super::camera::{CameraPivot, model_pivot_height};
 use super::state::Player;
 use super::swim::swim_enter_depth;
 
-/// The head's height over the feet before the body's model has loaded.
-const HEAD_FALLBACK: f32 = 1.8;
+const HEAD_HEIGHT_UNLOADED: f32 = 1.8;
 
 type Body<'a> = (
     Entity,
@@ -23,8 +19,6 @@ type Body<'a> = (
     Has<UnitBody>,
 );
 
-/// Walking, the body and its head; flying, neither, so the world is placed and heard from the
-/// camera.
 #[allow(clippy::too_many_arguments)]
 pub fn publish_body(
     mut commands: Commands<'_, '_>,
@@ -47,7 +41,7 @@ pub fn publish_body(
         });
     }
     if let Some(mut listener) = listener {
-        let head = pivot.map_or(HEAD_FALLBACK, |p| {
+        let head = pivot.map_or(HEAD_HEIGHT_UNLOADED, |p| {
             model_pivot_height(*p, transform.scale.x, false)
         });
         listener.set_if_neq(ListenerCharacter(
