@@ -9,6 +9,7 @@ use model::WmoPortalInfo;
 use crate::adt::AdtTile;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::ground::terrain_wow_z_under;
+use crate::room::{CameraRoom, RoomFog, select_room_fog};
 use crate::stream::Streamer;
 use crate::view::WorldCamera;
 use crate::wmo::{Triangle, WmoGroupNav, WmoModel};
@@ -87,6 +88,7 @@ pub(crate) fn compute_wmo_pvs(
     streamer: Res<'_, Streamer>,
     adts: Res<'_, Assets<AdtTile>>,
     mut instances: Query<'_, '_, &mut WmoPortalInstance>,
+    mut room: ResMut<'_, CameraRoom>,
 ) {
     let Ok((cam, projection)) = camera.single() else {
         return;
@@ -94,6 +96,7 @@ pub(crate) fn compute_wmo_pvs(
     let clip_from_world = projection.get_clip_from_view() * cam.to_matrix().inverse();
     let eye_world = cam.translation();
     let terrain = terrain_wow_z_under(&streamer, &adts, eye_world);
+    let (mut found, mut indoors) = (CameraRoom::default(), false);
     for mut inst in &mut instances {
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
@@ -124,7 +127,28 @@ pub(crate) fn compute_wmo_pvs(
         if inst.interior_fog != pvs.interior_fog {
             inst.interior_fog = pvs.interior_fog;
         }
+        if !indoors && pvs.seeds.indoors(&model.group_nav) {
+            indoors = true;
+            found = CameraRoom {
+                fog: room_fog(model, pvs.seeds, eye_local),
+            };
+        }
     }
+    if *room != found {
+        *room = found;
+    }
+}
+
+fn truly_interior(nav: &WmoGroupNav) -> bool {
+    nav.flags & (EXTERIOR | EXTERIOR_LIT) == 0
+}
+
+fn room_fog(model: &WmoModel, seeds: DownRaySeeds, eye_local: [f32; 3]) -> Option<RoomFog> {
+    [seeds.in_group, seeds.across]
+        .into_iter()
+        .flatten()
+        .find_map(|g| model.group_nav.get(g).filter(|n| truly_interior(n)))
+        .and_then(|n| select_room_fog(&model.fogs, n.fog_indices, eye_local))
 }
 
 fn terrain_z_local(local_from_world: &Affine3A, eye_world: Vec3, terrain_wow_z: f32) -> f32 {
@@ -136,6 +160,7 @@ fn terrain_z_local(local_from_world: &Affine3A, eye_world: Vec3, terrain_wow_z: 
 struct GroupPvs {
     visible: Vec<bool>,
     interior_fog: Vec<bool>,
+    seeds: DownRaySeeds,
 }
 
 struct Step {
@@ -180,7 +205,7 @@ impl Flood<'_> {
                 continue;
             }
             self.visible[g] = true;
-            let chain_on = step.interior_chain && nav[g].flags & (EXTERIOR | EXTERIOR_LIT) == 0;
+            let chain_on = step.interior_chain && truly_interior(&nav[g]);
             self.interior_fog[g] |= chain_on;
             if step.depth >= DEPTH_CAP {
                 continue;
@@ -298,6 +323,7 @@ fn compute_pvs(
     GroupPvs {
         visible: flood.visible,
         interior_fog: flood.interior_fog,
+        seeds,
     }
 }
 

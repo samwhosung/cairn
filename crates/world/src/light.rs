@@ -59,6 +59,8 @@ pub struct SceneLight {
     /// Yards; negative in a storm, which fogs the camera's own spot.
     pub fog_start: f32,
     pub fog_end: f32,
+    /// The fog of a building's rooms, crossfaded toward the room the camera is in.
+    pub room_fog: Fog,
     /// The sky dome's colours, zenith first.
     pub sky: [[f32; 3]; 5],
     /// How strongly dawn and dusk warp the dome, `0..=1`.
@@ -69,6 +71,14 @@ pub struct SceneLight {
     pub night_glow: f32,
     /// The full-screen glow's weight, a byte fraction.
     pub glow: f32,
+}
+
+/// A fog's colour, and where it starts and is full, in yards.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Fog {
+    pub color: [f32; 3],
+    pub start: f32,
+    pub end: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
@@ -158,8 +168,8 @@ pub(crate) fn rows(light: &SceneLight) -> [[f32; 4]; HEADER_ROWS] {
         rows[GRADE][1 + ch] = sun[ch].w;
     }
     rows[GRADE][0] = light.night_glow;
-    rows[WMO_FOG_COLOR] = rgb(light.fog_color, ON);
-    rows[WMO_FOG_PARAMS] = [light.fog_start, light.fog_end, 0.0, 0.0];
+    rows[WMO_FOG_COLOR] = rgb(light.room_fog.color, ON);
+    rows[WMO_FOG_PARAMS] = [light.room_fog.start, light.room_fog.end, 0.0, 0.0];
     rows
 }
 
@@ -247,6 +257,11 @@ mod tests {
             fog_color: [0.3, 0.4, 0.5],
             fog_start: 87.5,
             fog_end: 350.0,
+            room_fog: Fog {
+                color: [0.6, 0.5, 0.4],
+                start: 20.0,
+                end: 80.0,
+            },
             night_glow: 0.25,
             ..SceneLight::default()
         };
@@ -259,8 +274,8 @@ mod tests {
         assert_eq!(rows[5], [87.5, 350.0, 0.0, 350.0]);
         assert_eq!([rows[6][3], rows[7][3], rows[8][3]], [0.1, 0.2, 0.3]);
         assert_eq!(rows[17][0], 0.25);
-        assert_eq!(rows[18], rows[4]);
-        assert_eq!(rows[19], [87.5, 350.0, 0.0, 0.0]);
+        assert_eq!(rows[18], [0.6, 0.5, 0.4, 1.0]);
+        assert_eq!(rows[19], [20.0, 80.0, 0.0, 0.0]);
         assert!(rows[13..17].iter().flatten().all(|&v| v == 0.0));
         assert_eq!(rows[20], [0.0; 4]);
     }

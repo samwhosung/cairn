@@ -5,7 +5,7 @@ use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::reflect::TypePath;
 use model::{
-    WmoDoodad, WmoDoodadSet, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef,
+    WmoDoodad, WmoDoodadSet, WmoFog, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef,
     accumulate_wmo_group_camera_only_collision, accumulate_wmo_group_collision, parse_wmo_lights,
     parse_wmo_root, wmo_group_doodad_refs, wmo_group_header, wmo_group_light_refs,
     wmo_group_submeshes,
@@ -41,6 +41,8 @@ pub struct WmoModel {
     pub lights: Vec<WmoLight>,
     /// Per group: the lights of [`Self::lights`] that light its doodads.
     pub group_light_refs: Vec<Vec<u16>>,
+    /// The fogs its rooms ask for; the first is the building's own.
+    pub fogs: Vec<WmoFog>,
 }
 
 /// A group's flags, its box from the root, and its slice of the portal refs.
@@ -51,6 +53,8 @@ pub struct WmoGroupNav {
     pub bbox_max: [f32; 3],
     pub ref_start: u16,
     pub ref_count: u16,
+    /// The fogs of [`WmoModel::fogs`] that may fog the room.
+    pub fog_indices: [u8; 4],
 }
 
 /// How a WMO's doodad is lit.
@@ -197,6 +201,7 @@ impl AssetLoader for WmoLoader {
                     bbox_max,
                     ref_start: 0,
                     ref_count: 0,
+                    fog_indices: [0; 4],
                 }
             })
             .collect();
@@ -216,6 +221,7 @@ impl AssetLoader for WmoLoader {
                 nav.flags = h.flags;
                 nav.ref_start = h.portal_ref_start;
                 nav.ref_count = h.portal_ref_count;
+                nav.fog_indices = h.fog_indices;
             }
             let (mut pos, mut idx) = (Vec::new(), Vec::new());
             accumulate_wmo_group_collision(&gbytes, &mut pos, &mut idx);
@@ -255,6 +261,7 @@ impl AssetLoader for WmoLoader {
             doodad_groups,
             lights: parse_wmo_lights(&bytes),
             group_light_refs,
+            fogs: root.fogs().to_vec(),
         })
     }
 

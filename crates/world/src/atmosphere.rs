@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use light::{Atmosphere, LightCatalog, Submersion, daynight};
 
 use crate::coords::{bevy_to_wow, wow_to_bevy};
-use crate::light::SceneLight;
+use crate::light::{Fog, SceneLight};
+use crate::room::{CameraRoom, RoomCrossfade};
 use crate::view::{FARCLIP, WorldCamera};
 use crate::{CurrentMap, Install, TimeOfDay};
 
@@ -17,10 +18,14 @@ pub(crate) fn load_catalog(mut commands: Commands<'_, '_>, install: Res<'_, Inst
 }
 
 /// The clear colour takes the fog's gamma values raw, like every colour in the frame.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_light(
     catalog: Option<Res<'_, Catalog>>,
     map: Res<'_, CurrentMap>,
     time: Res<'_, TimeOfDay>,
+    clock: Res<'_, Time>,
+    room: Res<'_, CameraRoom>,
+    mut crossfade: ResMut<'_, RoomCrossfade>,
     camera: Query<'_, '_, &Transform, With<WorldCamera>>,
     mut light: ResMut<'_, SceneLight>,
     mut clear: ResMut<'_, ClearColor>,
@@ -40,7 +45,8 @@ pub(crate) fn resolve_light(
             ghost,
         )
     });
-    let resolved = scene_light(&atmosphere, time.minute);
+    let mut resolved = scene_light(&atmosphere, time.minute);
+    resolved.room_fog = crossfade.blend(room.fog, resolved.room_fog, FARCLIP, clock.delta_secs());
     if *light != resolved {
         *light = resolved;
     }
@@ -62,6 +68,11 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
         fog_color: atmosphere.fog_color,
         fog_start: atmosphere.fog_start_frac * fog_end,
         fog_end,
+        room_fog: Fog {
+            color: atmosphere.fog_color,
+            start: atmosphere.fog_start_frac * fog_end,
+            end: fog_end,
+        },
         sky: atmosphere.sky,
         sky_warp: daynight::sky_warp(minute, atmosphere.highlight_sky),
         visible_sun: wow_to_bevy(daynight::celestial_sun_direction(minute)).normalize(),

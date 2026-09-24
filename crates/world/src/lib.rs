@@ -23,6 +23,7 @@ mod placements;
 mod portal;
 mod probes;
 pub mod rig;
+mod room;
 mod sh;
 mod sky;
 mod source;
@@ -41,7 +42,7 @@ use bevy::prelude::*;
 
 pub use adt::AdtTile;
 pub use glow::FullScreenGlow;
-pub use light::SceneLight;
+pub use light::{Fog, SceneLight};
 pub use m2::M2Model;
 pub use map::CurrentMap;
 pub use model::{BillboardInfo, ModelSubmesh};
@@ -103,11 +104,13 @@ impl Plugin for WorldPlugin {
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()
         .init_resource::<models::Furnished>()
+        .init_resource::<room::CameraRoom>()
+        .init_resource::<room::RoomCrossfade>()
         .add_systems(Startup, atmosphere::load_catalog)
         .add_systems(
             Update,
             (
-                atmosphere::resolve_light,
+                atmosphere::resolve_light.after(portal::compute_wmo_pvs),
                 stream::stream_terrain,
                 horizon::stream_horizon,
                 (
