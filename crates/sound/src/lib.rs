@@ -6,6 +6,7 @@
 
 mod config;
 mod health;
+mod interior;
 pub mod kit;
 mod limiter;
 mod log;
@@ -15,9 +16,12 @@ mod mix_tap;
 pub mod mixer;
 mod output;
 mod plugin;
+mod reverb;
 pub mod tables;
+mod zone;
 
 pub use config::SoundConfig;
+pub use interior::{CurrentInterior, InteriorAudio};
 pub use kit::{KitRef, Played, SoundCategory, SoundKits, play_kit};
 pub use mixer::{Mixer, MixerSettings};
 pub use output::{OFFLINE_SAMPLE_RATE, Output};

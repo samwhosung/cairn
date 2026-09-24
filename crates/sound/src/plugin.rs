@@ -47,6 +47,12 @@ impl SoundOutput {
             log.play(self.clock, played, category, spatial, pos);
         }
     }
+
+    pub(crate) fn note_stream(&mut self, slot: &str, kit: u32, path: &str, amp: f32) {
+        if let Some(log) = self.log.as_mut() {
+            log.stream(self.clock, slot, kit, path, amp);
+        }
+    }
 }
 
 /// Where the 3-D listener is this frame, in Bevy space.
@@ -109,10 +115,16 @@ impl Plugin for SoundPlugin {
             clock: 0.0,
             offline,
         })
+        .insert_non_send_resource(crate::zone::ZoneAudio::default())
         .init_resource::<SoundConfig>()
         .init_resource::<AudioListener>()
         .init_resource::<ListenerCharacter>()
-        .add_systems(Startup, (load_kits,))
+        .init_resource::<crate::interior::CurrentInterior>()
+        .init_resource::<crate::reverb::AppliedPreset>()
+        .add_systems(
+            Startup,
+            (load_kits, crate::zone::load_area_sounds, load_providers),
+        )
         .add_systems(PreUpdate, stamp_clock)
         .configure_sets(
             Update,
@@ -127,6 +139,10 @@ impl Plugin for SoundPlugin {
                 update_audio_listener,
                 apply_master_volume,
                 apply_focus_gate,
+                crate::interior::resolve_interior,
+                crate::zone::zone_audio,
+                crate::zone::report_stream_voices,
+                crate::reverb::zone_reverb,
                 kit::pump_channels,
                 crate::health::poll_mix_health,
             )
@@ -145,6 +161,16 @@ fn load_kits(mut commands: Commands<'_, '_>, install: Option<Res<'_, Install>>) 
             commands.insert_resource(SoundKits::new(catalog, install.0.clone()));
         }
         Err(e) => warn!("sound: no kits, so no sound: {e}"),
+    }
+}
+
+fn load_providers(mut commands: Commands<'_, '_>, install: Option<Res<'_, Install>>) {
+    let Some(install) = install else { return };
+    match crate::tables::SoundProviders::load(&install.0) {
+        Ok(cat) => {
+            commands.insert_resource(cat);
+        }
+        Err(e) => warn!("sound: no reverb presets: {e}"),
     }
 }
 

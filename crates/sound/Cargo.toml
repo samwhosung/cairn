@@ -1,6 +1,6 @@
 [package]
 name = "sound"
-description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables and the kit player, mixed by kira on the device or offline"
+description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, the kit player, zone music and ambience, mixed by kira on the device or offline"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

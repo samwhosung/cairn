@@ -49,6 +49,15 @@ impl PlayLog {
         self.write(&line);
     }
 
+    pub(crate) fn stream(&mut self, t: f64, slot: &str, kit: u32, path: &str, amp: f32) {
+        let line = format!(
+            r#"{{"t":{t:.6},"ev":"{slot}","kit":{kit},"file":"{}","db":{}}}"#,
+            escape(path),
+            amp_to_db(amp).0,
+        );
+        self.write(&line);
+    }
+
     fn write(&mut self, line: &str) {
         if writeln!(self.file, "{line}")
             .and_then(|()| self.file.flush())

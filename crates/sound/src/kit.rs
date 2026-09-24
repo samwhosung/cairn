@@ -104,6 +104,19 @@ impl SoundKits {
         }
     }
 
+    /// A variation for a streamed kit, `(path, base volume)`: the same pool as a shot.
+    pub(crate) fn pick_stream(&mut self, kit_id: u32) -> Option<(String, f32)> {
+        let kit = self.catalog.get(kit_id)?;
+        if kit.files.is_empty() {
+            return None;
+        }
+        let volume = kit.volume;
+        let weights: Vec<u32> = kit.files.iter().map(|(_, w)| *w).collect();
+        let pick = self.pick_variation(kit_id, &weights);
+        let path = self.catalog.get(kit_id)?.files[pick].0.clone();
+        Some((path, volume))
+    }
+
     fn pick_variation(&mut self, kit: u32, weights: &[u32]) -> usize {
         if weights.len() == 1 {
             return 0;
