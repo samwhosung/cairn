@@ -18,6 +18,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::time::TimeUpdateStrategy;
 use world::collision::{CollisionPlugin, WorldCollision};
 use world::coords::wow_to_bevy;
+use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
@@ -36,6 +37,19 @@ const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 const EAST: f32 = 270.0;
 const HILLTOP_SOUTH_OF_GOLDSHIRE: [f32; 2] = [-9200.0, -420.0];
 const SUN_BEARING: f32 = 45.0;
+struct Stand {
+    xy: [f32; 2],
+    heading: f32,
+}
+
+const FACING_A_GOLDSHIRE_LAMPPOST: Stand = Stand {
+    xy: [-9433.0, 44.0],
+    heading: 215.0,
+};
+const FACING_A_LAMPPOST_BELOW_THE_ABBEY: Stand = Stand {
+    xy: [-8952.0, -113.0],
+    heading: 320.0,
+};
 
 struct Painter {
     app: App,
@@ -288,6 +302,26 @@ fn the_walker_under_the_sky_at_dawn_noon_dusk_and_night() {
     }
 }
 
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_doodads_move_in_goldshire_and_before_the_abbey() {
+    for (place, stand) in [
+        ("goldshire", FACING_A_GOLDSHIRE_LAMPPOST),
+        ("abbey", FACING_A_LAMPPOST_BELOW_THE_ABBEY),
+    ] {
+        let Some(mut p) = Painter::new(stand.xy, stand.heading, CharacterLook::naked(1, 0)) else {
+            return;
+        };
+        p.orbit(0.0, 8.0);
+        p.tilt_up(-0.1);
+        p.wait(2.0);
+        for i in 0..4 {
+            p.shoot(&format!("{place}-doodads-{i}"));
+            p.wait(0.4);
+        }
+    }
+}
+
 fn frame_costs(p: &mut Painter, frames: usize) -> String {
     let mut costs: Vec<Duration> = (0..frames)
         .map(|_| {
@@ -308,8 +342,6 @@ fn frame_costs(p: &mut Painter, frames: usize) -> String {
     )
 }
 
-/// What a frame of the walker's window costs in Goldshire, drawn headless: standing looking at
-/// the inn, then running east out of the village.
 #[test]
 #[ignore = "a measurement, for a release build on a GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_frame_cost_of_goldshire() {
@@ -318,7 +350,20 @@ fn the_frame_cost_of_goldshire() {
     };
     p.wait(2.0);
     let standing = frame_costs(&mut p, 600);
+    let rigs = rig_census(&mut p);
     p.key(KeyCode::KeyW, ButtonState::Pressed);
     let running = frame_costs(&mut p, 1200);
-    eprintln!("goldshire: standing {standing}; running {running}");
+    eprintln!("goldshire: standing {standing} with {rigs}; running {running}");
+}
+
+fn rig_census(p: &mut Painter) -> String {
+    let world = p.app.world_mut();
+    let mut rigs = world.query::<(&RigPose, Has<AnimParked>, Has<RigSkin>)>();
+    let (mut n, mut parked, mut skinned) = (0, 0, 0);
+    for (_, is_parked, has_skin) in rigs.iter(world) {
+        n += 1;
+        parked += usize::from(is_parked);
+        skinned += usize::from(has_skin);
+    }
+    format!("{n} rigs, {parked} parked, {skinned} with a palette slot")
 }
