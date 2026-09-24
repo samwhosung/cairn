@@ -119,8 +119,8 @@ impl RigBuilder {
         }
         let host = spawn_anim_host(commands, m, *transform)?;
         Some(Self {
+            skinned: host.skins.then(skinned),
             host,
-            skinned: Some(skinned()),
             ibp: m.inverse_bindposes.clone(),
             bound: m.animated_bound(),
             bounds,

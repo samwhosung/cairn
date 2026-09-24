@@ -16,9 +16,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::time::TimeUpdateStrategy;
 use sound::{AudioListener, SoundBody};
+use world::DoodadAnimHost;
 use world::collision::{CollisionPlugin, LiquidClaim, Liquids};
 use world::coords::bevy_to_wow;
-use world::doodad_sound::SoundHost;
 use world::interior::{
     CurrentArea, CurrentAreaInterior, CurrentWmoInterior, UnitRoom, WmoInteriorKeys,
 };
@@ -201,7 +201,7 @@ fn record(
     listener: Res<'_, AudioListener>,
     place: Place<'_>,
     mut events: MessageReader<'_, '_, AnimEvent>,
-    mut gone: RemovedComponents<'_, '_, SoundHost>,
+    mut gone: RemovedComponents<'_, '_, DoodadAnimHost>,
     bodies: Query<'_, '_, Heard<'_>>,
     liquids: Liquids<'_, '_>,
     surface: SurfaceUnderfoot<'_, '_>,

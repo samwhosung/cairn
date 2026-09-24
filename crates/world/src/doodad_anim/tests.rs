@@ -6,7 +6,7 @@ use bevy::mesh::MeshTag;
 
 use super::lazy::{LazyRig, SkinnedTwin, reap_parked_rigs};
 use super::*;
-use crate::rig::{GlobalBone, GlobalSeqChannel, ModelJoint, RigPalettes};
+use crate::rig::{ClipEvent, GlobalBone, GlobalSeqChannel, ModelJoint, RigPalettes};
 use crate::visibility::alpha_bits;
 
 fn clip(anim_id: u16, seq_index: usize, node: usize) -> AnimClip {
@@ -92,6 +92,38 @@ fn a_model_is_rigged_only_when_something_moves_off_its_rest_pose() {
         classify(&skeleton(3), Some(&a)),
         DoodadAnimTier::MovingIdle(c) if c.anim_id == 0
     ));
+}
+
+#[test]
+fn a_still_model_whose_idle_sounds_runs_its_idle_clock_alone() {
+    let mut idle = clip(0, 0, 1);
+    idle.events = Arc::from([ClipEvent {
+        time: 0.0,
+        ident: *b"$DSL",
+        data: 7,
+        bone: 0,
+        offset: Vec3::ZERO,
+        point: Vec3::ZERO,
+    }]);
+    let sounding = anims(vec![idle.clone()], None, false);
+    assert!(matches!(
+        arm(&skeleton(0), &sounding),
+        Some(Arm::ClockOnly(c)) if c.anim_id == 0
+    ));
+    let sounding_gseq = anims(vec![idle], None, true);
+    assert!(matches!(
+        arm(&skeleton(3), &sounding_gseq),
+        Some(Arm::ClockOnly(_))
+    ));
+    let silent = anims(vec![clip(0, 0, 1)], None, false);
+    assert!(arm(&skeleton(3), &silent).is_none());
+    let gseq = anims(vec![clip(0, 0, 1)], None, true);
+    assert!(matches!(
+        arm(&skeleton(3), &gseq),
+        Some(Arm::GlobalSeqsOnly)
+    ));
+    let moving = anims(vec![clip(0, 0, 1)], Some(0), false);
+    assert!(matches!(arm(&skeleton(3), &moving), Some(Arm::Posed(_))));
 }
 
 fn host(batches: Vec<Entity>, rerolls_at: f32, anim_id: Option<u16>, gate: Gate) -> DoodadAnimHost {

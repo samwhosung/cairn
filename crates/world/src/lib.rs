@@ -12,7 +12,7 @@ mod clouds;
 pub mod collision;
 pub mod coords;
 mod doodad_anim;
-pub mod doodad_sound;
+mod doodad_sound;
 mod glow;
 mod ground;
 mod horizon;
@@ -54,6 +54,7 @@ use bevy::prelude::*;
 
 pub use adt::AdtTile;
 pub use clouds::CloudClock;
+pub use doodad_anim::DoodadAnimHost;
 pub use glow::FullScreenGlow;
 pub use light::{Fog, SceneLight};
 pub use m2::M2Model;
@@ -148,7 +149,7 @@ impl Plugin for WorldPlugin {
                     interior::track_area_interior,
                     interior::update_current_area,
                     interior::track_unit_rooms,
-                    doodad_sound::fire_sound_host_events,
+                    doodad_sound::fire_doodad_events,
                 )
                     .chain()
                     .after(stream::stream_terrain),
@@ -163,16 +164,9 @@ impl Plugin for WorldPlugin {
         )
         .add_systems(
             PostUpdate,
-            (
-                billboard::face_billboards
-                    .after(rig::RigFinalize)
-                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
-                (
-                    doodad_sound::reroll_sound_hosts,
-                    doodad_sound::gate_sound_hosts,
-                )
-                    .chain(),
-            ),
+            billboard::face_billboards
+                .after(rig::RigFinalize)
+                .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
         );
         mat_anim_table::plugin(app);
     }

@@ -3,7 +3,6 @@ use std::num::NonZeroU16;
 use std::sync::{Arc, Weak};
 
 use bevy::asset::{LoadState, RecursiveDependencyLoadState, UntypedAssetId};
-use bevy::camera::primitives::Sphere;
 use bevy::camera::visibility::NoAutoAabb;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
@@ -15,7 +14,6 @@ use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::doodad_anim::{DrawBounds, MaterialLoops, RigBuilder};
-use crate::doodad_sound::{SoundHost, idle_has_sound_keys};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
 use crate::m2::M2Model;
@@ -339,8 +337,6 @@ impl Spawner<'_, '_, '_, '_> {
                 let light = DoodadLight::Sky(shade);
                 let placed = self.doodad(m, id, &form, &f.transform, light, None, &mut f.forms);
                 let mut ents = placed.batches;
-                let parts = ents.clone();
-                ents.extend(self.sound_host(m, &f.transform, None, parts));
                 self.doodad_lights(m, &f.transform, None, &mut ents);
                 ents.extend(placed.rig_root);
                 f.entities = ents;
@@ -476,7 +472,6 @@ impl Spawner<'_, '_, '_, '_> {
             placement_forms,
         );
         let mut ents = placed.batches;
-        let parts = ents.clone();
         if let DoodadLight::Probe(slot) = light {
             let owner = if let Some(&e) = ents.first() {
                 e
@@ -492,27 +487,9 @@ impl Spawner<'_, '_, '_, '_> {
                 self.commands.entity(e).insert(room.clone());
             }
         }
-        ents.extend(self.sound_host(m, &prop.transform, room.clone(), parts));
         self.doodad_lights(m, &prop.transform, room.as_ref(), &mut ents);
         ents.extend(placed.rig_root);
         ents
-    }
-
-    fn sound_host(
-        &mut self,
-        m: &M2Model,
-        transform: &Transform,
-        room: Option<WmoGroupVis>,
-        parts: Vec<Entity>,
-    ) -> Option<Entity> {
-        let anims = m.animations.as_ref().filter(|a| idle_has_sound_keys(a))?;
-        let (radius, center) = m.fade_sphere(transform.scale.x);
-        let fade = Sphere {
-            center: transform.transform_point(center).into(),
-            radius,
-        };
-        let host = SoundHost::new(anims, parts, fade, room)?;
-        Some(self.commands.spawn((host, anims.clone(), *transform)).id())
     }
 
     fn doodad_lights(

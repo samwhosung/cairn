@@ -297,7 +297,7 @@ pub(crate) fn pump_emitters(
 }
 
 pub(crate) fn release_on_despawn(
-    mut hosts: RemovedComponents<'_, '_, world::doodad_sound::SoundHost>,
+    mut hosts: RemovedComponents<'_, '_, world::DoodadAnimHost>,
     mut pool: ResMut<'_, AmbientEmitterPool>,
 ) {
     for entity in hosts.read() {

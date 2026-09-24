@@ -12,6 +12,7 @@ pub(crate) use mat_anim::MatAnim;
 use mat_anim::{TintAnimMaterials, UvAnimMaterials};
 pub(crate) use placement::{MaterialLoops, RigBuilder};
 
+use crate::doodad_sound::idle_has_sound_keys;
 use crate::m2::M2Model;
 use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
 use crate::rig::{
@@ -44,6 +45,27 @@ pub(crate) fn classify<'a>(
     }
 }
 
+enum Arm<'a> {
+    Posed(&'a AnimClip),
+    ClockOnly(&'a AnimClip),
+    GlobalSeqsOnly,
+}
+
+fn arm<'a>(skeleton: &ModelSkeleton, anims: &'a ModelAnimations) -> Option<Arm<'a>> {
+    let tier = classify(skeleton, Some(anims));
+    if let DoodadAnimTier::MovingIdle(idle) = tier {
+        return Some(Arm::Posed(idle));
+    }
+    match (
+        tier,
+        anims.idle_clip().filter(|_| idle_has_sound_keys(anims)),
+    ) {
+        (_, Some(idle)) => Some(Arm::ClockOnly(idle)),
+        (DoodadAnimTier::GlobalSeqOnly, None) => Some(Arm::GlobalSeqsOnly),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ArmedClip {
     pub(crate) node: AnimationNodeIndex,
@@ -55,6 +77,7 @@ pub(crate) struct HostBuilder {
     pose: RigPose,
     clip: Option<ArmedClip>,
     anim_id: Option<u16>,
+    skins: bool,
 }
 
 impl HostBuilder {
@@ -72,36 +95,40 @@ pub(crate) fn spawn_anim_host(
     m: &M2Model,
     transform: Transform,
 ) -> Option<HostBuilder> {
-    let tier = classify(&m.skeleton, m.animations.as_ref());
-    if matches!(tier, DoodadAnimTier::Static) {
-        return None;
-    }
     let anims = m.animations.as_ref()?;
+    let arm = arm(&m.skeleton, anims)?;
     let root = commands.spawn((transform, Visibility::default())).id();
     let pose = RigPose::new(root, &m.skeleton);
-    let (mut clip, mut anim_id) = (None, None);
-    if let DoodadAnimTier::MovingIdle(idle) = tier {
-        let mut player = AnimationPlayer::default();
-        player.play(idle.node).repeat();
-        commands.entity(root).insert((
-            player,
-            AnimationGraphHandle(anims.graph.clone()),
-            anims.clone(),
-        ));
-        clip = Some(ArmedClip {
-            node: idle.node,
-            duration: idle.duration,
-        });
-        anim_id = Some(idle.anim_id);
-    }
+    let skins = !matches!(classify(&m.skeleton, Some(anims)), DoodadAnimTier::Static);
+    let idle = match arm {
+        Arm::Posed(idle) => {
+            let mut player = AnimationPlayer::default();
+            player.play(idle.node).repeat();
+            commands.entity(root).insert((
+                player,
+                AnimationGraphHandle(anims.graph.clone()),
+                anims.clone(),
+            ));
+            Some(idle)
+        }
+        Arm::ClockOnly(idle) => {
+            commands.entity(root).insert(anims.clone());
+            Some(idle)
+        }
+        Arm::GlobalSeqsOnly => None,
+    };
     if let Some(drive) = GlobalSeqDrive::new(&anims.global_bones, m.skeleton.joints.len()) {
         commands.entity(root).insert(drive);
     }
     Some(HostBuilder {
         root,
         pose,
-        clip,
-        anim_id,
+        clip: idle.map(|c| ArmedClip {
+            node: c.node,
+            duration: c.duration,
+        }),
+        anim_id: idle.map(|c| c.anim_id),
+        skins,
     })
 }
 
@@ -151,13 +178,13 @@ pub(crate) enum Gate {
 }
 
 impl Gate {
-    fn posing(self) -> bool {
+    pub(crate) fn posing(self) -> bool {
         matches!(self, Gate::ArmedAtSpawn | Gate::Drawn)
     }
 }
 
 #[derive(Component)]
-pub(crate) struct DoodadAnimHost {
+pub struct DoodadAnimHost {
     pub(crate) seen_by: SeenBy,
     pub(crate) clip: Option<ArmedClip>,
     pub(crate) armed_at: f32,
@@ -165,6 +192,18 @@ pub(crate) struct DoodadAnimHost {
     pub(crate) anim_id: Option<u16>,
     pub(crate) gate: Gate,
     pub(crate) parked_at: f32,
+}
+
+impl DoodadAnimHost {
+    pub(crate) fn arm_clock(&self, now: f32) -> Option<(AnimationNodeIndex, f32)> {
+        let clip = self.clip?;
+        let seek = if clip.duration > 0.0 {
+            (now - self.armed_at).rem_euclid(clip.duration)
+        } else {
+            0.0
+        };
+        Some((clip.node, seek))
+    }
 }
 
 fn reroll_doodad_variation(
