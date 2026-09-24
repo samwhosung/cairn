@@ -1,17 +1,84 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustix::time::{ClockId, clock_gettime};
-
 use crate::rules::Why;
 
-pub fn thread_cpu_ns() -> u64 {
-    let t = clock_gettime(ClockId::ThreadCPUTime);
-    t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
+pub use clock::{process_cpu_ns, thread_cpu_ns};
+
+#[cfg(unix)]
+mod clock {
+    use rustix::time::{ClockId, clock_gettime};
+
+    pub fn thread_cpu_ns() -> u64 {
+        let t = clock_gettime(ClockId::ThreadCPUTime);
+        t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
+    }
+
+    pub fn process_cpu_ns() -> u64 {
+        let t = clock_gettime(ClockId::ProcessCPUTime);
+        t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
+    }
 }
 
-pub fn process_cpu_ns() -> u64 {
-    let t = clock_gettime(ClockId::ProcessCPUTime);
-    t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
+/// Windows counts CPU time in scheduler ticks, 15.6 ms by default, so there a short task often
+/// reads as none.
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the thread and process CPU times are C APIs with no safe binding in the tree"
+)]
+mod clock {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut c_void;
+        fn GetCurrentProcess() -> *mut c_void;
+        fn GetThreadTimes(
+            thread: *mut c_void,
+            created: *mut u64,
+            exited: *mut u64,
+            kernel: *mut u64,
+            user: *mut u64,
+        ) -> i32;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            created: *mut u64,
+            exited: *mut u64,
+            kernel: *mut u64,
+            user: *mut u64,
+        ) -> i32;
+    }
+
+    pub fn thread_cpu_ns() -> u64 {
+        let [mut created, mut exited, mut kernel, mut user] = [0u64; 4];
+        // SAFETY: the calling thread's pseudo-handle, and four out-parameters, each a FILETIME:
+        // two u32s, low first, which is a little-endian u64 of 100 ns.
+        unsafe {
+            GetThreadTimes(
+                GetCurrentThread(),
+                &raw mut created,
+                &raw mut exited,
+                &raw mut kernel,
+                &raw mut user,
+            );
+        }
+        (kernel + user) * 100
+    }
+
+    pub fn process_cpu_ns() -> u64 {
+        let [mut created, mut exited, mut kernel, mut user] = [0u64; 4];
+        // SAFETY: as in `thread_cpu_ns`, with the calling process's pseudo-handle.
+        unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &raw mut created,
+                &raw mut exited,
+                &raw mut kernel,
+                &raw mut user,
+            );
+        }
+        (kernel + user) * 100
+    }
 }
 
 #[derive(Default)]
@@ -240,7 +307,14 @@ mod tests {
         phase.time(|| std::thread::sleep(std::time::Duration::from_millis(30)));
         let slept = phase.take().cpu_ns;
         assert!(slept < 10_000_000, "{slept} ns");
-        let spun = phase.time(|| (0..200_000u64).fold(0u64, |a, b| a.wrapping_add(b * b)));
+        let spun = phase.time(|| {
+            let started = std::time::Instant::now();
+            let mut n = 0u64;
+            while started.elapsed() < std::time::Duration::from_millis(50) {
+                n = std::hint::black_box(n.wrapping_add(1));
+            }
+            n
+        });
         std::hint::black_box(spun);
         let taken = phase.take();
         assert!(taken.cpu_ns > 0 && taken.largest_task_ns == taken.cpu_ns);

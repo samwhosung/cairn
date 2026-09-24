@@ -10,13 +10,15 @@ publish.workspace = true
 [dependencies]
 protocol = { path = "../protocol" }
 rayon = "1.12"
-rustix = { version = "1.1", features = ["time"] }
 tokio = { version = "1.53", features = [
   "rt-multi-thread",
   "net",
   "io-util",
   "sync",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["time"] }
 
 [lints]
 workspace = true
