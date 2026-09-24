@@ -34,13 +34,9 @@ pub struct Frame {
 pub struct Walker {
     pub app: App,
     step: Duration,
-    paced: Option<Pace>,
-}
-
-/// A joined walker's frames kept to the wall clock, so that its own clock and the server's agree.
-struct Pace {
-    first: Instant,
-    frames: u32,
+    /// When a joined walker's last frame began: it steps no faster than `step` on the wall
+    /// clock, as a window draws, and a late frame is not made up by a burst.
+    paced: Option<Instant>,
 }
 
 /// A client that has joined a server keeps the wall clock the server ticks by, as a window does;
@@ -122,10 +118,7 @@ impl Walker {
     }
 
     fn pace(&mut self) {
-        self.paced = Some(Pace {
-            first: Instant::now(),
-            frames: 0,
-        });
+        self.paced = Some(Instant::now());
     }
 
     pub fn settled(&self) -> bool {
@@ -290,10 +283,11 @@ impl Walker {
     pub fn run(&mut self, n: usize) -> Vec<Frame> {
         (0..n)
             .map(|_| {
-                if let Some(pace) = &mut self.paced {
-                    let due = pace.first + self.step * pace.frames;
-                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
-                    pace.frames += 1;
+                if let Some(last) = &mut self.paced {
+                    std::thread::sleep(
+                        (*last + self.step).saturating_duration_since(Instant::now()),
+                    );
+                    *last = Instant::now();
                 }
                 self.app.update();
                 let p = self.player();
