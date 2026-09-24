@@ -38,7 +38,6 @@ pub(crate) struct UnitLoops<'w> {
 }
 
 impl UnitLoops<'_> {
-    /// The client runs no tint loop on a unit's batches.
     pub(crate) fn register_scroll(
         &mut self,
         materials: &mut Assets<ModelMaterial>,
