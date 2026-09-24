@@ -9,6 +9,8 @@ use crate::fixture::Fixture;
 use crate::shot::DEFAULT_WORLD_AGE;
 use crate::view::{HUMAN_START, Pose};
 
+const DEFAULT_DISPLAY_AGE: f32 = 2.5;
+
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
@@ -19,7 +21,7 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          world has run S seconds (2.5 by default)
        cairn shot --display ID [--age S] [--scale K] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
          stand a CreatureDisplayInfo display on the ground below AT, K times its model's
-         size (1 by default), and shoot it S seconds (1 by default) after it appears, from
+         size (1 by default), and shoot it S seconds (2.5 by default) after it appears, from
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
 
@@ -288,7 +290,7 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
         .map_err(|_| format!("--display wants a CreatureDisplayInfo id, not {id}"))?;
     let age = given
         .remove("age")
-        .map_or(Ok(1.0), |a| parse_number("age", &a))?;
+        .map_or(Ok(DEFAULT_DISPLAY_AGE), |a| parse_number("age", &a))?;
     if age < 0.0 {
         return Err("--age must not be negative".into());
     }
@@ -506,7 +508,7 @@ mod tests {
         let f = args.display.expect("a display");
         assert_eq!(
             (f.age, f.scale, f.at, f.az_deg, f.el_deg, f.dist),
-            (1.0, 1.35, Vec3::new(1.0, 2.0, 3.0), 90.0, 20.0, 7.0)
+            (2.5, 1.35, Vec3::new(1.0, 2.0, 3.0), 90.0, 20.0, 7.0)
         );
     }
 
