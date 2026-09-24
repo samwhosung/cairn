@@ -76,10 +76,9 @@ impl Net {
             ..server::Config::default()
         })
         .map_err(|e| format!("--host {port}: {e}"))?;
-        Ok(Self {
-            hosted: Some(hosted),
-            ..Self::connect(SocketAddr::from(([127, 0, 0, 1], port)), hello)
-        })
+        let mut net = Self::connect(SocketAddr::from(([127, 0, 0, 1], port)), hello);
+        net.hosted = Some(hosted);
+        Ok(net)
     }
 
     pub fn hosted_addr(&self) -> Option<SocketAddr> {
@@ -104,6 +103,16 @@ impl Net {
     #[cfg(test)]
     pub fn faults(&mut self) -> &mut Faults {
         &mut self.others.faults
+    }
+}
+
+impl Drop for Net {
+    fn drop(&mut self) {
+        if let Some(hosted) = self.hosted.take()
+            && let Err(e) = hosted.stop()
+        {
+            warn!("the hosted server: {e}");
+        }
     }
 }
 
