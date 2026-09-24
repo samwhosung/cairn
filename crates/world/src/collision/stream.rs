@@ -25,12 +25,18 @@ use crate::wdt::WdtIndex;
 #[derive(Resource, Default, Debug)]
 pub struct CollisionResidency {
     pending: usize,
-    settled: bool,
+    indexed: bool,
 }
 
 impl CollisionResidency {
     pub fn settled(&self) -> bool {
-        self.settled
+        self.indexed && self.pending == 0
+    }
+
+    /// Whether the map's index has been read, so that `pending` counts the whole window around
+    /// the camera.
+    pub fn indexed(&self) -> bool {
+        self.indexed
     }
 
     /// Tiles, hulls, welds and colliders still on their way.
@@ -433,5 +439,5 @@ pub(super) fn publish_residency(
         .sum();
     residency.pending =
         loading_tiles + loading_hulls + streamer.welds.unflushed() + pending.count();
-    residency.settled = streamer.indexed && residency.pending == 0;
+    residency.indexed = streamer.indexed;
 }
