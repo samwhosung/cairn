@@ -50,7 +50,7 @@ impl FlareGate<'_> {
         let base = allow.hour
             * horizon_fade(dir)
             * allow.cloud_clearance
-            * submersion_fade(self.submerged.depth);
+            * submersion_fade(self.submerged.near_plane_depth);
         let target = if base > 0.0 && !self.room.indoors {
             let (streamer, adts, horizon) = (&*self.streamer, &*self.adts, &*self.horizon);
             let height_under = |p: Vec3| {

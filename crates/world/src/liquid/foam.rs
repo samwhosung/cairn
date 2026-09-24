@@ -31,8 +31,7 @@ const MIN_GATE_DEPTH: f32 = 1.0;
 /// A few steps of depth toward the eye, against a driver rounding the two coplanar draws apart.
 const FOAM_RASTER: i32 = 8;
 
-/// The avatar's model scale; cairn's bodies are drawn at their authored size.
-const WADER_SCALE: f32 = 1.0;
+const AUTHORED_MODEL_SCALE: f32 = 1.0;
 
 struct FoamRecord {
     center: [f32; 2],
@@ -205,6 +204,20 @@ fn build_patch(
     (!triangles.is_empty()).then_some(Patch { triangles, surface })
 }
 
+fn wade_state(wader: &Viewer, vel: Vec3) -> WadeState {
+    let w = bevy_to_wow(vel);
+    if wader.translating {
+        WadeState::Translating {
+            speed: w[0].hypot(w[1]),
+            heading: w[1].atan2(w[0]),
+        }
+    } else if wader.turning {
+        WadeState::Turning
+    } else {
+        WadeState::Standing
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_foam(
     time: Res<'_, Time>,
@@ -234,17 +247,7 @@ fn emit_foam(
         .last_feet
         .replace(feet)
         .map_or(Vec3::ZERO, |p| (feet - p) / dt);
-    let w = bevy_to_wow(vel);
-    let state = if wader.translating {
-        WadeState::Translating {
-            speed: w[0].hypot(w[1]),
-            heading: w[1].atan2(w[0]),
-        }
-    } else if wader.turning {
-        WadeState::Turning
-    } else {
-        WadeState::Standing
-    };
+    let state = wade_state(&wader, vel);
     let wow = bevy_to_wow(feet);
     let Some(surface) = index
         .0
@@ -255,7 +258,7 @@ fn emit_foam(
         emitter.over_ring_line = false;
         return;
     };
-    let h = wader.height;
+    let h = wader.collision_height;
     let depth = surface - wow[2];
     let over_now = depth > ONESHOT_DEPTH_FRAC * h;
     let oneshot = over_now != emitter.over_ring_line;
@@ -264,7 +267,14 @@ fn emit_foam(
         return;
     }
     let gate = (GATE_DEPTH_FRAC * h).max(MIN_GATE_DEPTH);
-    let Some(p) = foam_params(state, oneshot, WADER_SCALE, gate, depth, &mut emitter.rng) else {
+    let Some(p) = foam_params(
+        state,
+        oneshot,
+        AUTHORED_MODEL_SCALE,
+        gate,
+        depth,
+        &mut emitter.rng,
+    ) else {
         return;
     };
     let heading = match (p.ring, state) {
@@ -438,7 +448,7 @@ mod tests {
                 settled: true,
                 translating: false,
                 turning: false,
-                height: 2.0,
+                collision_height: 2.0,
             })
             .insert_resource(FoamDraws {
                 ring: (Entity::PLACEHOLDER, Handle::default()),

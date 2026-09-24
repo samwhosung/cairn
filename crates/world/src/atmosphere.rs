@@ -4,7 +4,7 @@ use light::{Atmosphere, LightCatalog, daynight};
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::light::{Fog, SceneLight};
 use crate::room::{CameraRoom, RoomCrossfade};
-use crate::submersion::{SubmergedEye, Underwater};
+use crate::submersion::Underwater;
 use crate::view::{FARCLIP, WorldCamera};
 use crate::{CurrentMap, Install, TimeOfDay};
 
@@ -29,7 +29,6 @@ pub(crate) fn resolve_light(
     mut crossfade: ResMut<'_, RoomCrossfade>,
     camera: Query<'_, '_, &Transform, With<WorldCamera>>,
     underwater: Res<'_, Underwater>,
-    submerged: Res<'_, SubmergedEye>,
     mut light: ResMut<'_, SceneLight>,
     mut clear: ResMut<'_, ClearColor>,
 ) {
@@ -49,7 +48,7 @@ pub(crate) fn resolve_light(
         )
     });
     let mut resolved = scene_light(&atmosphere, time.minute);
-    if let Some((ambient, diffuse)) = underwater.0.ocean_depth_factors(submerged.eye_z) {
+    if let Some((ambient, diffuse)) = underwater.0.ocean_depth_factors(eye[2]) {
         resolved.ambient = resolved.ambient.map(|c| c * ambient);
         resolved.diffuse = resolved.diffuse.map(|c| c * diffuse);
     }

@@ -40,7 +40,7 @@ pub fn publish_body(
             settled: walking && !player.settling,
             translating: player.move_flags & flags::ANY_MOVE != 0,
             turning: player.move_flags & (flags::TURN_LEFT | flags::TURN_RIGHT) != 0,
-            height: player.collision_height,
+            collision_height: player.collision_height,
         });
     }
     if let Some(mut listener) = listener {

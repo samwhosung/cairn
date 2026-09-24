@@ -441,8 +441,8 @@ fn the_nearest_point_is_on_the_surface_at_the_clamped_column() {
     );
     g.sound_nibble = 5;
     assert_eq!(g.sound_nibble(), 5);
-    assert_eq!(g.nearest_point(-5.0, 5.0), Some([0.0, 5.0, 0.0]));
-    let over_dry = g.nearest_point(15.0, 5.0).expect("wet cells");
+    assert_eq!(g.nearest_wet_box_point(-5.0, 5.0), Some([0.0, 5.0, 0.0]));
+    let over_dry = g.nearest_wet_box_point(15.0, 5.0).expect("wet cells");
     assert_eq!(over_dry, [15.0, 5.0, 2.0]);
     let none = LiquidGrid::new(
         LiquidSource::AdtChunk,
@@ -451,5 +451,23 @@ fn the_nearest_point_is_on_the_surface_at_the_clamped_column() {
         vec![[0.0; 3]; 4],
         vec![false],
     );
-    assert!(none.nearest_point(0.0, 0.0).is_none());
+    assert!(none.nearest_wet_box_point(0.0, 0.0).is_none());
+}
+
+#[test]
+fn a_room_flooded_with_magma_holds_no_water() {
+    let g = flat(
+        LiquidSource::WmoGroup(pool(1, -100.0)),
+        LiquidKind::Still,
+        5.0,
+    );
+    let at = [5.0, 5.0, 0.0];
+    assert_eq!(
+        water_surface_at([&g].into_iter(), at, flooded(1, LiquidKind::Magma)),
+        None
+    );
+    assert_eq!(
+        water_surface_at([&g].into_iter(), at, flooded(1, LiquidKind::Still)),
+        Some(f32::MAX)
+    );
 }

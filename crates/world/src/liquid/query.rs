@@ -120,8 +120,7 @@ pub struct LiquidGrid {
     v: [f32; 2],
     /// `None` when the grid is degenerate in XY; queries then fall back to the box.
     inv_det: Option<f32>,
-    /// The highest wet vertex: the degenerate grid's answer, and a dry cell's nearest point's.
-    fallback_z: f32,
+    highest_wet_z: f32,
     sound_nibble: u8,
 }
 
@@ -152,7 +151,7 @@ impl LiquidGrid {
             u: [0.0; 2],
             v: [0.0; 2],
             inv_det: None,
-            fallback_z: f32::MIN,
+            highest_wet_z: f32::MIN,
             sound_nibble: 0,
         };
         if !sane {
@@ -164,7 +163,7 @@ impl LiquidGrid {
                 let p = positions[(j + dj) * cols + i + di];
                 out.min = [out.min[0].min(p[0]), out.min[1].min(p[1])];
                 out.max = [out.max[0].max(p[0]), out.max[1].max(p[1])];
-                out.fallback_z = out.fallback_z.max(p[2]);
+                out.highest_wet_z = out.highest_wet_z.max(p[2]);
             }
         }
         let origin = [positions[0][0], positions[0][1]];
@@ -194,20 +193,20 @@ impl LiquidGrid {
         self.sound_nibble
     }
 
-    /// The point of the wet footprint's box nearest a WoW XY, on the surface there, or at the
-    /// highest wet vertex where that lands over a dry cell; `None` for a grid with no wet cell.
-    pub(crate) fn nearest_point(&self, x: f32, y: f32) -> Option<[f32; 3]> {
-        if self.min[0] > self.max[0] {
-            return None;
-        }
-        let cx = x.clamp(self.min[0], self.max[0]);
-        let cy = y.clamp(self.min[1], self.max[1]);
-        Some([cx, cy, self.surface_z_at(cx, cy).unwrap_or(self.fallback_z)])
+    pub(crate) fn nearest_wet_box_point(&self, x: f32, y: f32) -> Option<[f32; 3]> {
+        let wet_box = self.xy_bounds()?;
+        let cx = x.clamp(wet_box.min.x, wet_box.max.x);
+        let cy = y.clamp(wet_box.min.y, wet_box.max.y);
+        Some([
+            cx,
+            cy,
+            self.surface_z_at(cx, cy).unwrap_or(self.highest_wet_z),
+        ])
     }
 
     #[cfg(test)]
     pub(super) fn highest_wet_z(&self) -> f32 {
-        self.fallback_z
+        self.highest_wet_z
     }
 
     /// The surface height (WoW Z) at a WoW XY, or `None` where this liquid is not.
@@ -217,7 +216,7 @@ impl LiquidGrid {
         }
         match self.wet_cell_at(x, y) {
             Some((i, j, fx, fy)) => Some(self.height_in_cell(i, j, fx, fy)),
-            None if self.inv_det.is_none() => Some(self.fallback_z),
+            None if self.inv_det.is_none() => Some(self.highest_wet_z),
             None => None,
         }
     }
@@ -349,7 +348,9 @@ pub fn water_surface_at<'a>(
     wow: [f32; 3],
     claim: LiquidClaim,
 ) -> Option<f32> {
-    liquid_at(grids.filter(|g| !g.kind.is_fullbright()), wow, claim).map(|h| h.surface_z)
+    liquid_at(grids.filter(|g| !g.kind.is_fullbright()), wow, claim)
+        .filter(|h| !h.kind.is_fullbright())
+        .map(|h| h.surface_z)
 }
 
 /// Every surface height over a WoW position's column that answers for `claim`.

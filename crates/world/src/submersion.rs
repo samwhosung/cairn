@@ -16,13 +16,11 @@ pub struct Underwater(pub Submersion);
 
 #[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
 pub struct SubmergedEye {
-    /// Yards from the probe up to the surface over it; 0 when dry.
-    pub depth: f32,
-    /// The eye's own WoW Z: the ocean darkens by it.
-    pub eye_z: f32,
+    pub near_plane_depth: f32,
 }
 
-/// Where [`Underwater`] is written each frame; what reads it orders itself after.
+/// Where [`Underwater`] and [`SubmergedEye`] are written each frame; what reads them orders itself
+/// after.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubmersionVerdict;
 
@@ -77,8 +75,7 @@ pub(crate) fn detect_submersion(
     let verdict = submersion_claim_at(grids.iter(), [at[0], at[1], probe_z], claim);
     underwater.set_if_neq(Underwater(verdict.map(|(s, _)| s).unwrap_or_default()));
     eye.set_if_neq(SubmergedEye {
-        depth: verdict.map_or(0.0, |(_, z)| (z - probe_z).max(0.0)),
-        eye_z: at[2],
+        near_plane_depth: verdict.map_or(0.0, |(_, z)| (z - probe_z).max(0.0)),
     });
 }
 

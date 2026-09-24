@@ -113,7 +113,7 @@ impl Liquids<'_, '_> {
     pub fn nearest_per_class(&self, wow: [f32; 3], radius: f32) -> [Option<NearestLiquid>; 4] {
         let mut best: [Option<NearestLiquid>; 4] = [None; 4];
         for SwimSurface(grid) in &self.surfaces {
-            let Some(point) = grid.nearest_point(wow[0], wow[1]) else {
+            let Some(point) = grid.nearest_wet_box_point(wow[0], wow[1]) else {
                 continue;
             };
             let dist_sq = (point[0] - wow[0]).powi(2)

@@ -29,8 +29,7 @@ pub struct Viewer {
     /// Moving forward, back or sideways.
     pub translating: bool,
     pub turning: bool,
-    /// Its collision height, yards.
-    pub height: f32,
+    pub collision_height: f32,
 }
 
 /// `WMOAreaTable`'s keys for a group of a placed building.
