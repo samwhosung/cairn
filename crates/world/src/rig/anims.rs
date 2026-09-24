@@ -7,6 +7,22 @@ use model::PlayableAnim;
 use super::bake::GlobalBone;
 use super::source::PoseSource;
 
+/// One event key on a clip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipEvent {
+    /// Seconds from the clip's start.
+    pub time: f32,
+    /// As it reads, `*b"$FSD"`.
+    pub ident: [u8; 4],
+    /// A `SoundEntries` id for the sound keys, else 0.
+    pub data: u32,
+    pub bone: u16,
+    /// The key's point from its bone's pivot, Bevy axes: composed with the bone's live global.
+    pub offset: Vec3,
+    /// The key's point in model space, Bevy axes: where it fires when the bone never moves.
+    pub point: Vec3,
+}
+
 /// One sequence of a model, playable through its animation graph.
 #[derive(Clone, Debug)]
 pub struct AnimClip {
@@ -32,6 +48,8 @@ pub struct AnimClip {
     pub replay: (u32, u32),
     /// Some bone channel moves; a clip that poses nothing still runs a clock.
     pub poses_bones: bool,
+    /// The event keys, by time.
+    pub events: Arc<[ClipEvent]>,
 }
 
 /// A model's sequences, one graph shared by every instance that plays them.
@@ -167,6 +185,7 @@ mod tests {
             frequency: 0,
             replay: (0, 0),
             poses_bones: true,
+            events: Arc::from([]),
         }
     }
 

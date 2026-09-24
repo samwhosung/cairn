@@ -25,6 +25,7 @@ mod placements;
 mod portal;
 mod probes;
 pub mod rig;
+pub mod rig_events;
 mod room;
 mod sh;
 mod sky;
@@ -114,6 +115,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<models::Furnished>()
         .init_resource::<room::CameraRoom>()
         .init_resource::<room::RoomCrossfade>()
+        .add_message::<rig_events::AnimEvent>()
         .add_systems(Startup, atmosphere::load_catalog)
         .add_systems(
             Update,
@@ -133,6 +135,12 @@ impl Plugin for WorldPlugin {
                 .in_set(WorldSystems),
         )
         .add_systems(
+            Update,
+            rig_events::fire_unit_events
+                .after(unit::UnitSystems)
+                .in_set(EventSystems),
+        )
+        .add_systems(
             PostUpdate,
             billboard::face_billboards
                 .after(bevy::transform::TransformSystems::Propagate)
@@ -144,6 +152,10 @@ impl Plugin for WorldPlugin {
 /// The world's per-frame work in `Update`; order whatever moves the camera before it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorldSystems;
+
+/// The animation event keys fired this frame, after the units are driven; read them after it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EventSystems;
 
 /// The game minute of the day, `0..1440`, the world is lit for.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]

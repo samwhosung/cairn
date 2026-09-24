@@ -229,6 +229,7 @@ mod tests {
             frequency: 0,
             replay: (0, 0),
             poses_bones: true,
+            events: std::sync::Arc::from([]),
         }
     }
 

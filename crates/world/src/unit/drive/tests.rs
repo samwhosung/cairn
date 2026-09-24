@@ -84,6 +84,7 @@ fn body(app: &mut App, rows: &[Row]) -> Entity {
             frequency: r.4,
             replay: r.5,
             poses_bones: true,
+            events: std::sync::Arc::from([]),
         })
         .collect();
     let anims = ModelAnimations {

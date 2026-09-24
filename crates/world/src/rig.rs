@@ -12,7 +12,7 @@ mod source;
 
 use bevy::prelude::*;
 
-pub use anims::{AnimClip, ModelAnimations, ResolvedAnim};
+pub use anims::{AnimClip, ClipEvent, ModelAnimations, ResolvedAnim};
 pub use bake::{
     GlobalBone, GlobalSeqChannel, ModelAttachment, ModelJoint, ModelSkeleton, build_animation_clip,
     build_attachments, build_global_bones, build_skeleton, skeleton_pivots,

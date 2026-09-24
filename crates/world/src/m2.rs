@@ -15,8 +15,8 @@ use model::{
 use crate::coords::wow_to_bevy;
 use crate::model::ModelSubmesh;
 use crate::rig::{
-    AnimClip, ModelAnimations, ModelAttachment, ModelSkeleton, PoseSource, build_animation_clip,
-    build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
+    AnimClip, ClipEvent, ModelAnimations, ModelAttachment, ModelSkeleton, PoseSource,
+    build_animation_clip, build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
 };
 
 /// An M2 as the world draws it: its render batches in skin order, its authored bounds and its
@@ -80,11 +80,10 @@ impl AssetLoader for M2Loader {
             .collect();
         let raw_skeleton = parse_m2_skeleton(&bytes).unwrap_or_default();
         let (skeleton, inverse_bindposes) = build_skeleton(&raw_skeleton);
-        let attachments = build_attachments(
-            &parse_m2_attachments(&bytes).unwrap_or_default(),
-            &skeleton_pivots(&raw_skeleton),
-        );
-        let animations = animations(ctx, &bytes, &skeleton, &submeshes);
+        let pivots = skeleton_pivots(&raw_skeleton);
+        let attachments =
+            build_attachments(&parse_m2_attachments(&bytes).unwrap_or_default(), &pivots);
+        let animations = animations(ctx, &bytes, &skeleton, &pivots, &submeshes);
         Ok(M2Model {
             submeshes,
             bounds: parse_m2_bounds(&bytes).ok(),
@@ -105,6 +104,7 @@ fn animations(
     ctx: &mut LoadContext<'_>,
     bytes: &[u8],
     skeleton: &ModelSkeleton,
+    pivots: &[Vec3],
     submeshes: &[ModelSubmesh],
 ) -> Option<ModelAnimations> {
     let mut graph = AnimationGraph::new();
@@ -135,6 +135,22 @@ fn animations(
             frequency: anim.frequency,
             replay: (anim.min_replay, anim.max_replay),
             poses_bones,
+            events: anim
+                .events
+                .iter()
+                .map(|e| ClipEvent {
+                    time: e.time,
+                    ident: e.ident,
+                    data: e.data,
+                    bone: e.bone,
+                    offset: wow_to_bevy(e.position)
+                        - pivots
+                            .get(usize::from(e.bone))
+                            .copied()
+                            .unwrap_or(Vec3::ZERO),
+                    point: wow_to_bevy(e.position),
+                })
+                .collect(),
         });
     }
     let global_bones = build_global_bones(&parse_m2_global_sequence_bones(bytes), skeleton);
