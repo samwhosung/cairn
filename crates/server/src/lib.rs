@@ -66,20 +66,22 @@ impl Running {
         self.addr
     }
 
-    /// Stops ticking, closes every connection, and returns what was measured.
+    /// Stops ticking, closes every connection, and returns what was measured; like
+    /// [`Running::wait`], not from async code.
     pub fn stop(self) -> io::Result<Summary> {
         self.shared.stop.store(true, Ordering::Relaxed);
         self.wait()
     }
 
-    /// Waits until the window's [`Window::players`] have come and all have left, then drops every
-    /// connection. Without a window it returns only on an error: use [`Running::stop`].
+    /// Waits until the window's [`Window::players`] have come and all have left, then closes every
+    /// connection and returns once the connections' tasks have ended, so not from async code.
+    /// Without a window it returns only on an error: use [`Running::stop`].
     pub fn wait(self) -> io::Result<Summary> {
         let summary = self
             .tick
             .join()
             .map_err(|_| io::Error::other("the tick thread panicked"))?;
-        self.runtime.shutdown_background();
+        drop(self.runtime);
         summary
     }
 }
