@@ -102,6 +102,7 @@ pub struct Checks {
     pub open: AtomicBool,
     pub relayed_honest: Judged,
     pub relayed_liars: Judged,
+    pub relayed_unclaimed: AtomicU64,
     pub stale_by_tier: [Judged; 3],
     pub swept_by_tier: [Judged; 3],
     pub missing: AtomicU64,

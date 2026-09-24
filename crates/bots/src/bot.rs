@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use protocol::{
-    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
-    Welcome,
+    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
+    Welcome, Wrapped,
 };
 use server::Spawn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -26,6 +26,7 @@ const SWEEP_MS: u32 = 1000;
 const FRAMES_PER_SEEN: u32 = 10;
 const READ_BUF: usize = 64 << 10;
 const HUMAN: u8 = 1;
+const CLAIMS_KEPT: usize = 256;
 
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -42,6 +43,13 @@ struct Member {
     track: OnceLock<Track>,
     joined_ms: AtomicU32,
     gone: AtomicBool,
+    claims: Mutex<VecDeque<Claimed>>,
+}
+
+#[derive(Clone, Copy)]
+struct Claimed {
+    pos: Pos,
+    time: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +103,30 @@ impl Crowd {
 
     fn track(&self, id: u32) -> Option<&Track> {
         self.by_id.get(id as usize)?.track.get()
+    }
+
+    fn claimed(&self, id: u32, m: &Movement) {
+        let Some(member) = self.by_id.get(id as usize) else {
+            return;
+        };
+        let mut claims = member.claims.lock().unwrap_or_else(PoisonError::into_inner);
+        if claims.len() == CLAIMS_KEPT {
+            claims.pop_front();
+        }
+        claims.push_back(Claimed {
+            pos: Pos::of(m.pos),
+            time: m.time,
+        });
+    }
+
+    fn claimed_at(&self, id: u32, pos: Pos) -> Option<u32> {
+        let claims = self
+            .by_id
+            .get(id as usize)?
+            .claims
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        claims.iter().rev().find(|c| c.pos == pos).map(|c| c.time)
     }
 
     fn settled(&self, id: u32, now: u32) -> Option<&Track> {
@@ -154,6 +186,7 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         liar,
     );
     let id = welcome.id;
+    crowd.claimed(id, &welcome.spawn);
     let member = &crowd.by_id[id as usize];
     let _ = member.track.set(track);
     member.joined_ms.store(now, Ordering::Relaxed);
@@ -168,7 +201,7 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         crowd: crowd.clone(),
         corrections: tx,
         seen,
-        view: crowd.roles.is_checker(i).then(HashMap::new),
+        view: crowd.roles.is_checker(i).then(View::default),
         open: false,
         unsent: Unsent::default(),
         last_tick: None,
@@ -253,6 +286,7 @@ async fn write(
             continue;
         }
         for movement in &claims {
+            crowd.claimed(id, movement);
             ClientMessage::Claim(Claim {
                 ack: mover.ack,
                 movement: *movement,
@@ -272,8 +306,10 @@ async fn write(
     }
 }
 
-struct Seen {
-    pos: [f32; 3],
+#[derive(Default)]
+struct View {
+    by_slot: HashMap<u16, u32>,
+    last_relayed: HashMap<u32, [f32; 3]>,
 }
 
 #[derive(Default)]
@@ -281,6 +317,7 @@ struct Unsent {
     decode_errors: u64,
     relayed_honest: UnsentJudged,
     relayed_liars: UnsentJudged,
+    relayed_unclaimed: u64,
     stale_by_tier: [UnsentJudged; 3],
     unknown_moves: u64,
     double_appears: u64,
@@ -293,7 +330,7 @@ struct Reader {
     crowd: Arc<Crowd>,
     corrections: mpsc::UnboundedSender<u32>,
     seen: Arc<AtomicU32>,
-    view: Option<HashMap<u32, Seen>>,
+    view: Option<View>,
     open: bool,
     unsent: Unsent,
     last_tick: Option<u32>,
@@ -354,15 +391,16 @@ impl Reader {
             }
             self.late_ms.clear();
         }
+        let here = self.view.as_ref().map_or([0.0; 3], |_| self.here(now));
         for record in batch {
             match record {
-                Ok(Record::Appear { id, movement, .. }) => self.appear(id, &movement),
-                Ok(Record::Move { id, movement }) => self.moved(id, &movement, now),
-                Ok(Record::Vanish { id }) => {
-                    if let Some(view) = &mut self.view {
-                        view.remove(&id);
-                    }
-                }
+                Ok(Record::Appear {
+                    slot, id, state, ..
+                }) => self.appear(slot, id, state.pos, here),
+                Ok(Record::Move { slot, pos, .. }) => self.moved(slot, Some(pos), now, here),
+                Ok(Record::State { slot, state }) => self.moved(slot, Some(state.pos), now, here),
+                Ok(Record::Turn { slot, .. }) => self.moved(slot, None, now, here),
+                Ok(Record::Vanish { slot }) => self.vanish(slot),
                 Ok(Record::Correct { seq, .. }) => self.corrected(seq),
                 Err(_) => self.unsent.decode_errors += 1,
             }
@@ -376,11 +414,21 @@ impl Reader {
         }
     }
 
+    fn here(&self, now: u32) -> [f32; 3] {
+        let spawn = self.welcome.spawn.pos;
+        let Some(me) = self.crowd.track(self.me) else {
+            return spawn;
+        };
+        let [x, y] = me.xy(now);
+        [x, y, self.crowd.ground.height(x, y).unwrap_or(spawn[2])]
+    }
+
     fn hand_in(&mut self) {
         let (checks, t) = (&self.crowd.checks, &mut self.unsent);
         Checks::absorb(&self.crowd.traffic.decode_errors, &mut t.decode_errors);
         checks.relayed_honest.absorb(&mut t.relayed_honest);
         checks.relayed_liars.absorb(&mut t.relayed_liars);
+        Checks::absorb(&checks.relayed_unclaimed, &mut t.relayed_unclaimed);
         for (judged, unsent) in checks.stale_by_tier.iter().zip(&mut t.stale_by_tier) {
             judged.absorb(unsent);
         }
@@ -399,52 +447,72 @@ impl Reader {
         let _ = self.corrections.send(seq);
     }
 
-    fn judge_relayed(&mut self, id: u32, movement: &Movement) {
-        if let Some(track) = self.crowd.track(id)
-            && self.open
-        {
-            let e = dist(ground(movement.pos), track.xy(movement.time));
-            let judged = if track.lie.is_some() {
-                &mut self.unsent.relayed_liars
-            } else {
-                &mut self.unsent.relayed_honest
-            };
-            judged.judge(e, RELAYED_EPSILON_YD);
-        }
-    }
-
-    fn appear(&mut self, id: u32, movement: &Movement) {
-        let Some(view) = &self.view else { return };
-        if view.contains_key(&id) && self.open {
-            self.unsent.double_appears += 1;
-        }
-        self.judge_relayed(id, movement);
-        if let Some(view) = &mut self.view {
-            view.insert(id, Seen { pos: movement.pos });
-        }
-    }
-
-    fn moved(&mut self, id: u32, movement: &Movement, now: u32) {
-        let Some(view) = &self.view else { return };
+    fn judge_relayed(&mut self, id: u32, relayed: Pos) {
         let crowd = &self.crowd;
-        match view.get(&id) {
-            None if self.open => self.unsent.unknown_moves += 1,
-            Some(prev) if self.open => {
-                if let (Some(me), Some(them)) = (
-                    crowd.track(self.me),
-                    crowd.settled(id, now).filter(|t| t.lie.is_none()),
-                ) {
-                    let truth = them.xy(now);
-                    let t = crowd.limits.tier(dist(me.xy(now), truth));
-                    let bound = crowd.limits.view_lag_bound_yd(t);
-                    self.unsent.stale_by_tier[t].judge(dist(truth, ground(prev.pos)), bound);
-                }
-            }
-            _ => {}
+        let Some(track) = crowd.track(id) else {
+            return;
+        };
+        let Some(time) = crowd.claimed_at(id, relayed) else {
+            self.unsent.relayed_unclaimed += 1;
+            return;
+        };
+        let e = dist(ground(relayed.yards()), track.xy(time));
+        let judged = if track.lie.is_some() {
+            &mut self.unsent.relayed_liars
+        } else {
+            &mut self.unsent.relayed_honest
+        };
+        judged.judge(e, RELAYED_EPSILON_YD);
+    }
+
+    fn appear(&mut self, slot: u16, id: u32, pos: Wrapped, here: [f32; 3]) {
+        let Some(view) = &mut self.view else { return };
+        let relayed = pos.around(here);
+        let doubled = view.by_slot.insert(slot, id).is_some()
+            || view.last_relayed.insert(id, relayed.yards()).is_some();
+        if self.open {
+            self.unsent.double_appears += u64::from(doubled);
+            self.judge_relayed(id, relayed);
         }
-        self.judge_relayed(id, movement);
-        if let Some(view) = &mut self.view {
-            view.insert(id, Seen { pos: movement.pos });
+    }
+
+    fn moved(&mut self, slot: u16, pos: Option<Wrapped>, now: u32, here: [f32; 3]) {
+        let Some(view) = &mut self.view else { return };
+        let Some(&id) = view.by_slot.get(&slot) else {
+            self.unsent.unknown_moves += u64::from(self.open);
+            return;
+        };
+        let relayed = pos.map(|p| p.around(here));
+        let before = match relayed {
+            Some(p) => view.last_relayed.insert(id, p.yards()),
+            None => view.last_relayed.get(&id).copied(),
+        };
+        if !self.open {
+            return;
+        }
+        let crowd = &self.crowd;
+        if let (Some(before), Some(me), Some(them)) = (
+            before,
+            crowd.track(self.me),
+            crowd.settled(id, now).filter(|t| t.lie.is_none()),
+        ) {
+            let truth = them.xy(now);
+            let t = crowd.limits.tier(dist(me.xy(now), truth));
+            let bound = crowd.limits.view_lag_bound_yd(t);
+            self.unsent.stale_by_tier[t].judge(dist(truth, ground(before)), bound);
+        }
+        if let Some(p) = relayed {
+            self.judge_relayed(id, p);
+        }
+    }
+
+    fn vanish(&mut self, slot: u16) {
+        let Some(view) = &mut self.view else { return };
+        match view.by_slot.remove(&slot) {
+            Some(id) => {
+                view.last_relayed.remove(&id);
+            }
+            None => self.unsent.unknown_moves += u64::from(self.open),
         }
     }
 
@@ -466,18 +534,18 @@ impl Reader {
             }
             let truth = them.xy(now);
             let d = dist(here, truth);
-            match view.get(&id) {
+            match view.last_relayed.get(&id) {
                 None if d <= limits.view_yd - limits.presence_slack_yd => {
                     Checks::count(&checks.missing);
                     checks.missing_depth_yd.note(limits.view_yd - d);
                 }
-                Some(seen) => {
+                Some(&seen) => {
                     if d > limits.view_yd + limits.presence_slack_yd {
                         Checks::count(&checks.spurious);
                     }
                     let t = limits.tier(d);
                     let bound = limits.view_lag_bound_yd(t);
-                    checks.swept_by_tier[t].judge(dist(truth, ground(seen.pos)), bound);
+                    checks.swept_by_tier[t].judge(dist(truth, ground(seen)), bound);
                 }
                 None => {}
             }

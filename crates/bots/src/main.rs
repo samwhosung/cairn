@@ -214,7 +214,7 @@ async fn drive(
     }
 }
 
-const REPORT_HEADER: &str = "| run | bots in | checkers | batches/s per bot | batch jitter p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions of honest bots checked / off / worst yd; of liars off / worst | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lying frames / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
+const REPORT_HEADER: &str = "| run | bots in | checkers | batches/s per bot | batch jitter p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions of honest bots checked / off / worst yd; of liars off / worst; matching no claim | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lying frames / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
 
 fn report(label: &str, crowd: &Crowd, count: usize, m: &Measured) -> String {
     let bots = crowd.traffic.welcomed.load(Ordering::Relaxed);
@@ -232,7 +232,7 @@ fn report(label: &str, crowd: &Crowd, count: usize, m: &Measured) -> String {
     let n = m.counters;
     let p = &m.jitter;
     format!(
-        "| {label} | {bots}/{count} | {} | {:.1} | {} / {} / {} | {:.2} | {:.0} | {:.2} | {} / {} / {:.3}; {} / {:.3} | {} | {} | {} ({:.1}) / {} | {} / {} | {} / {} / {} | {} / {} | {:.1} | {} |",
+        "| {label} | {bots}/{count} | {} | {:.1} | {} / {} / {} | {:.2} | {:.0} | {:.2} | {} / {} / {:.4}; {} / {:.3}; {} | {} | {} | {} ({:.1}) / {} | {} / {} | {} / {} / {} | {} / {} | {:.1} | {} |",
         crowd.roles.checkers.min(count),
         per_bot(n.batches),
         p.p50,
@@ -246,6 +246,7 @@ fn report(label: &str, crowd: &Crowd, count: usize, m: &Measured) -> String {
         c.relayed_honest.worst.get(),
         get(&c.relayed_liars.bad),
         c.relayed_liars.worst.get(),
+        get(&c.relayed_unclaimed),
         tiers.join(" | "),
         swept,
         get(&c.missing),

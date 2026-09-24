@@ -6,9 +6,10 @@ use rayon::prelude::*;
 
 use crate::grid::Grid;
 use crate::net::Shared;
+use crate::relays::Relays;
 use crate::replicate::{Built, Observer, Scene, Scratch, View, send_batch};
 use crate::rules::Rules;
-use crate::stats::{Phase, TickStats};
+use crate::stats::{PHASES, Phase, TickStats};
 use crate::world::{InputOrder, Refusal, Spawn, Stamped, World};
 
 const OBSERVERS_PER_TASK: usize = 16;
@@ -24,11 +25,12 @@ pub enum Batches<'a> {
 pub struct Sim {
     world: World,
     grid: Grid,
+    relays: Relays,
     observers: Vec<Observer>,
     view: View,
     map: u32,
     tick_ms: u16,
-    phases: [Phase; 5],
+    phases: [Phase; PHASES.len()],
     refusals: Vec<Refusal>,
 }
 
@@ -37,6 +39,7 @@ impl Sim {
         Self {
             world: World::new(spawns, rules),
             grid: Grid::new(view.radius * 0.5),
+            relays: Relays::default(),
             observers: Vec::new(),
             view,
             map,
@@ -77,6 +80,7 @@ impl Sim {
         let Self {
             world,
             grid,
+            relays,
             observers,
             view,
             map,
@@ -116,11 +120,21 @@ impl Sim {
         st.wall_ns[1] = lap_ns(&mut clock);
         phases[2].time(|| grid.rebuild(world.stepped()));
         st.wall_ns[2] = lap_ns(&mut clock);
+        let sending = matches!(batches, Batches::Send(_));
+        if sending {
+            relays.update(world, &phases[3]);
+        }
+        st.wall_ns[3] = lap_ns(&mut clock);
         let bodies = world.stepped();
         observers.retain(|o| bodies[o.id as usize].alive);
-        let built = if matches!(batches, Batches::Send(_)) {
-            let scene = Scene { world, grid, view };
-            let phase = &phases[3];
+        let built = if sending {
+            let scene = Scene {
+                world,
+                grid,
+                view,
+                relays,
+            };
+            let phase = &phases[4];
             observers
                 .par_chunks_mut(OBSERVERS_PER_TASK)
                 .map_init(Scratch::default, |scratch, chunk| {
@@ -134,20 +148,14 @@ impl Sim {
         } else {
             Built::default()
         };
-        st.wall_ns[3] = lap_ns(&mut clock);
-        st.hash = world.hash(&phases[4]);
         st.wall_ns[4] = lap_ns(&mut clock);
+        st.hash = world.hash(&phases[5]);
+        st.wall_ns[5] = lap_ns(&mut clock);
         st.players = world.alive() as u32;
         st.claims = stepped.claims;
         st.refused = stepped.refused;
         st.stale = stepped.stale;
-        st.appeared = built.appeared;
-        st.vanished = built.vanished;
-        st.moves = built.moves;
-        st.deferred = built.deferred;
-        st.corrections = built.corrections;
-        st.kicked = built.kicked;
-        st.bytes_out = built.bytes;
+        st.built = built;
         for (p, phase) in phases.iter().enumerate() {
             let taken = phase.take();
             st.cpu_ns[p] = taken.cpu_ns;

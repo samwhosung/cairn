@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::replicate::Built;
 use crate::rules::Why;
 
 pub use clock::{process_cpu_ns, thread_cpu_ns};
@@ -111,25 +112,19 @@ impl Phase {
 }
 
 /// The phases of a tick in the order they run, which is also the order of every per-phase array.
-pub const PHASES: [&str; 5] = ["admit", "step", "index", "replicate", "hash"];
+pub const PHASES: [&str; 6] = ["admit", "step", "index", "encode", "replicate", "hash"];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TickStats {
     pub tick: u32,
     pub players: u32,
-    pub cpu_ns: [u64; 5],
-    pub largest_task_ns: [u64; 5],
-    pub wall_ns: [u64; 5],
+    pub cpu_ns: [u64; PHASES.len()],
+    pub largest_task_ns: [u64; PHASES.len()],
+    pub wall_ns: [u64; PHASES.len()],
     pub claims: u32,
     pub refused: [u32; Why::ALL.len()],
     pub stale: u32,
-    pub appeared: u32,
-    pub vanished: u32,
-    pub moves: u32,
-    pub deferred: u32,
-    pub corrections: u32,
-    pub kicked: u32,
-    pub bytes_out: u64,
+    pub built: Built,
     pub hash: u64,
 }
 
@@ -163,7 +158,7 @@ pub struct Summary {
     /// Percentiles 50, 99 and 100 of the tick's wall time, ms.
     pub wall: [f64; 3],
     /// Mean CPU per tick of each of [`PHASES`], ms.
-    pub phase_cpu: [f64; 5],
+    pub phase_cpu: [f64; PHASES.len()],
     pub out_per_client: f64,
     pub in_per_client: f64,
     pub out_total: f64,
@@ -173,7 +168,15 @@ pub struct Summary {
     pub stale: u64,
     pub deferred: u64,
     pub kicked: u64,
-    pub moves_per_client: f64,
+    pub appears_without_slot: u64,
+    pub movements_per_client: f64,
+    pub turns_per_client: f64,
+    pub states_per_client: f64,
+    /// Moves and turns a client received per second by tier, nearest first.
+    pub tiers_per_client: [f64; 3],
+    pub bytes_per_movement: f64,
+    /// The fraction of the bytes sent that were copied from pieces encoded once for everyone.
+    pub shared: f64,
     pub hash: u64,
     /// The whole process's CPU over the window as a share of one core.
     pub process_share: f64,
@@ -192,10 +195,13 @@ impl Summary {
         let per_client_s = f64::from(players.max(1)) * wall_secs.max(1e-9);
         let sum = |f: &dyn Fn(&TickStats) -> u64| ticks.iter().map(f).sum::<u64>();
         let ms = |f: &dyn Fn(&TickStats) -> u64| p50_p99_max_ms(ticks.iter().map(f).collect());
-        let mut phase_cpu = [0.0; 5];
+        let mut phase_cpu = [0.0; PHASES.len()];
         for (p, v) in phase_cpu.iter_mut().enumerate() {
             *v = sum(&|t| t.cpu_ns[p]) as f64 / n / 1e6;
         }
+        let built = ticks.iter().fold(Built::default(), |a, t| a.add(t.built));
+        let bytes_out = built.bytes as f64;
+        let movements = f64::from(built.moves + built.turns + built.states);
         Self {
             threads,
             ticks: ticks.len(),
@@ -204,15 +210,23 @@ impl Summary {
             cpu: ms(&TickStats::cpu_total_ns),
             wall: ms(&TickStats::wall_total_ns),
             phase_cpu,
-            out_per_client: sum(&|t| t.bytes_out) as f64 / per_client_s,
+            out_per_client: bytes_out / per_client_s,
             in_per_client: bytes_in as f64 / per_client_s,
-            out_total: sum(&|t| t.bytes_out) as f64 / wall_secs.max(1e-9),
+            out_total: bytes_out / wall_secs.max(1e-9),
             claims_per_client: sum(&|t| u64::from(t.claims)) as f64 / per_client_s,
             refused: std::array::from_fn(|i| sum(&|t| u64::from(t.refused[i]))),
             stale: sum(&|t| u64::from(t.stale)),
-            deferred: sum(&|t| u64::from(t.deferred)),
-            kicked: sum(&|t| u64::from(t.kicked)),
-            moves_per_client: sum(&|t| u64::from(t.moves)) as f64 / per_client_s,
+            deferred: sum(&|t| u64::from(t.built.deferred)),
+            kicked: sum(&|t| u64::from(t.built.kicked)),
+            appears_without_slot: sum(&|t| u64::from(t.built.appears_without_slot)),
+            movements_per_client: movements / per_client_s,
+            turns_per_client: f64::from(built.turns) / per_client_s,
+            states_per_client: f64::from(built.states) / per_client_s,
+            tiers_per_client: built
+                .moves_and_turns_by_tier
+                .map(|n| f64::from(n) / per_client_s),
+            bytes_per_movement: built.movement_bytes as f64 / movements.max(1.0),
+            shared: built.shared_bytes as f64 / bytes_out.max(1.0),
             hash: ticks.last().map_or(0, |t| t.hash),
             process_share: process_ns as f64 / 1e9 / wall_secs.max(1e-9),
         }
@@ -224,7 +238,7 @@ impl Summary {
             .map(|w| format!("{w:?}").to_lowercase())
             .collect();
         format!(
-            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | moves/s per client | refused: {} | stale | deferred | kicked | process % of a core | world hash | load |",
+            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | movements/s per client | of them turns / states | moves and turns by tier, near / middle / far | B per movement | shared % of bytes out | refused: {} | stale | deferred | kicked / appears without a slot | process % of a core | world hash | load |",
             PHASES.join(" / "),
             why.join(" / ")
         )
@@ -237,7 +251,7 @@ impl Summary {
         let [w50, w99, _] = self.wall;
         let phases: Vec<String> = self.phase_cpu.iter().map(|p| format!("{p:.3}")).collect();
         format!(
-            "| {label} | {} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {} | {} | {} | {} | {:.1} | {:016x} | {} |",
+            "| {label} | {} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {:.1} / {:.1} | {} | {:.2} | {:.1} | {} | {} | {} | {} / {} | {:.1} | {:016x} | {} |",
             self.players,
             self.threads,
             self.ticks,
@@ -246,11 +260,17 @@ impl Summary {
             self.in_per_client,
             self.out_total / 1e6,
             self.claims_per_client,
-            self.moves_per_client,
+            self.movements_per_client,
+            self.turns_per_client,
+            self.states_per_client,
+            self.tiers_per_client.map(|n| format!("{n:.1}")).join(" / "),
+            self.bytes_per_movement,
+            self.shared * 100.0,
             self.refused.map(|n| n.to_string()).join(" / "),
             self.stale,
             self.deferred,
             self.kicked,
+            self.appears_without_slot,
             self.process_share * 100.0,
             self.hash,
             load_average(),
@@ -293,12 +313,12 @@ mod tests {
     #[test]
     fn the_ideal_tick_is_spread_cpu_or_the_largest_task() {
         let t = TickStats {
-            cpu_ns: [100, 1400, 10, 2800, 0],
-            largest_task_ns: [100, 50, 10, 400, 0],
+            cpu_ns: [100, 1400, 10, 70, 2800, 0],
+            largest_task_ns: [100, 50, 10, 20, 400, 0],
             ..TickStats::default()
         };
-        assert_eq!(t.ideal_ns(14), 100 + 100 + 10 + 400);
-        assert_eq!(t.ideal_ns(1), 4310);
+        assert_eq!(t.ideal_ns(14), 100 + 100 + 10 + 20 + 400);
+        assert_eq!(t.ideal_ns(1), 4380);
     }
 
     #[test]

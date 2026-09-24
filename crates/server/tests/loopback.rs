@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use protocol::{
-    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
+    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
     flags,
 };
 use server::{Config, InputOrder, Replay, Replicate, Spawn, Window};
@@ -20,6 +21,8 @@ struct Client {
     stream: TcpStream,
     frames: Frames,
     id: u32,
+    at: [f32; 3],
+    slots: HashMap<u16, u32>,
 }
 
 impl Client {
@@ -40,12 +43,15 @@ impl Client {
             stream,
             frames: Frames::default(),
             id: 0,
+            at: [0.0; 3],
+            slots: HashMap::new(),
         };
         let frame = client.frame();
         let Ok(ServerMessage::Welcome(w)) = ServerMessage::read(&frame) else {
             panic!("no welcome");
         };
         client.id = w.id;
+        client.at = w.spawn.pos;
         client
     }
 
@@ -66,13 +72,30 @@ impl Client {
         let Ok(ServerMessage::Batch(b)) = ServerMessage::read(&frame) else {
             panic!("not a batch");
         };
-        b.map(|r| match r.expect("a valid record") {
-            Record::Appear { id, .. } => Got::Appear(id),
-            Record::Vanish { id } => Got::Vanish(id),
-            Record::Move { id, movement } => Got::Move(id, movement.pos),
-            Record::Correct { seq, .. } => Got::Correct(seq),
-        })
-        .collect()
+        let records: Vec<Record<'_>> = b.map(|r| r.expect("a valid record")).collect();
+        let mut got = Vec::new();
+        for r in records {
+            let (slot, pos) = match r {
+                Record::Appear { slot, id, .. } => {
+                    self.slots.insert(slot, id);
+                    got.push(Got::Appear(id));
+                    continue;
+                }
+                Record::Vanish { slot } => {
+                    got.push(Got::Vanish(self.slots.remove(&slot).expect("held")));
+                    continue;
+                }
+                Record::Correct { seq, .. } => {
+                    got.push(Got::Correct(seq));
+                    continue;
+                }
+                Record::Turn { .. } => continue,
+                Record::Move { slot, pos, .. } => (slot, pos),
+                Record::State { slot, state } => (slot, state.pos),
+            };
+            got.push(Got::Move(self.slots[&slot], pos.around(self.at).yards()));
+        }
+        got
     }
 
     fn records_until(&mut self, ticks: usize, want: impl Fn(&Got) -> bool) -> Vec<Got> {
@@ -123,20 +146,16 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
 
     b.claim(0, 1000, [10.0, 0.0, 0.0]);
     let seen = a.records_until(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
-    assert!(
-        seen.contains(&Got::Move(b.id, [10.0, 0.0, 0.0])),
-        "{seen:?}"
-    );
+    let b_id = b.id;
+    let relayed = |yd| Got::Move(b_id, Pos::of(yd).yards());
+    assert!(seen.contains(&relayed([10.0, 0.0, 0.0])), "{seen:?}");
 
     b.claim(0, 1500, [90.0, 0.0, 0.0]);
     let own = b.records_until(40, |g| matches!(g, Got::Correct(_)));
     assert!(own.contains(&Got::Correct(1)), "{own:?}");
     b.claim(1, 1600, [10.5, 0.0, 0.0]);
     let seen = a.records_until(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
-    assert!(
-        seen.contains(&Got::Move(b.id, [10.5, 0.0, 0.0])),
-        "{seen:?}"
-    );
+    assert!(seen.contains(&relayed([10.5, 0.0, 0.0])), "{seen:?}");
     assert!(
         !seen
             .iter()
@@ -208,7 +227,7 @@ fn a_recorded_run_replays_with_every_batch_and_dumps_the_first_clients_frames() 
     };
     let r = server::replay(&log, &how).expect("a replay");
     assert_eq!(r.first_mismatch, None);
-    assert!(r.summary.moves_per_client > 0.0);
+    assert!(r.summary.movements_per_client > 0.0);
     let mut frames = Frames::default();
     frames.extend(&std::fs::read(&dump).expect("a dump"));
     let first = frames

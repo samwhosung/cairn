@@ -1,8 +1,12 @@
-use protocol::{begin_batch, finish_frame, write_appear, write_correct, write_move, write_vanish};
+use protocol::{
+    SLOTS, begin_batch, finish_frame, write_appear, write_correct, write_move, write_state,
+    write_turn, write_vanish,
+};
 
 use crate::grid::Grid;
 use crate::net::Outbox;
-use crate::world::{Body, World};
+use crate::relays::{Hot, Relays};
+use crate::world::World;
 
 /// How far a player sees, and how often what it sees is refreshed.
 #[derive(Clone, Copy, Debug)]
@@ -13,8 +17,8 @@ pub struct View {
     pub grey: f32,
     /// Ticks between rechecks of who is in view, staggered across observers.
     pub aoi_every: u32,
-    /// Movement refreshes by distance, nearest tier first. A change of movement flags goes out
-    /// at once at any distance.
+    /// Movement refreshes by distance, nearest tier first. A change of how an entity moves goes
+    /// out at once at any distance.
     pub tiers: [Tier; 3],
     /// A client with more than this many bytes queued gets no refreshes until it drains.
     pub shed_bytes: usize,
@@ -65,11 +69,11 @@ impl Default for View {
 }
 
 impl View {
-    fn every(&self, d2: f32) -> u32 {
+    fn tier(&self, d2: f32) -> usize {
         self.tiers
             .iter()
-            .find(|t| d2 <= t.within * t.within)
-            .map_or(1, |t| t.every)
+            .position(|t| d2 <= t.within * t.within)
+            .unwrap_or(self.tiers.len() - 1)
     }
 }
 
@@ -77,11 +81,32 @@ impl View {
 struct Seen {
     id: u32,
     sent_tick: u32,
+    slot: u16,
+}
+
+#[derive(Default)]
+struct Slots {
+    freed: Vec<u16>,
+    first_unused: u16,
+}
+
+impl Slots {
+    fn take(&mut self) -> Option<u16> {
+        if let Some(slot) = self.freed.pop() {
+            return Some(slot);
+        }
+        let slot = self.first_unused;
+        (slot < SLOTS).then(|| {
+            self.first_unused += 1;
+            slot
+        })
+    }
 }
 
 pub struct Observer {
     pub id: u32,
     seen: Vec<Seen>,
+    slots: Slots,
     fresh: bool,
     size_hint: usize,
     pub outbox: Option<Outbox>,
@@ -92,6 +117,7 @@ impl Observer {
         Self {
             id,
             seen: Vec::new(),
+            slots: Slots::default(),
             fresh: true,
             size_hint: 64,
             outbox,
@@ -104,10 +130,16 @@ pub struct Built {
     pub appeared: u32,
     pub vanished: u32,
     pub moves: u32,
+    pub turns: u32,
+    pub states: u32,
+    pub moves_and_turns_by_tier: [u32; 3],
+    pub appears_without_slot: u32,
     pub deferred: u32,
     pub corrections: u32,
     pub kicked: u32,
     pub bytes: u64,
+    pub movement_bytes: u64,
+    pub shared_bytes: u64,
 }
 
 impl Built {
@@ -116,10 +148,18 @@ impl Built {
             appeared: self.appeared + o.appeared,
             vanished: self.vanished + o.vanished,
             moves: self.moves + o.moves,
+            turns: self.turns + o.turns,
+            states: self.states + o.states,
+            moves_and_turns_by_tier: std::array::from_fn(|t| {
+                self.moves_and_turns_by_tier[t] + o.moves_and_turns_by_tier[t]
+            }),
+            appears_without_slot: self.appears_without_slot + o.appears_without_slot,
             deferred: self.deferred + o.deferred,
             corrections: self.corrections + o.corrections,
             kicked: self.kicked + o.kicked,
             bytes: self.bytes + o.bytes,
+            movement_bytes: self.movement_bytes + o.movement_bytes,
+            shared_bytes: self.shared_bytes + o.shared_bytes,
         }
     }
 }
@@ -134,6 +174,7 @@ pub struct Scene<'a> {
     pub world: &'a World,
     pub grid: &'a Grid,
     pub view: &'a View,
+    pub relays: &'a Relays,
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -160,12 +201,12 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         built.corrections += 1;
     }
     let mut pass = Pass {
-        me: &me,
-        world,
-        bodies,
+        me: [me.movement.pos[0], me.movement.pos[1]],
+        relays: scene.relays,
         view,
         tick,
         shedding: queued > view.shed_bytes || behind > view.shed_ticks,
+        slots: &mut o.slots,
         out: &mut out,
         built: &mut built,
     };
@@ -195,20 +236,19 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
 }
 
 struct Pass<'a> {
-    me: &'a Body,
-    world: &'a World,
-    bodies: &'a [Body],
+    me: [f32; 2],
+    relays: &'a Relays,
     view: &'a View,
     tick: u32,
     shedding: bool,
+    slots: &'a mut Slots,
     out: &'a mut Vec<u8>,
     built: &'a mut Built,
 }
 
 impl Pass<'_> {
-    fn dist2(&self, b: &Body) -> f32 {
-        let (p, q) = (self.me.movement.pos, b.movement.pos);
-        (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)
+    fn dist2(&self, h: &Hot) -> f32 {
+        (self.me[0] - h.xy[0]).powi(2) + (self.me[1] - h.xy[1]).powi(2)
     }
 
     fn recheck(&mut self, seen: &[Seen], near: &[u32], next: &mut Vec<Seen>) {
@@ -226,17 +266,21 @@ impl Pass<'_> {
                     j += 1;
                 }
                 (Some(&e), n) if n.is_none_or(|&n| e.id < n) => {
-                    write_vanish(self.out, e.id);
-                    self.built.vanished += 1;
+                    self.vanish(e.slot);
                     i += 1;
                 }
                 (_, Some(&n)) => {
-                    if self.dist2(&self.bodies[n as usize]) <= r2 {
-                        self.appear(n);
-                        next.push(Seen {
-                            id: n,
-                            sent_tick: self.tick,
-                        });
+                    if self.dist2(&self.relays.hot[n as usize]) <= r2 {
+                        if let Some(slot) = self.slots.take() {
+                            self.appear(n, slot);
+                            next.push(Seen {
+                                id: n,
+                                sent_tick: self.tick,
+                                slot,
+                            });
+                        } else {
+                            self.built.appears_without_slot += 1;
+                        }
                     }
                     j += 1;
                 }
@@ -245,17 +289,24 @@ impl Pass<'_> {
         }
     }
 
-    fn appear(&mut self, id: u32) {
-        let b = &self.bodies[id as usize];
-        let (name, look) = (self.world.name(id), self.world.look(id));
-        write_appear(self.out, id, name, look, &b.movement);
+    fn appear(&mut self, id: u32, slot: u16) {
+        let (intro, relay) = (
+            &self.relays.intros[id as usize],
+            &self.relays.pieces[id as usize],
+        );
+        self.built.shared_bytes += write_appear(self.out, slot, intro, relay) as u64;
         self.built.appeared += 1;
     }
 
+    fn vanish(&mut self, slot: u16) {
+        write_vanish(self.out, slot);
+        self.slots.freed.push(slot);
+        self.built.vanished += 1;
+    }
+
     fn keep(&mut self, e: &mut Seen) -> bool {
-        if !self.bodies[e.id as usize].alive {
-            write_vanish(self.out, e.id);
-            self.built.vanished += 1;
+        if !self.relays.hot[e.id as usize].alive {
+            self.vanish(e.slot);
             return false;
         }
         self.refresh(e);
@@ -263,21 +314,34 @@ impl Pass<'_> {
     }
 
     fn refresh(&mut self, e: &mut Seen) {
-        let b = &self.bodies[e.id as usize];
-        if b.moved_at <= e.sent_tick {
-            return;
-        }
-        if b.flags_changed_at <= e.sent_tick {
+        let h = &self.relays.hot[e.id as usize];
+        let relay = &self.relays.pieces[e.id as usize];
+        let shared = if h.state_changed_at > e.sent_tick {
+            self.built.states += 1;
+            write_state(self.out, e.slot, relay)
+        } else {
+            if h.pos_changed_at.max(h.facing_changed_at) <= e.sent_tick {
+                return;
+            }
             if self.shedding {
                 self.built.deferred += 1;
                 return;
             }
-            if self.tick - e.sent_tick < self.view.every(self.dist2(b)) {
+            let tier = self.view.tier(self.dist2(h));
+            if self.tick - e.sent_tick < self.view.tiers[tier].every {
                 return;
             }
-        }
-        write_move(self.out, e.id, &b.movement);
+            self.built.moves_and_turns_by_tier[tier] += 1;
+            if h.pos_changed_at > e.sent_tick {
+                self.built.moves += 1;
+                write_move(self.out, e.slot, relay)
+            } else {
+                self.built.turns += 1;
+                write_turn(self.out, e.slot, relay)
+            }
+        };
+        self.built.shared_bytes += shared as u64;
+        self.built.movement_bytes += 2 + shared as u64;
         e.sent_tick = self.tick;
-        self.built.moves += 1;
     }
 }

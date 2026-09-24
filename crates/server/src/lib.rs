@@ -3,6 +3,7 @@
 mod grid;
 mod log;
 mod net;
+mod relays;
 mod replicate;
 mod rules;
 mod serve;

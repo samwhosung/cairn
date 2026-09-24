@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use protocol::{Appearance, Claim, Hello, Movement, Record, ServerMessage, flags};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -116,19 +118,45 @@ enum Got {
     Correct(u32),
 }
 
-fn next_batch(rx: &mut UnboundedReceiver<Vec<u8>>, tick: u32) -> Vec<Got> {
-    let bytes = rx.try_recv().expect("a batch every tick");
-    let Ok(ServerMessage::Batch(b)) = ServerMessage::read(&bytes[protocol::LEN_BYTES..]) else {
-        panic!("not a batch");
-    };
-    assert_eq!(b.tick, tick);
-    b.map(|r| match r.expect("a valid record") {
-        Record::Appear { id, .. } => Got::Appear(id),
-        Record::Vanish { id } => Got::Vanish(id),
-        Record::Move { id, .. } => Got::Move(id),
-        Record::Correct { seq, .. } => Got::Correct(seq),
-    })
-    .collect()
+struct Client {
+    rx: UnboundedReceiver<Vec<u8>>,
+    slots: HashMap<u16, u32>,
+}
+
+impl Client {
+    fn new(rx: UnboundedReceiver<Vec<u8>>) -> Self {
+        Self {
+            rx,
+            slots: HashMap::new(),
+        }
+    }
+
+    fn welcome(&mut self) {
+        assert!(self.rx.try_recv().is_ok(), "a welcome");
+    }
+
+    fn next_batch(&mut self, tick: u32) -> Vec<Got> {
+        let bytes = self.rx.try_recv().expect("a batch every tick");
+        let Ok(ServerMessage::Batch(b)) = ServerMessage::read(&bytes[protocol::LEN_BYTES..]) else {
+            panic!("not a batch");
+        };
+        assert_eq!(b.tick, tick);
+        let mut got = Vec::new();
+        for r in b {
+            got.push(match r.expect("a valid record") {
+                Record::Appear { slot, id, .. } => {
+                    assert!(self.slots.insert(slot, id).is_none(), "slot {slot} taken");
+                    Got::Appear(id)
+                }
+                Record::Vanish { slot } => Got::Vanish(self.slots.remove(&slot).expect("held")),
+                Record::Move { slot, .. }
+                | Record::Turn { slot, .. }
+                | Record::State { slot, .. } => Got::Move(self.slots[&slot]),
+                Record::Correct { seq, .. } => Got::Correct(seq),
+            });
+        }
+        got
+    }
 }
 
 fn moves_of(records: &[Got], of: u32) -> usize {
@@ -149,7 +177,7 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
     for conn in 0..4 {
         let (outbox, r) = Outbox::channel();
         shared.hold_outbox(conn, outbox);
-        rx.push(r);
+        rx.push(Client::new(r));
     }
     let pool = pool(2);
     let mut run = |inputs: Vec<Stamped>| {
@@ -164,8 +192,8 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
     let first: Vec<Vec<Got>> = rx
         .iter_mut()
         .map(|r| {
-            assert!(r.try_recv().is_ok(), "a welcome");
-            next_batch(r, 0)
+            r.welcome();
+            r.next_batch(0)
         })
         .collect();
     assert_eq!(first[0], [Got::Appear(1), Got::Appear(3)]);
@@ -185,11 +213,11 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
             inputs.push(claim(2, 1, 150, 0, running(150, [1.0, 0.0, 0.0])));
         }
         run(inputs);
-        let records = next_batch(&mut rx[0], t);
+        let records = rx[0].next_batch(t);
         assert_eq!(moves_of(&records, 1), usize::from(t == 1), "tick {t}");
         assert!(!records.contains(&Got::Appear(2)));
         far_moves += moves_of(&records, 3);
-        let own = next_batch(&mut rx[2], t);
+        let own = rx[2].next_batch(t);
         assert_eq!(own.contains(&Got::Correct(1)), t == 3, "tick {t}");
     }
     assert_eq!(
@@ -202,7 +230,7 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
         received_ms: 1100,
         input: Input::Leave,
     }]);
-    assert!(next_batch(&mut rx[0], 22).contains(&Got::Vanish(1)));
+    assert!(rx[0].next_batch(22).contains(&Got::Vanish(1)));
 }
 
 #[test]
@@ -210,7 +238,8 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
     let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
     let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
     let shared = Shared::new();
-    let (slow, mut rx) = Outbox::channel();
+    let (slow, rx) = Outbox::channel();
+    let mut rx = Client::new(rx);
     let behind_by = slow.behind_by();
     shared.hold_outbox(0, slow);
     shared.hold_outbox(1, Outbox::channel().0);
@@ -224,8 +253,8 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
         )
     };
     run((0..2).map(join).collect());
-    assert!(rx.try_recv().is_ok(), "a welcome");
-    assert_eq!(next_batch(&mut rx, 0), [Got::Appear(1)]);
+    rx.welcome();
+    assert_eq!(rx.next_batch(0), [Got::Appear(1)]);
     behind_by(0);
     let mut moved = Vec::new();
     for t in 1..=30 {
@@ -234,12 +263,10 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
             26 => behind_by(1),
             _ => {}
         }
-        let flags = if (20..25).contains(&t) {
-            0
-        } else {
-            flags::FORWARD
-        };
-        let x = 10.0 + t.min(20) as f32 * 0.3;
+        let standing = (20..25).contains(&t);
+        let flags = if standing { 0 } else { flags::FORWARD };
+        let strides = if t < 20 { t } else { t.max(24) - 5 };
+        let x = 10.0 + strides as f32 * 0.3;
         let movement = Movement {
             time: t * 50,
             flags,
@@ -247,7 +274,7 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
             ..Movement::default()
         };
         run(vec![claim(1, t, t * 50, 0, movement)]);
-        if moves_of(&next_batch(&mut rx, t), 1) > 0 {
+        if moves_of(&rx.next_batch(t), 1) > 0 {
             moved.push(t);
         }
     }

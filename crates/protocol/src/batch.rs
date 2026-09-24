@@ -1,33 +1,55 @@
 use crate::frame::{Kind, begin_frame};
-use crate::message::{read_name, write_name};
+use crate::message::read_name;
 use crate::reader::Reader;
-use crate::{Appearance, Error, Movement};
+use crate::{Angle, Appearance, Error, Intro, Movement, Relay, State, Wrapped};
+
+const MOVE: u16 = 0;
+const TURN: u16 = 1;
+const STATE: u16 = 2;
+const OTHER: u16 = 3;
+const KIND_SHIFT: u16 = 14;
 
 const APPEAR: u8 = 1;
 const VANISH: u8 = 2;
-const MOVE: u8 = 3;
-const CORRECT: u8 = 4;
+const CORRECT: u8 = 3;
 
-/// One piece of a tick's news for one client. Entity ids are never reused.
+/// How many slots a client's view has: one for each entity in it.
+pub const SLOTS: u16 = 1 << KIND_SHIFT;
+
+/// One piece of a tick's news for one client. Each record opens with a little-endian `u16`. A
+/// move, a turn or a state has its kind in the top two bits; an appear, a vanish or a correct
+/// shares the fourth kind and names itself in the next byte. The low 14 bits are a slot, the
+/// client's own number for an entity in its view, given by the appear that brings the entity in
+/// and free again once it vanishes; a correct's is 0.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Record<'a> {
-    /// An entity came into view: who, what it looks like, and how it moves.
+    /// An entity came into view and holds `slot` from now on.
     Appear {
+        slot: u16,
         id: u32,
         name: &'a str,
         appearance: Appearance,
-        movement: Movement,
+        state: State,
     },
-    /// An entity left view, or the world.
-    Vanish { id: u32 },
-    /// An entity in view moved.
-    Move { id: u32, movement: Movement },
+    /// The entity in `slot` left view, or the world, and the slot is free.
+    Vanish { slot: u16 },
+    /// The entity in `slot` stands and faces here now; its other state is as last relayed.
+    Move {
+        slot: u16,
+        pos: Wrapped,
+        facing: Angle,
+    },
+    /// The entity in `slot` faces this way now, where it stood.
+    Turn { slot: u16, facing: Angle },
+    /// The entity in `slot` changed how it moves.
+    State { slot: u16, state: State },
     /// The server refused this client's claim: its mover stands here, and its claims count again
     /// once they acknowledge `seq`.
     Correct { seq: u32, movement: Movement },
 }
 
-/// One tick's news for one client: its records, read one by one as the batch is iterated.
+/// One tick's news for one client: its records, read one by one as the batch is iterated. The
+/// tick is the time of every record in it.
 pub struct Batch<'a> {
     pub tick: u32,
     records: Reader<'a>,
@@ -43,23 +65,37 @@ impl<'a> Batch<'a> {
 
     fn record(&mut self) -> Result<Record<'a>, Error> {
         let r = &mut self.records;
-        Ok(match r.u8()? {
-            APPEAR => Record::Appear {
-                id: r.u32()?,
-                name: read_name(r)?,
-                appearance: Appearance::read(r)?,
-                movement: Movement::read(r)?,
-            },
-            VANISH => Record::Vanish { id: r.u32()? },
+        let head = r.u16()?;
+        let slot = head & (SLOTS - 1);
+        Ok(match head >> KIND_SHIFT {
             MOVE => Record::Move {
-                id: r.u32()?,
-                movement: Movement::read(r)?,
+                slot,
+                pos: Wrapped::read(r)?,
+                facing: Angle(r.u8()?),
             },
-            CORRECT => Record::Correct {
-                seq: r.u32()?,
-                movement: Movement::read(r)?,
+            TURN => Record::Turn {
+                slot,
+                facing: Angle(r.u8()?),
             },
-            other => return Err(Error::UnknownRecord(other)),
+            STATE => Record::State {
+                slot,
+                state: State::read(r)?,
+            },
+            _ => match r.u8()? {
+                APPEAR => Record::Appear {
+                    slot,
+                    id: r.u32()?,
+                    name: read_name(r)?,
+                    appearance: Appearance::read(r)?,
+                    state: State::read(r)?,
+                },
+                VANISH => Record::Vanish { slot },
+                CORRECT => Record::Correct {
+                    seq: r.u32()?,
+                    movement: Movement::read(r)?,
+                },
+                other => return Err(Error::UnknownRecord(other)),
+            },
         })
     }
 }
@@ -87,32 +123,48 @@ pub fn begin_batch(out: &mut Vec<u8>, tick: u32) -> usize {
     start
 }
 
-pub fn write_appear(
-    out: &mut Vec<u8>,
-    id: u32,
-    name: &str,
-    appearance: &Appearance,
-    movement: &Movement,
-) {
+fn head(out: &mut Vec<u8>, kind: u16, slot: u16) {
+    debug_assert!(slot < SLOTS);
+    out.extend_from_slice(&(kind << KIND_SHIFT | slot).to_le_bytes());
+}
+
+/// Appends a record and returns how many of its bytes it copied from `intro` and `relay`.
+pub fn write_appear(out: &mut Vec<u8>, slot: u16, intro: &Intro, relay: &Relay) -> usize {
+    head(out, OTHER, slot);
     out.push(APPEAR);
-    out.extend_from_slice(&id.to_le_bytes());
-    write_name(out, name);
-    appearance.write(out);
-    movement.write(out);
+    out.extend_from_slice(&intro.0);
+    out.extend_from_slice(relay.stated.bytes());
+    intro.0.len() + relay.stated.bytes().len()
 }
 
-pub fn write_vanish(out: &mut Vec<u8>, id: u32) {
+pub fn write_vanish(out: &mut Vec<u8>, slot: u16) {
+    head(out, OTHER, slot);
     out.push(VANISH);
-    out.extend_from_slice(&id.to_le_bytes());
 }
 
-pub fn write_move(out: &mut Vec<u8>, id: u32, movement: &Movement) {
-    out.push(MOVE);
-    out.extend_from_slice(&id.to_le_bytes());
-    movement.write(out);
+/// Appends a record and returns how many of its bytes it copied from `relay`.
+pub fn write_move(out: &mut Vec<u8>, slot: u16, relay: &Relay) -> usize {
+    head(out, MOVE, slot);
+    out.extend_from_slice(relay.moved.bytes());
+    relay.moved.bytes().len()
+}
+
+/// Appends a record and returns how many of its bytes it copied from `relay`.
+pub fn write_turn(out: &mut Vec<u8>, slot: u16, relay: &Relay) -> usize {
+    head(out, TURN, slot);
+    out.push(relay.facing());
+    1
+}
+
+/// Appends a record and returns how many of its bytes it copied from `relay`.
+pub fn write_state(out: &mut Vec<u8>, slot: u16, relay: &Relay) -> usize {
+    head(out, STATE, slot);
+    out.extend_from_slice(relay.stated.bytes());
+    relay.stated.bytes().len()
 }
 
 pub fn write_correct(out: &mut Vec<u8>, seq: u32, movement: &Movement) {
+    head(out, OTHER, 0);
     out.push(CORRECT);
     out.extend_from_slice(&seq.to_le_bytes());
     movement.write(out);
@@ -121,27 +173,7 @@ pub fn write_correct(out: &mut Vec<u8>, seq: u32, movement: &Movement) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Frames, ServerMessage, finish_frame, flags};
-
-    fn batch_of(records: &[Record<'_>]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let start = begin_batch(&mut out, 77);
-        for r in records {
-            match r {
-                Record::Appear {
-                    id,
-                    name,
-                    appearance,
-                    movement,
-                } => write_appear(&mut out, *id, name, appearance, movement),
-                Record::Vanish { id } => write_vanish(&mut out, *id),
-                Record::Move { id, movement } => write_move(&mut out, *id, movement),
-                Record::Correct { seq, movement } => write_correct(&mut out, *seq, movement),
-            }
-        }
-        finish_frame(&mut out, start);
-        out
-    }
+    use crate::{Frames, Jump, ServerMessage, finish_frame, flags};
 
     fn records_of(bytes: &[u8]) -> (u32, Vec<Result<Record<'_>, Error>>) {
         let Ok(ServerMessage::Batch(batch)) = ServerMessage::read(&bytes[crate::LEN_BYTES..])
@@ -151,53 +183,123 @@ mod tests {
         (batch.tick, batch.collect())
     }
 
-    #[test]
-    fn records_come_back_in_order() {
-        let running = Movement {
+    fn running(pos: [f32; 3], facing: f32) -> Movement {
+        Movement {
             time: 5,
-            flags: flags::FORWARD | flags::FALLING,
-            pos: [1.0, 2.0, 3.0],
+            flags: flags::FORWARD,
+            pos,
+            facing,
             ..Movement::default()
+        }
+    }
+
+    #[test]
+    fn records_come_back_in_order_at_their_sizes() {
+        let leaping = Movement {
+            flags: flags::FORWARD | flags::FALLING,
+            fall_time: 40,
+            jump: Jump {
+                z_speed: -7.955_547,
+                cos: 0.6,
+                sin: 0.8,
+                xy_speed: 7.0,
+            },
+            ..running([1.0, 2.0, 3.0], 0.5)
         };
-        let records = [
-            Record::Correct {
-                seq: 3,
-                movement: Movement::default(),
-            },
-            Record::Appear {
-                id: 10,
-                name: "Marshal Dughan",
-                appearance: Appearance {
-                    race: 1,
-                    ..Appearance::default()
-                },
-                movement: running,
-            },
-            Record::Move {
-                id: 11,
-                movement: running,
-            },
-            Record::Vanish { id: 12 },
-        ];
-        let bytes = batch_of(&records);
+        let here = running([-9439.1, 51.2, 57.25], 2.0);
+        let (walker, jumper) = (Relay::of(&here), Relay::of(&leaping));
+        let look = Appearance {
+            race: 1,
+            ..Appearance::default()
+        };
+        let mut out = Vec::new();
+        let start = begin_batch(&mut out, 77);
+        let mut ends = vec![out.len()];
+        write_correct(&mut out, 3, &Movement::default());
+        ends.push(out.len());
+        write_appear(
+            &mut out,
+            0,
+            &Intro::new(10, "Marshal Dughan", &look),
+            &jumper,
+        );
+        ends.push(out.len());
+        write_move(&mut out, 1, &walker);
+        ends.push(out.len());
+        write_turn(&mut out, SLOTS - 1, &walker);
+        ends.push(out.len());
+        write_state(&mut out, 2, &walker);
+        ends.push(out.len());
+        write_vanish(&mut out, 1);
+        ends.push(out.len());
+        finish_frame(&mut out, start);
+        let sizes: Vec<usize> = ends.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(ends[0], 9, "the batch's own header");
+        assert_eq!(sizes, [35, 2 + 1 + 4 + 15 + 47 + 31, 9, 3, 13, 3]);
+
         let mut frames = Frames::default();
-        frames.extend(&bytes);
+        frames.extend(&out);
         assert!(frames.next_frame().expect("valid").is_some());
-        let (tick, got) = records_of(&bytes);
+        let (tick, got) = records_of(&out);
         assert_eq!(tick, 77);
         let got: Vec<Record<'_>> = got.into_iter().map(|r| r.expect("valid")).collect();
-        assert_eq!(got, records);
+        let state = State::of(&here);
+        assert_eq!(
+            got,
+            [
+                Record::Correct {
+                    seq: 3,
+                    movement: Movement::default()
+                },
+                Record::Appear {
+                    slot: 0,
+                    id: 10,
+                    name: "Marshal Dughan",
+                    appearance: look,
+                    state: State::of(&leaping),
+                },
+                Record::Move {
+                    slot: 1,
+                    pos: state.pos,
+                    facing: state.facing
+                },
+                Record::Turn {
+                    slot: SLOTS - 1,
+                    facing: state.facing
+                },
+                Record::State { slot: 2, state },
+                Record::Vanish { slot: 1 },
+            ]
+        );
     }
 
     #[test]
     fn a_bad_record_ends_the_batch() {
-        let mut bytes = batch_of(&[Record::Vanish { id: 1 }, Record::Vanish { id: 2 }]);
-        let second = bytes.len() - 5;
-        bytes[second] = 99;
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 1);
+        write_vanish(&mut bytes, 1);
+        write_vanish(&mut bytes, 2);
+        finish_frame(&mut bytes, start);
+        let last = bytes.len() - 1;
+        bytes[last] = 99;
         let (_, got) = records_of(&bytes);
         assert_eq!(
             got,
-            vec![Ok(Record::Vanish { id: 1 }), Err(Error::UnknownRecord(99))]
+            vec![
+                Ok(Record::Vanish { slot: 1 }),
+                Err(Error::UnknownRecord(99))
+            ]
         );
+    }
+
+    #[test]
+    fn a_cut_record_is_truncated() {
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 1);
+        write_move(&mut bytes, 4, &Relay::of(&running([1.0, 2.0, 3.0], 0.0)));
+        bytes.pop();
+        finish_frame(&mut bytes, start);
+        let (_, got) = records_of(&bytes);
+        assert_eq!(got, vec![Err(Error::Truncated)]);
     }
 }
