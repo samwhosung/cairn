@@ -22,8 +22,8 @@ const LEAVE_MIN_ALPHA: f32 = 0.01;
 
 /// Another player in view, as the server named it.
 #[derive(Component, Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
 pub struct Remote {
+    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub id: u32,
     pub name: String,
 }
@@ -134,6 +134,7 @@ impl Others {
                 if let Some(old) = self.by_slot.remove(&slot) {
                     leave(commands, old.entity, at.now_secs);
                 }
+                info!("{name} comes into view");
                 let entity = commands.spawn_empty().id();
                 let relayed = Relayed::of(entity, &state, at.wire_ms, at.me);
                 let mv = relayed.relay_move(at.wire_ms);
@@ -231,6 +232,9 @@ fn leave(commands: &mut Commands<'_, '_>, entity: Entity, now: f32) {
     commands
         .entity(entity)
         .queue(move |mut e: EntityWorldMut<'_>| {
+            if let Some(r) = e.get::<Remote>() {
+                info!("{} leaves view", r.name);
+            }
             let drawn = e.get::<UnitAlpha>().map_or(1.0, |a| a.alpha);
             let from = e.get::<UnitAppear>().map_or(drawn, |a| a.alpha(now));
             e.remove::<(Remote, UnitAppear)>();

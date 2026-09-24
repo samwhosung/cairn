@@ -468,7 +468,7 @@ fn a_tauren_and_a_gnome_stand_where_the_human_does() {
     }
 }
 
-fn frame_costs(p: &mut Painter, frames: usize) -> String {
+pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
     let mut costs: Vec<Duration> = (0..frames)
         .map(|_| {
             let t = Instant::now();

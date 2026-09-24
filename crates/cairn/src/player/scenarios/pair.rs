@@ -245,6 +245,7 @@ pub struct Walked {
     pub faded_after: Option<u32>,
     /// How often the server put A and B back.
     pub corrections: [u32; 2],
+    pub server: server::Summary,
 }
 
 /// A and B on one server at `place`, looking as given; B's view broken as `faults` says.
@@ -270,6 +271,7 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<
         gone_after: None,
         faded_after: None,
         corrections: [0; 2],
+        server: server::Summary::default(),
     };
     for frame in 0..place.frames {
         script_a.frame(&mut a, place.acts, frame);
@@ -295,7 +297,22 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<
             walked.faded_after = Some(frame);
         }
     }
+    drop(b);
+    walked.server = server.stop().expect("the server stops");
     Some(walked)
+}
+
+/// A walking `place` alone, on a server of its own: what the server spent.
+pub fn alone(place: &Place) -> Option<server::Summary> {
+    let server = serve(&[place.a]);
+    let mut a = Walker::joined(server.addr(), "A", CharacterLook::naked(1, 0), HZ)?;
+    let mut script = Script::default();
+    for frame in 0..place.frames {
+        script.frame(&mut a, place.acts, frame);
+        a.run(1);
+    }
+    drop(a);
+    Some(server.stop().expect("the server stops"))
 }
 
 fn human() -> CharacterLook {
@@ -344,4 +361,16 @@ fn a_view_that_drops_every_other_move_or_never_dead_reckons_breaks_the_bound() {
         eprintln!("{faults:?}: {}", w.a_seen_by_b.line("B's copy of A"));
         assert!(w.a_seen_by_b.over > 0, "{faults:?} passed the check");
     }
+}
+
+#[test]
+#[ignore = "a measurement, for a release build; set WOW_DATA"]
+fn the_server_cost_of_one_player_and_of_two() {
+    let Some(one) = alone(&MEADOW_WALK) else {
+        return;
+    };
+    let two = walk(&MEADOW_WALK, [human(), human()], Faults::default()).expect("the install");
+    eprintln!("{}", server::Summary::header());
+    eprintln!("{}", one.row("one player in-process"));
+    eprintln!("{}", two.server.row("two players in-process"));
 }

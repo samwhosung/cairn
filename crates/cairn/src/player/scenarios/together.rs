@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use world::unit::{BodyDressed, CharacterLook, UnitBody};
 
 use super::honest::serve;
-use super::pictures::{EAST, GOLDSHIRE, Painter};
+use super::pictures::{EAST, GOLDSHIRE, Painter, frame_costs};
 use super::walker::Walker;
 use crate::net::Remote;
 
@@ -127,4 +127,48 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         }
         let _ = cue.send(());
     }
+}
+
+/// Other players in view, and how many of them are dressed.
+fn crowd(p: &mut Painter) -> (usize, usize) {
+    let world = p.app.world_mut();
+    let seen = world
+        .query_filtered::<(), With<Remote>>()
+        .iter(world)
+        .count();
+    let dressed = world
+        .query_filtered::<(), (With<Remote>, With<BodyDressed>)>()
+        .iter(world)
+        .count();
+    (seen, dressed)
+}
+
+#[test]
+#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES and \
+            CAIRN_SERVER to a server a crowd walks"]
+fn the_frame_cost_beside_a_crowd() {
+    let Some(server) = std::env::var("CAIRN_SERVER")
+        .ok()
+        .and_then(|a| a.parse().ok())
+    else {
+        eprintln!("skipped: set CAIRN_SERVER");
+        return;
+    };
+    let at = [GOLDSHIRE[0], GOLDSHIRE[1], 57.0];
+    let Some(mut p) = Painter::joined(server, at, EAST, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    while !(p.arrived() && crowd(&mut p).1 >= 50) {
+        assert!(Instant::now() < deadline, "the crowd never arrived");
+        wait(&mut p, 0.0);
+    }
+    wait(&mut p, 5.0);
+    let (seen, dressed) = crowd(&mut p);
+    let standing = frame_costs(&mut p, 600);
+    p.key(KeyCode::KeyW, bevy::input::ButtonState::Pressed);
+    let running = frame_costs(&mut p, 1200);
+    eprintln!(
+        "beside a crowd of {seen} ({dressed} dressed): standing {standing}; running {running}"
+    );
 }
