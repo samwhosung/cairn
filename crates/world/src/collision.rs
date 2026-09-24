@@ -67,8 +67,8 @@ pub(crate) fn liquid_layers() -> CollisionLayers {
 }
 
 /// Streams colliders for the tiles around the [`WorldCamera`](crate::WorldCamera) and answers
-/// collision and liquid queries. Needs the [`Install`](crate::Install) source and the
-/// [`CurrentMap`](crate::CurrentMap).
+/// collision and liquid queries. Streaming needs the [`Install`](crate::Install) source and the
+/// [`CurrentMap`](crate::CurrentMap); without a map, the queries see only colliders spawned in code.
 pub struct CollisionPlugin;
 
 impl Plugin for CollisionPlugin {
@@ -92,7 +92,7 @@ impl Plugin for CollisionPlugin {
                 Update,
                 (
                     colliders::finish_colliders,
-                    stream::stream_collision,
+                    stream::stream_collision.run_if(resource_exists::<crate::CurrentMap>),
                     stream::spawn_placement_colliders,
                     weld::flush_welds,
                     liquid::maintain_water_index,
