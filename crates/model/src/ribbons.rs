@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 
+use crate::particles::KeyBudget;
 use crate::particles::{ParticleBlend, texture_names};
 use crate::value_track::{ValueTrack, seq0_band, track_keys_with};
 use crate::{le_f32, le_u16, le_u32};
 
-const RIBBONS: usize = 0x134;
+pub(crate) const RIBBONS: usize = 0x134;
 const RIBBON_SIZE: usize = 0xdc;
 const MAX_RIBBONS: usize = 256;
-/// The render-flags table: `(flags, blend)` as two u16s an entry.
 const RENDER_FLAGS: usize = 0x84;
+const RENDER_FLAG_SIZE: usize = 4;
+const RENDER_FLAG_BLEND: usize = 2;
 
 fn track_first<T>(
     b: &[u8],
@@ -86,7 +88,11 @@ impl RibbonVisibility {
     }
 }
 
-fn visibility_by_anim(bytes: &[u8], vis_track: usize) -> Option<RibbonVisibility> {
+fn visibility_by_anim(
+    bytes: &[u8],
+    vis_track: usize,
+    budget: &KeyBudget,
+) -> Option<RibbonVisibility> {
     if vis_track + 0x1c > bytes.len() {
         return None;
     }
@@ -101,11 +107,18 @@ fn visibility_by_anim(bytes: &[u8], vis_track: usize) -> Option<RibbonVisibility
     if n == 0 || tofs + n * 4 > bytes.len() || vofs + n > bytes.len() {
         return None;
     }
+    let nseq = le_u32(bytes, 0x1c) as usize;
+    let oseq = le_u32(bytes, 0x20) as usize;
+    let sequences_walked = match bytes.len().checked_sub(oseq + 0x0c) {
+        Some(room) => nseq.min(room / 0x44 + 1),
+        None => 0,
+    };
+    if !budget.try_spend(n.saturating_mul(sequences_walked + 1)) {
+        return None;
+    }
     let keys: Vec<(u32, bool)> = (0..n)
         .map(|i| (le_u32(bytes, tofs + i * 4), bytes[vofs + i] != 0))
         .collect();
-    let nseq = le_u32(bytes, 0x1c) as usize;
-    let oseq = le_u32(bytes, 0x20) as usize;
     let mut by_anim: HashMap<u16, Vec<(f32, bool)>> = HashMap::new();
     let mut any_off = false;
     for i in 0..nseq {
@@ -134,8 +147,13 @@ fn visibility_by_anim(bytes: &[u8], vis_track: usize) -> Option<RibbonVisibility
     any_off.then_some(RibbonVisibility { by_anim })
 }
 
-/// The M2's ribbon emitters; none when the file has no table that fits.
+/// The M2's ribbon emitters; none when the file has no table that fits. Their tracks read at most
+/// as many keys as the file has bytes.
 pub fn parse_m2_ribbon_emitters(bytes: &[u8]) -> Vec<RibbonEmitterDef> {
+    ribbons_within(bytes, &KeyBudget::one_key_per_byte(bytes))
+}
+
+pub(crate) fn ribbons_within(bytes: &[u8], budget: &KeyBudget) -> Vec<RibbonEmitterDef> {
     if bytes.len() < RIBBONS + 8 || &bytes[0..4] != b"MD20" {
         return Vec::new();
     }
@@ -158,8 +176,8 @@ pub fn parse_m2_ribbon_emitters(bytes: &[u8]) -> Vec<RibbonEmitterDef> {
             };
             let texture = first_index(0x14).and_then(|ti| textures.get(ti).cloned().flatten());
             let blend_mode = first_index(0x1c)
-                .filter(|&m| m < rf_count && rf_base + m * 4 + 4 <= bytes.len())
-                .map(|m| le_u16(bytes, rf_base + m * 4 + 2));
+                .filter(|&m| m < rf_count && rf_base + (m + 1) * RENDER_FLAG_SIZE <= bytes.len())
+                .map(|m| le_u16(bytes, rf_base + m * RENDER_FLAG_SIZE + RENDER_FLAG_BLEND));
             RibbonEmitterDef {
                 bone: le_u16(bytes, e + 0x04),
                 position: [
@@ -170,28 +188,36 @@ pub fn parse_m2_ribbon_emitters(bytes: &[u8]) -> Vec<RibbonEmitterDef> {
                 texture,
                 blend: ribbon_blend(blend_mode),
                 blend_mode,
-                color: track_keys_with(bytes, e + 0x24, [1.0; 3], band, 12, |b, o| {
-                    [le_f32(b, o), le_f32(b, o + 4), le_f32(b, o + 8)]
-                }),
-                alpha: track_keys_with(bytes, e + 0x40, 1.0, band, 2, |b, o| {
-                    f32::from(le_u16(b, o) as i16) / 32767.0
-                }),
-                height_above: track_keys_with(bytes, e + 0x5c, 0.0, band, 4, le_f32),
-                height_below: track_keys_with(bytes, e + 0x78, 0.0, band, 4, le_f32),
+                color: track_keys_with(
+                    bytes,
+                    e + 0x24,
+                    ([1.0; 3], band),
+                    12,
+                    |b, o| [le_f32(b, o), le_f32(b, o + 4), le_f32(b, o + 8)],
+                    budget,
+                ),
+                alpha: track_keys_with(
+                    bytes,
+                    e + 0x40,
+                    (1.0, band),
+                    2,
+                    |b, o| f32::from(le_u16(b, o) as i16) / 32767.0,
+                    budget,
+                ),
+                height_above: track_keys_with(bytes, e + 0x5c, (0.0, band), 4, le_f32, budget),
+                height_below: track_keys_with(bytes, e + 0x78, (0.0, band), 4, le_f32, budget),
                 edges_per_second: le_f32(bytes, e + 0x94),
                 edge_lifetime: le_f32(bytes, e + 0x98).max(0.25),
                 gravity: le_f32(bytes, e + 0x9c),
                 tile_rows: le_u16(bytes, e + 0xa0).max(1),
                 tile_cols: le_u16(bytes, e + 0xa2).max(1),
                 tex_slot: track_first(bytes, e + 0xa4, 2, 0, le_u16),
-                visible: visibility_by_anim(bytes, e + 0xc0),
+                visible: visibility_by_anim(bytes, e + 0xc0, budget),
             }
         })
         .collect()
 }
 
-/// The multiplies land on `Opaque` here and on `Alpha` for particles; an unresolved material is
-/// additive.
 fn ribbon_blend(mode: Option<u16>) -> ParticleBlend {
     match mode {
         Some(3 | 4) | None => ParticleBlend::Add,

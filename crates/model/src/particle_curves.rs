@@ -93,8 +93,7 @@ impl OverLife {
     }
 }
 
-/// Chords a segment's arc length is measured over.
-const CHORDS: usize = 16;
+const CHORDS_PER_SEGMENT: usize = 16;
 
 /// A spline emitter's curve: a chain of cubic Bézier segments, `3K + 1` control points
 /// (`point, out tangent, in tangent, point, …`), walked by arc length.
@@ -102,8 +101,7 @@ const CHORDS: usize = 16;
 pub struct SplineData {
     /// Offsets from the emitter's position.
     pub points: Vec<[f32; 3]>,
-    /// The arc fraction at each segment boundary, `0` to `1`.
-    knots: Vec<f32>,
+    joint_arc_fractions: Vec<f32>,
 }
 
 impl SplineData {
@@ -113,27 +111,33 @@ impl SplineData {
         if k == 0 || points.len() != 3 * k + 1 {
             return None;
         }
-        let mut knots = vec![0.0f32];
+        let mut joint_arc_fractions = vec![0.0f32];
         for seg in 0..k {
             let mut len = 0.0;
             let mut prev = Self::bezier(&points[3 * seg..3 * seg + 4], 0.0);
-            for i in 1..=CHORDS {
-                let p = Self::bezier(&points[3 * seg..3 * seg + 4], i as f32 / CHORDS as f32);
+            for i in 1..=CHORDS_PER_SEGMENT {
+                let p = Self::bezier(
+                    &points[3 * seg..3 * seg + 4],
+                    i as f32 / CHORDS_PER_SEGMENT as f32,
+                );
                 len += ((p[0] - prev[0]).powi(2)
                     + (p[1] - prev[1]).powi(2)
                     + (p[2] - prev[2]).powi(2))
                 .sqrt();
                 prev = p;
             }
-            knots.push(knots[seg] + len);
+            joint_arc_fractions.push(joint_arc_fractions[seg] + len);
         }
-        let total = knots[k];
+        let total = joint_arc_fractions[k];
         if total > 0.0 {
-            for kn in &mut knots {
+            for kn in &mut joint_arc_fractions {
                 *kn /= total;
             }
         }
-        Some(Self { points, knots })
+        Some(Self {
+            points,
+            joint_arc_fractions,
+        })
     }
 
     fn bezier(p: &[[f32; 3]], u: f32) -> [f32; 3] {
@@ -157,12 +161,15 @@ impl SplineData {
     }
 
     fn locate(&self, t: f32) -> (usize, f32) {
-        let k = self.knots.len() - 1;
-        let seg = self.knots[1..k]
+        let k = self.joint_arc_fractions.len() - 1;
+        let seg = self.joint_arc_fractions[1..k]
             .iter()
             .position(|&kn| t < kn)
             .unwrap_or(k - 1);
-        let (a, b) = (self.knots[seg], self.knots[seg + 1]);
+        let (a, b) = (
+            self.joint_arc_fractions[seg],
+            self.joint_arc_fractions[seg + 1],
+        );
         (seg, ((t - a) / (b - a).max(1e-6)).clamp(0.0, 1.0))
     }
 

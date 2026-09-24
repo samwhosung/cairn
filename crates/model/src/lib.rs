@@ -14,6 +14,8 @@ mod bounds;
 mod camera;
 mod collision;
 mod draw_order;
+#[cfg(test)]
+mod effects_install;
 mod emit_timing;
 mod error;
 mod global_seq;

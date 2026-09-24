@@ -1,15 +1,51 @@
+use std::cell::Cell;
 use std::io::Cursor;
 
 use m2::{M2ScalarTrack, parse_m2};
 
-use crate::emit_timing::{EmitParams, EmitTiming};
+use crate::emit_timing::{EmitParams, EmitTiming, Params};
 use crate::key_anim::SeqSlot;
 use crate::particle_curves::{CellRamp, OverLife, SplineData};
 use crate::{le_f32, le_u16, le_u32};
 
-const EMITTERS: usize = 0x13c;
+pub(crate) const EMITTERS: usize = 0x13c;
 const EMITTER_SIZE: usize = 0x1f8;
 const MAX_EMITTERS: usize = 256;
+
+pub(crate) struct KeyBudget {
+    left: Cell<usize>,
+    refused: Cell<bool>,
+}
+
+impl KeyBudget {
+    pub(crate) fn one_key_per_byte(bytes: &[u8]) -> Self {
+        Self {
+            left: Cell::new(bytes.len()),
+            refused: Cell::new(false),
+        }
+    }
+
+    pub(crate) fn try_spend(&self, keys: usize) -> bool {
+        let left = self.left.get();
+        let fits = keys <= left;
+        if fits {
+            self.left.set(left - keys);
+        } else {
+            self.refused.set(true);
+        }
+        fits
+    }
+
+    #[cfg(test)]
+    pub(crate) fn left(&self) -> usize {
+        self.left.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn refused(&self) -> bool {
+        self.refused.get()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParticleShape {
@@ -189,6 +225,7 @@ fn raw_track(
     track: usize,
     elem: usize,
     read: impl Fn(&[u8], usize) -> f32,
+    (budget, slots): (&KeyBudget, usize),
 ) -> M2ScalarTrack {
     let mut out = M2ScalarTrack {
         gseq: 0xffff,
@@ -208,40 +245,41 @@ fn raw_track(
         le_u32(b, track + 0x14) as usize,
         le_u32(b, track + 0x18) as usize,
     );
-    if ro + rn * 8 <= b.len() {
-        out.ranges = (0..rn)
-            .map(|i| (le_u32(b, ro + i * 8), le_u32(b, ro + i * 8 + 4)))
-            .collect();
-    }
+    let rn = if ro + rn * 8 <= b.len() { rn } else { 0 };
     let n = tn.min(vn);
-    if n > 0 && to + n * 4 <= b.len() && vo + n * elem <= b.len() {
-        out.keys = (0..n)
-            .map(|i| (le_u32(b, to + i * 4), read(b, vo + i * elem)))
-            .collect();
+    let n = if n > 0 && to + n * 4 <= b.len() && vo + n * elem <= b.len() {
+        n
+    } else {
+        0
+    };
+    if !budget.try_spend(rn.saturating_add(n.saturating_mul(slots + 1))) {
+        return out;
     }
+    out.ranges = (0..rn)
+        .map(|i| (le_u32(b, ro + i * 8), le_u32(b, ro + i * 8 + 4)))
+        .collect();
+    out.keys = (0..n)
+        .map(|i| (le_u32(b, to + i * 4), read(b, vo + i * elem)))
+        .collect();
     out
 }
 
 fn blend_of(v: u8) -> ParticleBlend {
     match v {
         3 | 4 => ParticleBlend::Add,
-        2 | 5 | 6 => ParticleBlend::Alpha,
+        2 | M2_BLEND_MOD | M2_BLEND_MOD2X => ParticleBlend::Alpha,
         1 => ParticleBlend::AlphaKey,
         _ => ParticleBlend::Opaque,
     }
 }
 
-/// Which raw blend modes the client lights: the two multiplies light nothing.
-const LIGHTING_BY_BLEND: [bool; 7] = [true, true, true, true, true, false, false];
+const M2_BLEND_MOD: u8 = 5;
+const M2_BLEND_MOD2X: u8 = 6;
 
 const UNLIT: u32 = 0x1;
 
 fn lit_of(flags: u32, blend_byte: u8) -> bool {
-    flags & UNLIT == 0
-        && LIGHTING_BY_BLEND
-            .get(usize::from(blend_byte))
-            .copied()
-            .unwrap_or(true)
+    flags & UNLIT == 0 && !matches!(blend_byte, M2_BLEND_MOD | M2_BLEND_MOD2X)
 }
 
 fn shape_of(v: u16) -> ParticleShape {
@@ -272,7 +310,6 @@ pub(crate) fn texture_names(bytes: &[u8]) -> Vec<Option<String>> {
     }
 }
 
-/// One slot spanning the whole timeline for a model without sequences.
 fn seq_slots(bytes: &[u8]) -> Vec<SeqSlot> {
     let (n, o) = (le_u32(bytes, 0x1c) as usize, le_u32(bytes, 0x20) as usize);
     let mut slots: Vec<SeqSlot> = (0..n)
@@ -286,11 +323,7 @@ fn seq_slots(bytes: &[u8]) -> Vec<SeqSlot> {
         })
         .collect();
     if slots.is_empty() {
-        slots.push(SeqSlot {
-            file_index: 0,
-            band_ms: (0, u32::MAX),
-            looping: true,
-        });
+        slots.push(SeqSlot::whole_timeline());
     }
     slots
 }
@@ -324,8 +357,13 @@ fn model_path_at(bytes: &[u8], e: usize, at: usize) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// The M2's particle emitters; none when the file has no table that fits.
+/// The M2's particle emitters; none when the file has no table that fits. Their tracks read and
+/// bake at most as many keys as the file has bytes.
 pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Vec<ParticleEmitterDef> {
+    emitters_within(bytes, &KeyBudget::one_key_per_byte(bytes))
+}
+
+pub(crate) fn emitters_within(bytes: &[u8], budget: &KeyBudget) -> Vec<ParticleEmitterDef> {
     let textures = texture_names(bytes);
     let Some((base, count)) = emitter_table(bytes) else {
         return Vec::new();
@@ -333,7 +371,10 @@ pub fn parse_m2_particle_emitters(bytes: &[u8]) -> Vec<ParticleEmitterDef> {
     let slots = seq_slots(bytes);
     let gseq = global_sequences(bytes);
     (0..count)
-        .map(|i| parse_emitter(bytes, base + i * EMITTER_SIZE, &textures, &slots, &gseq))
+        .map(|i| {
+            let e = base + i * EMITTER_SIZE;
+            parse_emitter(bytes, e, &textures, (&slots, &gseq), budget)
+        })
         .collect()
 }
 
@@ -341,8 +382,8 @@ fn parse_emitter(
     bytes: &[u8],
     e: usize,
     textures: &[Option<String>],
-    slots: &[SeqSlot],
-    gseq: &[u32],
+    (slots, gseq): (&[SeqSlot], &[u32]),
+    budget: &KeyBudget,
 ) -> ParticleEmitterDef {
     let shape = shape_of(le_u16(bytes, e + 0x2a));
     let spline = (shape == ParticleShape::Spline)
@@ -385,7 +426,8 @@ fn parse_emitter(
             f32::from(le_u16(bytes, e + 0x172)),
         ],
     };
-    let track = |at: usize| raw_track(bytes, e + at, 4, le_f32);
+    let paid = (budget, slots.len());
+    let track = |at: usize| raw_track(bytes, e + at, 4, le_f32, paid);
     ParticleEmitterDef {
         flags: le_u32(bytes, e + 0x04),
         position: le_vec3(bytes, e + 0x08),
@@ -405,22 +447,22 @@ fn parse_emitter(
         head_tail: bytes[e + 0x2c],
         timing: EmitTiming::bake(
             &track(0xdc),
-            &raw_track(bytes, e + 0x1dc, 1, |b, o| f32::from(b[o] != 0)),
+            &raw_track(bytes, e + 0x1dc, 1, |b, o| f32::from(b[o] != 0), paid),
             slots,
             gseq,
         ),
         params: EmitParams::bake(
-            [
-                &track(0x34),
-                &track(0x50),
-                &track(0x6c),
-                &track(0x88),
-                &track(0xa4),
-                &track(0xc0),
-                &track(0xf8),
-                &track(0x114),
-                &track(0x130),
-            ],
+            Params {
+                emission_speed: &track(0x34),
+                speed_variation: &track(0x50),
+                vertical_range: &track(0x6c),
+                horizontal_range: &track(0x88),
+                gravity: &track(0xa4),
+                lifespan: &track(0xc0),
+                area_length: &track(0xf8),
+                area_width: &track(0x114),
+                z_source: &track(0x130),
+            },
             slots,
             gseq,
         ),

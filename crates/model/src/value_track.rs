@@ -1,3 +1,4 @@
+use crate::particles::KeyBudget;
 use crate::{le_u16, le_u32};
 
 pub trait TrackValue: Copy {
@@ -91,7 +92,7 @@ impl<V: TrackValue> ValueTrack<V> {
         for w in self.keys.windows(2) {
             let ((ta, va), (tb, vb)) = (w[0], w[1]);
             if ms < tb as f32 {
-                let span = (tb - ta).max(1) as f32;
+                let span = tb.saturating_sub(ta).max(1) as f32;
                 return V::lerp(va, vb, (ms - ta as f32) / span);
             }
         }
@@ -120,7 +121,7 @@ pub(crate) fn rebase_keys_to_band<V: Copy>(keys: &mut Vec<(u32, V)>, start: u32,
         } else if t < end {
             out.push((t - start, v));
         } else {
-            out.push((end - start, v));
+            out.push((end.saturating_sub(start), v));
             break;
         }
     }
@@ -136,38 +137,50 @@ pub(crate) fn seq0_band(bytes: &[u8]) -> (u32, u32) {
     }
 }
 
-/// `(gseq, keys, timestamps offset, values offset)`.
-fn track_arrays(b: &[u8], track: usize) -> Option<(u16, usize, usize, usize)> {
+struct TrackArrays {
+    gseq: u16,
+    count: usize,
+    times_at: usize,
+    values_at: usize,
+}
+
+fn track_arrays(b: &[u8], track: usize) -> Option<TrackArrays> {
     if track + 0x1c > b.len() {
         return None;
     }
-    let gseq = le_u16(b, track + 0x02);
     let tn = le_u32(b, track + 0x0c) as usize;
-    let tofs = le_u32(b, track + 0x10) as usize;
     let vn = le_u32(b, track + 0x14) as usize;
-    let vofs = le_u32(b, track + 0x18) as usize;
-    let n = tn.min(vn);
-    (n > 0 && tofs + n * 4 <= b.len()).then_some((gseq, n, tofs, vofs))
+    let arrays = TrackArrays {
+        gseq: le_u16(b, track + 0x02),
+        count: tn.min(vn),
+        times_at: le_u32(b, track + 0x10) as usize,
+        values_at: le_u32(b, track + 0x18) as usize,
+    };
+    (arrays.count > 0 && arrays.times_at + arrays.count * 4 <= b.len()).then_some(arrays)
 }
 
 pub(crate) fn track_keys_with<V: TrackValue>(
     b: &[u8],
     track: usize,
-    default: V,
-    band: (u32, u32),
+    (default, band): (V, (u32, u32)),
     elem: usize,
     read: impl Fn(&[u8], usize) -> V,
+    budget: &KeyBudget,
 ) -> ValueTrack<V> {
-    let Some((gseq, n, tofs, vofs)) = track_arrays(b, track) else {
+    let Some(arrays) = track_arrays(b, track) else {
         return ValueTrack::constant(default);
     };
-    if vofs + n * elem > b.len() {
+    let n = arrays.count;
+    if arrays.values_at + n * elem > b.len() || !budget.try_spend(n) {
         return ValueTrack::constant(default);
     }
     let mut keys: Vec<(u32, V)> = (0..n)
-        .map(|i| (le_u32(b, tofs + i * 4), read(b, vofs + i * elem)))
+        .map(|i| {
+            let t = le_u32(b, arrays.times_at + i * 4);
+            (t, read(b, arrays.values_at + i * elem))
+        })
         .collect();
-    if gseq == 0xffff {
+    if arrays.gseq == 0xffff {
         rebase_keys_to_band(&mut keys, band.0, band.1);
     }
     ValueTrack {
@@ -245,5 +258,17 @@ mod tests {
         let mut keys = vec![(0u32, 100.0f32), (500, -100.0), (667, -100.0)];
         rebase_keys_to_band(&mut keys, 0, 667);
         assert_eq!(keys, vec![(0, 100.0), (500, -100.0), (667, -100.0)]);
+    }
+
+    #[test]
+    fn a_band_that_ends_before_it_starts_and_keys_out_of_order_read_without_a_panic() {
+        let mut keys = vec![(0u32, 1.0f32), (900, 2.0)];
+        rebase_keys_to_band(&mut keys, 800, 500);
+        assert_eq!(keys, vec![(0, 1.0), (0, 2.0)]);
+        let t = ValueTrack {
+            keys: vec![(100, 1.0), (50, 3.0), (200, 5.0)],
+            interp: 1,
+        };
+        assert!(t.sample_ms(120.0).is_finite());
     }
 }

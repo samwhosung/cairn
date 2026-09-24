@@ -41,6 +41,16 @@ pub(crate) struct SeqSlot {
     pub looping: bool,
 }
 
+impl SeqSlot {
+    pub(crate) fn whole_timeline() -> Self {
+        Self {
+            file_index: 0,
+            band_ms: (0, u32::MAX),
+            looping: true,
+        }
+    }
+}
+
 /// One baked keyed loop, in seconds, holding the first or last key outside the keyed span. A
 /// `period` of `0.0` is a constant.
 #[derive(Clone, Debug, PartialEq)]

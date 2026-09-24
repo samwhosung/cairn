@@ -3,13 +3,26 @@ use m2::M2ScalarTrack;
 use crate::key_anim::{SeqSlot, bake_track};
 use crate::mat_anim::ScalarAnim;
 
+fn bake_per_slot(
+    track: &M2ScalarTrack,
+    slots: &[SeqSlot],
+    gseq: &[u32],
+) -> Vec<Option<ScalarAnim>> {
+    if track.keys.is_empty() {
+        return Vec::new();
+    }
+    slots
+        .iter()
+        .map(|&s| bake_track(track, gseq, Some(s), |v| v, |_| false, |_| false))
+        .collect()
+}
+
 /// A particle emitter's spawn rate and on/off gate, baked one loop per file sequence slot: the
 /// client samples both every frame through the playing sequence's window, and a looping
 /// sequence wraps its band while a one-shot one holds its tail.
 #[derive(Debug, Clone, Default)]
 pub struct EmitTiming {
     rate: Vec<Option<ScalarAnim>>,
-    /// A slot without a gate is on: the client's load default.
     enabled: Vec<Option<ScalarAnim>>,
     looping: Vec<bool>,
 }
@@ -21,12 +34,7 @@ impl EmitTiming {
         slots: &[SeqSlot],
         gseq: &[u32],
     ) -> Self {
-        let per_slot = |t: &M2ScalarTrack| -> Vec<Option<ScalarAnim>> {
-            slots
-                .iter()
-                .map(|&s| bake_track(t, gseq, Some(s), |v| v, |_| false, |_| false))
-                .collect()
-        };
+        let per_slot = |t: &M2ScalarTrack| bake_per_slot(t, slots, gseq);
         Self {
             rate: per_slot(rate),
             enabled: per_slot(enabled),
@@ -42,8 +50,8 @@ impl EmitTiming {
     }
 
     /// Whether the gate is on `elapsed` seconds into sequence slot `seq` (slot 0 when `seq` is
-    /// `None` or out of range). `shared_now` is the global-sequence clock
-    /// ([`crate::KeyAnim::clock`]).
+    /// `None` or out of range); a slot without a gate is on, as the client loads it. `shared_now`
+    /// is the global-sequence clock ([`crate::KeyAnim::clock`]).
     pub fn emitting(&self, seq: Option<usize>, elapsed: f32, shared_now: f64) -> bool {
         self.enabled
             .get(self.idx(seq))
@@ -139,30 +147,78 @@ impl EmitTiming {
     }
 }
 
+/// An emitter's nine per-frame parameters: as values ([`ParamsNow`]), as the record's tracks, or
+/// as those tracks baked per slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ParamsNow {
+pub struct Params<T> {
     /// Yards a second.
-    pub emission_speed: f32,
+    pub emission_speed: T,
     /// The speed's spread: `speed · (1 ± variation)`.
-    pub speed_variation: f32,
+    pub speed_variation: T,
     /// Radians: the cone's half-angle; a sphere's latitude range; a spline's spin about its
     /// tangent.
-    pub vertical_range: f32,
+    pub vertical_range: T,
     /// Radians: the azimuth spread; a sphere's longitude range; a spline's scatter, in yards.
-    pub horizontal_range: f32,
+    pub horizontal_range: T,
     /// Yards a second squared, down.
-    pub gravity: f32,
+    pub gravity: T,
     /// Seconds; a particle keeps the value it was born with.
-    pub lifespan: f32,
+    pub lifespan: T,
     /// A plane's full length, along y once the client's quarter turn is applied; a sphere's
     /// inner radius; a spline's first arc fraction.
-    pub area_length: f32,
+    pub area_length: T,
     /// A plane's full width, along x once turned; a sphere's outer radius; a spline's last arc
     /// fraction.
-    pub area_width: f32,
+    pub area_width: T,
     /// Births fly away from `(0, 0, z_source)` when it is not 0.
-    pub z_source: f32,
+    pub z_source: T,
 }
+
+impl<T> Params<T> {
+    fn map<U>(self, mut f: impl FnMut(T) -> U) -> Params<U> {
+        Params {
+            emission_speed: f(self.emission_speed),
+            speed_variation: f(self.speed_variation),
+            vertical_range: f(self.vertical_range),
+            horizontal_range: f(self.horizontal_range),
+            gravity: f(self.gravity),
+            lifespan: f(self.lifespan),
+            area_length: f(self.area_length),
+            area_width: f(self.area_width),
+            z_source: f(self.z_source),
+        }
+    }
+
+    fn zip<U>(self, other: Params<U>) -> Params<(T, U)> {
+        Params {
+            emission_speed: (self.emission_speed, other.emission_speed),
+            speed_variation: (self.speed_variation, other.speed_variation),
+            vertical_range: (self.vertical_range, other.vertical_range),
+            horizontal_range: (self.horizontal_range, other.horizontal_range),
+            gravity: (self.gravity, other.gravity),
+            lifespan: (self.lifespan, other.lifespan),
+            area_length: (self.area_length, other.area_length),
+            area_width: (self.area_width, other.area_width),
+            z_source: (self.z_source, other.z_source),
+        }
+    }
+
+    fn as_ref(&self) -> Params<&T> {
+        Params {
+            emission_speed: &self.emission_speed,
+            speed_variation: &self.speed_variation,
+            vertical_range: &self.vertical_range,
+            horizontal_range: &self.horizontal_range,
+            gravity: &self.gravity,
+            lifespan: &self.lifespan,
+            area_length: &self.area_length,
+            area_width: &self.area_width,
+            z_source: &self.z_source,
+        }
+    }
+}
+
+pub type ParamsNow = Params<f32>;
 
 impl Default for ParamsNow {
     /// What keyless tracks read.
@@ -182,53 +238,47 @@ impl Default for ParamsNow {
 }
 
 /// [`ParamsNow`]'s tracks, baked per slot like [`EmitTiming`]'s rate.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EmitParams {
-    channels: [Vec<Option<ScalarAnim>>; 9],
+    channels: Params<Vec<Option<ScalarAnim>>>,
+}
+
+impl Default for EmitParams {
+    fn default() -> Self {
+        Self {
+            channels: ParamsNow::default().map(|_| Vec::new()),
+        }
+    }
 }
 
 impl EmitParams {
-    /// `tracks` in [`ParamsNow`] field order.
-    pub(crate) fn bake(tracks: [&M2ScalarTrack; 9], slots: &[SeqSlot], gseq: &[u32]) -> Self {
+    pub(crate) fn bake(tracks: Params<&M2ScalarTrack>, slots: &[SeqSlot], gseq: &[u32]) -> Self {
         Self {
-            channels: tracks.map(|t| {
-                slots
-                    .iter()
-                    .map(|&s| bake_track(t, gseq, Some(s), |v| v, |_| false, |_| false))
-                    .collect()
-            }),
+            channels: tracks.map(|t| bake_per_slot(t, slots, gseq)),
         }
     }
 
     /// Every parameter `elapsed` seconds into slot `seq`, resolved as [`EmitTiming`] does.
     pub fn sample(&self, seq: Option<usize>, elapsed: f32, shared_now: f64) -> ParamsNow {
-        let d = ParamsNow::default();
-        let at = |i: usize, default: f32| -> f32 {
-            let ch = &self.channels[i];
-            let slot = match seq {
-                Some(s) if s < ch.len() => s,
-                _ => 0,
-            };
-            ch.get(slot).and_then(|o| o.as_ref()).map_or(default, |a| {
-                a.sample_or(a.clock(elapsed, shared_now), default)
+        self.channels
+            .as_ref()
+            .zip(ParamsNow::default())
+            .map(|(ch, default)| {
+                let slot = match seq {
+                    Some(s) if s < ch.len() => s,
+                    _ => 0,
+                };
+                ch.get(slot).and_then(|o| o.as_ref()).map_or(default, |a| {
+                    a.sample_or(a.clock(elapsed, shared_now), default)
+                })
             })
-        };
-        ParamsNow {
-            emission_speed: at(0, d.emission_speed),
-            speed_variation: at(1, d.speed_variation),
-            vertical_range: at(2, d.vertical_range),
-            horizontal_range: at(3, d.horizontal_range),
-            gravity: at(4, d.gravity),
-            lifespan: at(5, d.lifespan),
-            area_length: at(6, d.area_length),
-            area_width: at(7, d.area_width),
-            z_source: at(8, d.z_source),
-        }
     }
 
     /// The largest lifespan key in any slot, or the default when no slot keys one.
     pub fn peak_lifespan(&self) -> f32 {
-        let mut keys = self.channels[5]
+        let mut keys = self
+            .channels
+            .lifespan
             .iter()
             .flatten()
             .flat_map(|a| a.keys.iter().map(|&(_, v)| v))
@@ -240,53 +290,17 @@ impl EmitParams {
     }
 
     pub fn constant(now: ParamsNow) -> Self {
-        let ch = |v: f32| {
-            vec![Some(ScalarAnim {
-                period: 0.0,
-                step: true,
-                wrap: true,
-                gseq: false,
-                keys: vec![(0.0, v)],
-            })]
-        };
         Self {
-            channels: [
-                ch(now.emission_speed),
-                ch(now.speed_variation),
-                ch(now.vertical_range),
-                ch(now.horizontal_range),
-                ch(now.gravity),
-                ch(now.lifespan),
-                ch(now.area_length),
-                ch(now.area_width),
-                ch(now.z_source),
-            ],
+            channels: now.map(|v| {
+                vec![Some(ScalarAnim {
+                    period: 0.0,
+                    step: true,
+                    wrap: true,
+                    gseq: false,
+                    keys: vec![(0.0, v)],
+                })]
+            }),
         }
-    }
-
-    /// Each parameter's name and its keys per file slot, in seconds.
-    #[allow(clippy::type_complexity, reason = "a read-only view")]
-    pub fn channel_views(&self) -> [(&'static str, Vec<Option<&[(f32, f32)]>>); 9] {
-        const NAMES: [&str; 9] = [
-            "speed",
-            "speedVar",
-            "latitude",
-            "longitude",
-            "gravity",
-            "lifespan",
-            "areaLength",
-            "areaWidth",
-            "zSource",
-        ];
-        let mut i = 0;
-        NAMES.map(|name| {
-            let v = self.channels[i]
-                .iter()
-                .map(|o| o.as_ref().map(|a| a.keys.as_slice()))
-                .collect();
-            i += 1;
-            (name, v)
-        })
     }
 }
 
@@ -391,9 +405,12 @@ mod tests {
         let life = track(1, &[(0, 0.472), (467, 0.8008), (667, 0.7), (867, 0.7)], &[]);
         let zero = M2ScalarTrack::default();
         let p = EmitParams::bake(
-            [
-                &zero, &zero, &zero, &zero, &zero, &life, &area, &area, &zero,
-            ],
+            Params {
+                lifespan: &life,
+                area_length: &area,
+                area_width: &area,
+                ..ParamsNow::default().map(|_| &zero)
+            },
             &slots(&[((0, 867), false)]),
             &[],
         );
