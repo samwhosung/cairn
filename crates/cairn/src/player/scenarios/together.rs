@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use bevy::input::keyboard::KeyCode;
 use bevy::prelude::*;
+use protocol::flags;
 use world::coords::bevy_to_wow;
 use world::unit::{BodyDressed, CharacterLook, UnitBody};
 
@@ -20,6 +21,7 @@ const STEP: Duration = Duration::from_nanos(16_666_667);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 /// The runner starts 8 yd from the painter and runs past it.
 const SUBJECT_WITHIN_YD: f32 = 12.0;
+const STATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const RUN_AND_JUMP: [(f32, Act); 4] = [
     (0.0, Act::Press(KeyCode::KeyW)),
@@ -108,6 +110,28 @@ fn yards_to_the_other(p: &mut Painter) -> Option<f32> {
         .reduce(f32::min)
 }
 
+/// The movement flags of the other player's copy.
+fn the_others_flags(p: &mut Painter) -> Option<u32> {
+    let world = p.app.world_mut();
+    world
+        .query_filtered::<&RemoteMotion, With<OtherPlayer>>()
+        .iter(world)
+        .next()
+        .map(|m| m.flags)
+}
+
+/// Runs the painter until its copy of the other player moves as `now` says.
+fn wait_until_the_other(p: &mut Painter, what: &str, now: impl Fn(u32) -> bool) {
+    let deadline = Instant::now() + STATE_TIMEOUT;
+    while !the_others_flags(p).is_some_and(&now) {
+        assert!(
+            Instant::now() < deadline,
+            "the other player was never seen {what}"
+        );
+        wait(p, 0.0);
+    }
+}
+
 fn shoot_the_other(p: &mut Painter, name: &str) {
     let across = yards_to_the_other(p);
     assert!(
@@ -117,25 +141,78 @@ fn shoot_the_other(p: &mut Painter, name: &str) {
     p.shoot(name);
 }
 
+struct Scene {
+    name: &'static str,
+    painter: (Stand, CharacterLook),
+    runner: (Stand, CharacterLook),
+    night: bool,
+}
+
+/// Goldshire's crossroads: the runner starts ahead of the painter and to its right, and runs
+/// across its view.
+fn in_goldshire(name: &'static str, painter: CharacterLook, runner: CharacterLook) -> Scene {
+    Scene {
+        name,
+        painter: (
+            Stand {
+                feet: [GOLDSHIRE[0], GOLDSHIRE[1], 57.0],
+                heading_deg: EAST,
+            },
+            painter,
+        ),
+        runner: (
+            Stand {
+                feet: [GOLDSHIRE[0] - 5.0, GOLDSHIRE[1] - 6.0, 57.0],
+                heading_deg: 0.0,
+            },
+            runner,
+        ),
+        night: false,
+    }
+}
+
+/// The snow outside Kharanos, where a runner's feet print and a dwarf's breath shows.
+fn on_the_snow(painter: CharacterLook, runner: CharacterLook) -> Scene {
+    Scene {
+        name: "together-snow",
+        painter: (
+            Stand {
+                feet: [-5650.0, -450.0, 393.0],
+                heading_deg: 0.0,
+            },
+            painter,
+        ),
+        runner: (
+            Stand {
+                feet: [-5644.0, -455.0, 395.1],
+                heading_deg: 90.0,
+            },
+            runner,
+        ),
+        night: false,
+    }
+}
+
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
     let human = CharacterLook::naked(1, 0);
     let orc = CharacterLook::naked(2, 1);
-    for (name, painter, running, night) in [
-        ("together-day", human.clone(), orc.clone(), false),
-        ("together-night", orc, human, true),
-    ] {
-        let at = Stand {
-            feet: [GOLDSHIRE[0], GOLDSHIRE[1], 57.0],
-            heading_deg: EAST,
-        };
-        let ahead_and_right = Stand {
-            feet: [GOLDSHIRE[0] - 5.0, GOLDSHIRE[1] - 6.0, 57.0],
-            heading_deg: 0.0,
-        };
-        let server = serve(&[at, ahead_and_right]);
-        let Some(mut p) = Painter::joined(server.addr(), at.feet, EAST, painter) else {
+    let dwarf = CharacterLook::naked(3, 0);
+    let scenes = [
+        in_goldshire("together-day", human.clone(), orc.clone()),
+        Scene {
+            night: true,
+            ..in_goldshire("together-night", orc, human.clone())
+        },
+        on_the_snow(human, dwarf),
+    ];
+    for scene in scenes {
+        let name = scene.name;
+        let (at, painter) = scene.painter;
+        let (start, running) = scene.runner;
+        let server = serve(&[at, start]);
+        let Some(mut p) = Painter::joined(server.addr(), at.feet, at.heading_deg, painter) else {
             return;
         };
         let r = runner(server.addr(), running);
@@ -146,18 +223,26 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
             settled |= r.ready.try_recv().is_ok();
             wait(&mut p, 0.0);
         }
-        if night {
+        if scene.night {
             p.set_time(0, 30);
         }
         p.orbit(0.0, 6.0);
         wait(&mut p, 2.5);
         shoot_the_other(&mut p, &format!("{name}-1-standing"));
         let _ = r.cue.send(());
-        let go = Instant::now();
-        for (at, shot) in [(0.7, "2-running"), (1.15, "3-jumping"), (2.6, "4-landed")] {
-            wait(&mut p, at - go.elapsed().as_secs_f32());
-            shoot_the_other(&mut p, &format!("{name}-{shot}"));
-        }
+        let running = |f: u32| f & flags::FORWARD != 0 && f & flags::FALLING == 0;
+        wait_until_the_other(&mut p, "running", running);
+        wait(&mut p, 0.3);
+        shoot_the_other(&mut p, &format!("{name}-2-running"));
+        wait_until_the_other(&mut p, "in the air", |f| f & flags::FALLING != 0);
+        wait(&mut p, 0.2);
+        shoot_the_other(&mut p, &format!("{name}-3-jumping"));
+        wait_until_the_other(&mut p, "landed", |f| f & flags::FALLING == 0);
+        wait(&mut p, 0.8);
+        shoot_the_other(&mut p, &format!("{name}-4-landed"));
+        p.tilt_up(-0.6);
+        wait(&mut p, 0.3);
+        shoot_the_other(&mut p, &format!("{name}-5-the-ground-it-ran-over"));
         let _ = r.cue.send(());
         drop(p);
         server.stop().expect("the server stops");

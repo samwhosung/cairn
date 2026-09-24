@@ -85,8 +85,8 @@ impl Painter {
         Some(painter)
     }
 
-    /// A painter joining `server`, standing where its welcome places it, near `feet`, once its
-    /// world has arrived there.
+    /// A painter joining `server`, standing on the ground where its welcome places it once its
+    /// world has arrived there; `feet` is where it starts until then.
     pub(super) fn joined(
         server: SocketAddr,
         feet: [f32; 3],
@@ -97,18 +97,20 @@ impl Painter {
         let mut painter = Self::build(feet, heading_deg, look, Some(Net::connect(server, hello)))?;
         painter.clock().pause();
         let deadline = Instant::now() + LOAD_TIMEOUT;
-        while painter
-            .app
-            .world()
-            .get_resource::<Net>()
-            .is_none_or(|n| n.welcome().is_none())
-        {
+        let spawn = loop {
+            let welcome = painter
+                .app
+                .world()
+                .get_resource::<Net>()
+                .and_then(Net::welcome);
+            if let Some(w) = welcome {
+                break w.spawn.pos;
+            }
             assert!(Instant::now() < deadline, "no welcome from the server");
             painter.app.update();
             std::thread::sleep(STEP);
-        }
-        painter.settle();
-        painter.clock().unpause();
+        };
+        painter.stand_on([spawn[0], spawn[1]]);
         Some(painter)
     }
 
