@@ -54,7 +54,7 @@ fn the_same_id_moves_the_record_and_another_takes_its_place() {
     pool.register(d, 2000, Vec3::ZERO, Vec3::ZERO);
     assert_eq!(pool.entries.iter().filter(|e| e.id != 0).count(), 1);
     pool.release(d);
-    assert!(pool.entries.iter().all(|e| e.id == 0) && pool.handles.is_empty());
+    assert!(pool.entries.iter().all(|e| e.id == 0) && pool.entry_of_owner.is_empty());
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn a_thirty_third_id_waits_and_a_full_entry_evicts_the_first_farther() {
     for (i, d) in ds.iter().enumerate() {
         pool.register(*d, 100 + i as u32, Vec3::ZERO, Vec3::ZERO);
     }
-    assert!(!pool.handles.contains_key(&ds[POOL_ENTRIES]));
+    assert!(!pool.entry_of_owner.contains_key(&ds[POOL_ENTRIES]));
     let mut pool = AmbientEmitterPool::default();
     let ds = owners(RECORDS_PER_ENTRY as u32 + 1);
     for (i, d) in ds.iter().take(RECORDS_PER_ENTRY).enumerate() {
@@ -77,12 +77,12 @@ fn a_thirty_third_id_waits_and_a_full_entry_evicts_the_first_farther() {
         Vec3::new(10.0, 0.0, 0.0),
         Vec3::ZERO,
     );
-    assert!(!pool.handles.contains_key(&ds[0]));
+    assert!(!pool.entry_of_owner.contains_key(&ds[0]));
     assert_eq!(pool.entries[0].records.len(), RECORDS_PER_ENTRY);
 }
 
 #[test]
-fn four_sound_by_claim_order_and_a_silent_entry_holds_no_slot() {
+fn four_sound_by_slot_order_and_a_silent_entry_holds_no_slot() {
     let mut pool = AmbientEmitterPool::default();
     let ds = owners(6);
     for (i, d) in ds.iter().enumerate() {

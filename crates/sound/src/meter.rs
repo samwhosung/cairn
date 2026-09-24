@@ -1,5 +1,3 @@
-//! The mix's level on the audio thread, read and reset from the main thread.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 

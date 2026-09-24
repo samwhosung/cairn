@@ -9,7 +9,7 @@ const SOUND_ENTRIES: &str = "DBFilesClient\\SoundEntries.dbc";
 
 /// `SoundEntries.Flags`, copied raw into the kit's playback flags.
 pub mod kit_flags {
-    /// No second copy while one is audible.
+    /// No second copy while one is live.
     pub const NO_DUPLICATES: u32 = 0x20;
     pub const LOOPING: u32 = 0x200;
     pub const VARY_PITCH: u32 = 0x400;

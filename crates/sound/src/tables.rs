@@ -51,7 +51,6 @@ impl std::error::Error for Error {
     }
 }
 
-/// `columns` as `(name, type)`; a type repeated `n` times is `n` entries.
 pub(crate) fn read_table(
     chain: &Chain,
     table: &'static str,
@@ -88,7 +87,6 @@ pub(crate) fn f32_at(r: &Record, i: usize) -> Option<f32> {
     }
 }
 
-/// The string at column `i`, empty when unset.
 pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> String {
     match r.get_value(i) {
         Some(Value::StringRef(at)) => rs

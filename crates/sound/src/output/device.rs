@@ -1,6 +1,3 @@
-//! The device output: the render thread, the ring between it and the IO callback, the stream's
-//! rebuild when the device changes, and the meters that say whether each cycle was met.
-
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -13,13 +10,10 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use super::OutputSettings;
 use super::platform::{self, Cycle, Device, Joined, Listeners, Notices, Stream, Workgroup};
 
-/// Frames per render pass: two of kira's 128-frame parameter blocks.
 const RENDER_CHUNK_FRAMES: usize = 256;
 const REOPEN_EVERY: Duration = Duration::from_secs(1);
-/// How long the main thread waits for a dropped stream's callback to hand the ring back.
 const HANDBACK_WAIT: Duration = Duration::from_millis(250);
 
-/// One `service` window, in the report's units.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Window {
     pub(crate) cycles: u64,
@@ -27,7 +21,6 @@ pub(crate) struct Window {
     pub(crate) lead_min_ms: Option<f64>,
     pub(crate) io_wall_max_ms: f64,
     pub(crate) gap_max_ms: f64,
-    /// Cycles the ring could not fill, and the silence that went out for them.
     pub(crate) underruns: u64,
     pub(crate) underrun_ms: f64,
     pub(crate) ring_min_ms: Option<f64>,
@@ -78,8 +71,7 @@ pub(crate) enum Event {
     },
     Lost(&'static str),
     OpenFailed(String),
-    /// The ring never came back from a dropped stream: nothing can reopen.
-    Dead(String),
+    RingLost(String),
 }
 
 #[derive(Default)]
@@ -102,7 +94,6 @@ impl Meters {
     }
 }
 
-/// The render thread only ever `try_lock`s the mutex, so the audio path never blocks on it.
 #[derive(Default)]
 struct Control {
     stop: AtomicBool,
@@ -119,14 +110,12 @@ struct Shared {
     notices: Arc<Notices>,
 }
 
-/// Hands `T` back through a one-slot ring when dropped: how the ring consumer inside the IO
-/// closure returns when its stream is torn down.
-struct Returning<T> {
+struct ReturnOnDrop<T> {
     inner: Option<T>,
     back: Producer<T>,
 }
 
-impl<T> Returning<T> {
+impl<T> ReturnOnDrop<T> {
     fn new(value: T) -> (Self, Consumer<T>) {
         let (back, receiver) = RingBuffer::new(1);
         (
@@ -143,7 +132,7 @@ impl<T> Returning<T> {
     }
 }
 
-impl<T> Drop for Returning<T> {
+impl<T> Drop for ReturnOnDrop<T> {
     fn drop(&mut self) {
         if let Some(value) = self.inner.take() {
             let _ = self.back.push(value);
@@ -207,7 +196,6 @@ impl DeviceOutput {
             .settings
             .device_buffer_frames
             .clamp(device.buffer_range.0, device.buffer_range.1);
-        // The IO callback drains a buffer's worth per wake before the render thread tops up.
         let ahead_frames = ms_to_frames(self.settings.mix_ahead_ms, self.sample_rate);
         let ring_frames = ahead_frames + buffer_frames as usize;
         let (producer, consumer) = RingBuffer::<f32>::new(ring_frames * 2);
@@ -262,7 +250,7 @@ impl DeviceOutput {
             events.push(Event::Lost(why));
             if let Err(e) = self.close() {
                 self.stage = Stage::Dead;
-                events.push(Event::Dead(format!("{e:#}")));
+                events.push(Event::RingLost(format!("{e:#}")));
             }
         }
         if let Stage::Idle { since, .. } = &self.stage
@@ -285,11 +273,9 @@ impl DeviceOutput {
         (self.take_window(), events)
     }
 
-    /// Opens a stream on `device` around the ring consumer `Idle` holds, and says how it went;
-    /// stays `Idle` on failure.
     fn open(&mut self, device: Device) -> Event {
         let Stage::Idle { consumer, .. } = std::mem::replace(&mut self.stage, Stage::Dead) else {
-            return Event::Dead("open called without the ring consumer".into());
+            return Event::RingLost("open called without the ring consumer".into());
         };
         if device.sample_rate != self.sample_rate {
             self.sample_rate = device.sample_rate;
@@ -301,7 +287,7 @@ impl DeviceOutput {
                 thread.unpark();
             }
         }
-        let (mut returning, handback) = Returning::new(consumer);
+        let (mut returning, handback) = ReturnOnDrop::new(consumer);
         let shared = Arc::clone(&self.shared);
         let mut last_output_ns = 0u64;
         let on_cycle = move |cycle: Cycle<'_>| {
@@ -348,7 +334,7 @@ impl DeviceOutput {
                     };
                     Event::OpenFailed(format!("{} — {e:#}", device.name))
                 } else {
-                    Event::Dead(format!(
+                    Event::RingLost(format!(
                         "ring consumer lost while opening {} — {e:#}",
                         device.name
                     ))
@@ -379,7 +365,6 @@ impl DeviceOutput {
     }
 
     fn take_window(&mut self) -> Window {
-        // The running cycle size, which a host may grant differently from what was asked.
         if let Stage::Running { stream, .. } = &self.stage {
             self.buffer_frames = stream.buffer_frames();
         }
@@ -448,7 +433,6 @@ fn frames_to_ns(frames: usize, sample_rate: u32) -> u64 {
     (frames as u64 * 1_000_000_000) / u64::from(sample_rate.max(1))
 }
 
-/// Allocation aborts a debug build inside `f`.
 fn no_alloc<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(debug_assertions)]
     {
@@ -460,19 +444,19 @@ fn no_alloc<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
-/// Copies one device buffer out of the ring. Realtime: no allocation, no lock, no log.
+/// Runs on the device's realtime thread: no allocation, no lock, no log.
 fn io_cycle(cycle: Cycle<'_>, consumer: &mut Consumer<f32>, shared: &Shared, last_ns: &mut u64) {
     no_alloc(|| {
         let entry = platform::now_ns();
         let meters = &shared.meters;
-        if cycle.output_time_ns != 0 {
-            let lead = cycle.output_time_ns as i64 - entry as i64;
+        if let Some(output_ns) = cycle.output_time_ns {
+            let lead = output_ns as i64 - entry as i64;
             meters.lead_min_ns.fetch_min(lead, Ordering::Relaxed);
             if *last_ns != 0 {
-                let gap = cycle.output_time_ns.saturating_sub(*last_ns);
+                let gap = output_ns.saturating_sub(*last_ns);
                 meters.gap_max_ns.fetch_max(gap, Ordering::Relaxed);
             }
-            *last_ns = cycle.output_time_ns;
+            *last_ns = output_ns;
         }
         let out = cycle.buffer;
         let need = out.len();
@@ -506,7 +490,6 @@ fn io_cycle(cycle: Cycle<'_>, consumer: &mut Consumer<f32>, shared: &Shared, las
     });
 }
 
-/// Keeps the ring full, woken by the IO callback after every cycle and by a timeout.
 #[allow(
     clippy::drop_non_drop,
     reason = "on macOS leaving the old workgroup before joining the new one is the point"

@@ -1,8 +1,5 @@
-//! The liquid beds layered over the zone's: liquid of a class within 9 yd of the player arms that
-//! class's loop, looked up by its sound nibble. At most two sound, river over ocean over magma over
-//! slime. Each rides an emitter slewed a sixth of a yard a frame toward the nearest wet point and
-//! kept a cell's diagonal from the player, fading in and out over 5 s. Going under stops them at
-//! once; coming up restarts them at full volume.
+//! The liquid beds layered over the zone's. At most [`MAX_CONCURRENT`] liquid classes are armed,
+//! water over ocean over magma over slime.
 
 use bevy::prelude::*;
 use world::collision::Liquids;
@@ -18,10 +15,10 @@ use crate::kit::{
 use crate::tables::WaterSounds;
 use crate::{AudioListener, SoundOutput};
 
-const TRIGGER_RADIUS: f32 = 9.0;
+/// How near a liquid of a class arms that class's loop, yards.
+pub const LIQUID_LOOP_REACH: f32 = 9.0;
 const SLEW_PER_TICK: f32 = 0.166_67;
-/// √2 · 4.16667, one liquid cell's diagonal.
-const NEAR_CLAMP: f32 = 5.892_557;
+const LIQUID_CELL_DIAGONAL: f32 = 5.892_557;
 const FADE_SECS: f32 = 5.0;
 const MAX_CONCURRENT: usize = 2;
 
@@ -29,7 +26,6 @@ struct ClassLoop {
     emitter: Entity,
     kit: u32,
     gain: f32,
-    /// A kit the nearest cell's speed replaced, fading out on the same emitter.
     retiring: Option<(u32, f32)>,
 }
 
@@ -92,7 +88,7 @@ pub(crate) fn drive_liquid_loops(
         return;
     };
     let player_pos = player.translation;
-    let best = liquids.nearest_per_class(bevy_to_wow(player_pos), TRIGGER_RADIUS);
+    let best = liquids.nearest_per_class(bevy_to_wow(player_pos), LIQUID_LOOP_REACH);
     let mut budget = MAX_CONCURRENT;
     let fade_step = time.delta_secs() / FADE_SECS;
     let start = |kits: &mut SoundKits, out: &mut SoundOutput, kit, pos, emitter, gain| {
@@ -197,15 +193,14 @@ pub(crate) fn drive_liquid_loops(
     }
 }
 
-/// Pushes the emitter back out to [`NEAR_CLAMP`] from the player.
 fn near_clamped(pos: Vec3, player: Vec3) -> Vec3 {
     let d = pos - player;
     let len = d.length();
-    if len >= NEAR_CLAMP {
+    if len >= LIQUID_CELL_DIAGONAL {
         pos
     } else if len > 1e-4 {
-        player + d * (NEAR_CLAMP / len)
+        player + d * (LIQUID_CELL_DIAGONAL / len)
     } else {
-        player + Vec3::X * NEAR_CLAMP
+        player + Vec3::X * LIQUID_CELL_DIAGONAL
     }
 }

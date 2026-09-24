@@ -5,7 +5,6 @@ use mpq::Chain;
 
 use super::{Error, read_table, str_at, u32_at, u32_columns};
 
-/// The audio columns of one `AreaTable` row; `0` inherits from the parent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Area {
     parent: u32,
@@ -46,7 +45,8 @@ pub struct AreaAudio<'a> {
     pub intro: Option<&'a ZoneIntro>,
     /// The `SoundAmbience` kits, `[day, night]`.
     pub ambience: Option<[u32; 2]>,
-    /// `SoundProviderPreferences` ids, `[dry, underwater]`; `0` where no parent names one.
+    /// `SoundProviderPreferences` ids, `[dry, underwater]`; `0` where neither it nor a parent
+    /// names one.
     pub sound_provider: [u32; 2],
 }
 
@@ -59,7 +59,6 @@ pub struct AreaSounds {
     ambience: HashMap<u32, [u32; 2]>,
 }
 
-/// How far up the parents an area looks.
 const PARENT_WALK: usize = 8;
 
 impl AreaSounds {

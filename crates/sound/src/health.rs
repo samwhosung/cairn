@@ -1,6 +1,3 @@
-//! What the output says about itself, and the offline clock that renders the mix in step with
-//! the game.
-
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -12,12 +9,9 @@ use crate::mix_tap::wav_header;
 use crate::output::Window;
 use crate::plugin::SoundOutput;
 
-/// How much time one report sums up.
 const REPORT_EVERY: Duration = Duration::from_secs(5);
 
-/// Services the output every frame, and every [`REPORT_EVERY`] says how it kept up and how loud
-/// the mix asked to be.
-pub(crate) fn poll_mix_health(
+pub(crate) fn service_output(
     mut out: NonSendMut<'_, SoundOutput>,
     time: Res<'_, Time>,
     mut exit: MessageReader<'_, '_, AppExit>,
@@ -122,7 +116,6 @@ fn report_level(level: LevelReading, voices: usize, rate: Option<u32>) {
     );
 }
 
-/// The offline mix's position on the game clock, and where its frames go.
 pub(crate) struct OfflineClock {
     sample_rate: u32,
     rendered: u64,
@@ -149,7 +142,6 @@ impl OfflineClock {
     }
 }
 
-/// Offline, renders the mix up to the game's elapsed time, after every sound this frame started.
 pub(crate) fn render_offline(mut out: NonSendMut<'_, SoundOutput>, time: Res<'_, Time>) {
     let out = &mut *out;
     let (Some(clock), Some(mixer)) = (out.offline.as_mut(), out.mixer.as_mut()) else {

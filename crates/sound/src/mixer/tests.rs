@@ -38,7 +38,6 @@ fn the_reverb_projection_orders_the_presets() {
     assert_eq!(off, Decibels::SILENCE);
 }
 
-/// A quarter second of a full-scale stereo float sine.
 fn full_scale_tone(rate: u32) -> Vec<u8> {
     let frames = rate as usize / 4;
     let mut wav = crate::mix_tap::wav_header(rate, frames as u64 * 2).to_vec();
@@ -73,7 +72,7 @@ fn the_output_gate_silences_the_output_and_nothing_upstream() {
     let heard = Arc::new(MixLevel::default());
     let on = Arc::new(AtomicBool::new(true));
     let chain = main_track(&asked, &on, Some(RATE), None);
-    let (mut main, mut output) = (chain.builder, chain.output);
+    let (mut main, mut output) = (chain.builder, chain.output_gate);
     meter::install(&mut main, &heard);
     let mut manager = manager_over(main);
     let data = sfx_from_bytes(full_scale_tone(RATE)).expect("tone decodes");

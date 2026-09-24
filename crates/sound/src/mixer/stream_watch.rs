@@ -1,11 +1,3 @@
-//! A starved stream zero-fills whole blocks while the mix meets every deadline, so no other meter
-//! sees it; its position freezes while it stays audible. The watch compares wall time against the
-//! position's advance over each window.
-//!
-//! Every stream opens frozen: kira reports it playing at position 0 before the decoder has two
-//! frames ready. That is latency before the first sample, not silence cut into audio, so nothing
-//! is counted until the position first moves.
-
 use std::time::Instant;
 
 use bevy::log::{debug, warn};
@@ -13,12 +5,17 @@ use kira::sound::FromFileError;
 
 use super::StreamingSoundHandle;
 
-/// More than two lost ~43 ms blocks per window reports; real starvation runs hundreds of ms.
 const STARVED_MIN_SECS: f64 = 0.1;
 const WINDOW_SECS: f64 = 1.0;
-/// A stream still pinned at its start this long after going audible never played.
-const START_MAX_SECS: f64 = 3.0;
+const NEVER_STARTED_AFTER_SECS: f64 = 3.0;
 
+/// A starved stream zero-fills whole blocks while the mix meets every deadline, so no other meter
+/// sees it; its position freezes while it stays audible. The watch compares wall time against the
+/// position's advance over each window.
+///
+/// Every stream opens frozen: kira reports it playing at position 0 before the decoder has two
+/// frames ready. That is latency before the first sample, not silence cut into audio, so nothing
+/// is counted until the position first moves.
 pub struct StreamWatch {
     label: &'static str,
     phase: Phase,
@@ -34,11 +31,9 @@ enum Phase {
         pos: f64,
         warned: bool,
     },
-    /// `window_start` is stamped with the counting's own first instant, so the counted time and
-    /// the reported span measure one interval.
     Running {
         last_pos: f64,
-        window_start: Instant,
+        counted_since: Instant,
     },
 }
 
@@ -106,7 +101,7 @@ impl StreamWatch {
     fn begin(&mut self, pos: f64, now: Instant) {
         self.phase = Phase::Running {
             last_pos: pos,
-            window_start: now,
+            counted_since: now,
         };
         self.expected = 0.0;
         self.advanced = 0.0;
@@ -142,7 +137,7 @@ impl StreamWatch {
                     self.begin(pos, now);
                     return Some(Verdict::Began { after: waited });
                 }
-                if !warned && waited > START_MAX_SECS {
+                if !warned && waited > NEVER_STARTED_AFTER_SECS {
                     self.phase = Phase::Starting {
                         since,
                         pos: start,
@@ -154,9 +149,8 @@ impl StreamWatch {
             }
             Phase::Running {
                 last_pos,
-                window_start,
+                counted_since,
             } => {
-                // A stream swapped onto the slot starts behind the old one: a new stream.
                 if pos < last_pos {
                     self.phase = Phase::Starting {
                         since: now,
@@ -171,13 +165,13 @@ impl StreamWatch {
                 self.advanced += pos - last_pos;
                 self.phase = Phase::Running {
                     last_pos: pos,
-                    window_start,
+                    counted_since,
                 };
                 if self.expected < WINDOW_SECS {
                     return None;
                 }
                 let (counted, advanced) = (self.expected, self.advanced);
-                let span = now.duration_since(window_start).as_secs_f64();
+                let span = now.duration_since(counted_since).as_secs_f64();
                 self.begin(pos, now);
                 let lost = counted - advanced;
                 (lost > STARVED_MIN_SECS).then_some(Verdict::Starved {

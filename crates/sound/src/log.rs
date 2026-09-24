@@ -1,5 +1,3 @@
-//! Every play as one JSON line: when, which kit, which file, how loud, how fast, where.
-
 use std::io::Write;
 use std::path::Path;
 

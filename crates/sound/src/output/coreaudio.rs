@@ -1,6 +1,3 @@
-//! The macOS device layer, straight on Core Audio: the default output and what it runs at, a HAL
-//! output unit pinned to it with our format and IO buffer, the property listeners that notice a
-//! device change, realtime scheduling for the render thread, and the host clock.
 #![allow(
     unsafe_code,
     reason = "Core Audio, mach and os_workgroup are C APIs with no safe binding for these calls"
@@ -33,8 +30,9 @@ pub(super) const CHANNELS: u32 = 2;
 
 /// `kAudioOutputUnitProperty_CurrentDevice`.
 const OUTPUT_UNIT_CURRENT_DEVICE: u32 = 2000;
-/// `kAudioUnitProperty_MaximumFramesPerSlice`: 1156 by default, and a bigger IO buffer is refused.
+/// `kAudioUnitProperty_MaximumFramesPerSlice`: a bigger IO buffer than it is refused.
 const UNIT_MAXIMUM_FRAMES_PER_SLICE: u32 = 14;
+const DEFAULT_MAX_FRAMES_PER_SLICE: u32 = 1156;
 
 #[repr(C)]
 struct MachTimebaseInfo {
@@ -80,12 +78,10 @@ fn timebase() -> (u32, u32) {
     })
 }
 
-/// One output device as Core Audio reports it at open time.
 #[derive(Clone, Debug)]
 pub(super) struct Device {
     pub id: AudioObjectID,
     pub name: String,
-    /// What we render at: the unit converts no rate.
     pub sample_rate: u32,
     pub buffer_range: (u32, u32),
     pub latency_frames: u32,
@@ -100,8 +96,10 @@ fn addr(selector: AudioObjectPropertySelector, scope: u32) -> AudioObjectPropert
     }
 }
 
-/// Reads one fixed-size property; `T` must be the C type the selector carries.
-fn get<T: Copy>(
+/// # Safety
+///
+/// `T` must be the C type `selector` carries.
+unsafe fn get<T: Copy>(
     object: AudioObjectID,
     selector: AudioObjectPropertySelector,
     scope: u32,
@@ -109,8 +107,7 @@ fn get<T: Copy>(
     let address = addr(selector, scope);
     let mut value = std::mem::MaybeUninit::<T>::uninit();
     let mut size = size_of::<T>() as u32;
-    // SAFETY: `size` bounds the write into `value`, whose type each call site matches to its
-    // selector.
+    // SAFETY: `size` bounds the write into `value`, whose type the caller matches to `selector`.
     let status = unsafe {
         AudioObjectGetPropertyData(
             object,
@@ -127,7 +124,14 @@ fn get<T: Copy>(
             fourcc(selector)
         );
     }
-    // SAFETY: a zero status means the HAL wrote a whole `T`.
+    if size as usize != size_of::<T>() {
+        bail!(
+            "property {} read {size} bytes, not {}",
+            fourcc(selector),
+            size_of::<T>()
+        );
+    }
+    // SAFETY: the HAL reported writing all of `value`.
     Ok(unsafe { value.assume_init() })
 }
 
@@ -166,13 +170,15 @@ fn fourcc(selector: u32) -> String {
         .collect()
 }
 
-/// The current default output, or why there is none.
 pub(super) fn default_output() -> Result<Device> {
-    let id: AudioObjectID = get(
-        kAudioObjectSystemObject as AudioObjectID,
-        kAudioHardwarePropertyDefaultOutputDevice,
-        kAudioObjectPropertyScopeGlobal,
-    )
+    // SAFETY: the default output device is an `AudioObjectID`.
+    let id: AudioObjectID = unsafe {
+        get(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyDefaultOutputDevice,
+            kAudioObjectPropertyScopeGlobal,
+        )
+    }
     .context("no default output device")?;
     if id == 0 {
         bail!("no default output device");
@@ -183,22 +189,31 @@ pub(super) fn default_output() -> Result<Device> {
 fn describe(id: AudioObjectID) -> Result<Device> {
     let name = coreaudio::audio_unit::macos_helpers::get_device_name(id)
         .unwrap_or_else(|_| format!("device {id}"));
-    let rate: f64 = get(
-        id,
-        kAudioDevicePropertyNominalSampleRate,
-        kAudioObjectPropertyScopeGlobal,
-    )
+    // SAFETY: the nominal sample rate is a `Float64`.
+    let rate: f64 = unsafe {
+        get(
+            id,
+            kAudioDevicePropertyNominalSampleRate,
+            kAudioObjectPropertyScopeGlobal,
+        )
+    }
     .context("device sample rate")?;
     if !(8000.0..=384_000.0).contains(&rate) {
         bail!("device {name} reports an absurd sample rate {rate}");
     }
-    let range: AudioValueRange = get(
-        id,
-        kAudioDevicePropertyBufferFrameSizeRange,
-        kAudioObjectPropertyScopeGlobal,
-    )
+    // SAFETY: the buffer frame size range is an `AudioValueRange`.
+    let range: AudioValueRange = unsafe {
+        get(
+            id,
+            kAudioDevicePropertyBufferFrameSizeRange,
+            kAudioObjectPropertyScopeGlobal,
+        )
+    }
     .context("device buffer range")?;
-    let frames = |selector| get::<u32>(id, selector, kAudioDevicePropertyScopeOutput).unwrap_or(0);
+    // SAFETY: the latency and the safety offset are `UInt32` frame counts.
+    let frames = |selector| unsafe {
+        get::<u32>(id, selector, kAudioDevicePropertyScopeOutput).unwrap_or(0)
+    };
     Ok(Device {
         id,
         name,
@@ -212,11 +227,11 @@ fn describe(id: AudioObjectID) -> Result<Device> {
     })
 }
 
-/// One IO cycle: the interleaved stereo buffer to fill, and when its first frame reaches the DAC
-/// on the [`now_ns`] clock (`0` unstamped).
+/// One IO cycle: the interleaved stereo buffer to fill, and when its first frame is handed to the
+/// hardware on the [`now_ns`] clock.
 pub(super) struct Cycle<'a> {
     pub buffer: &'a mut [f32],
-    pub output_time_ns: u64,
+    pub output_time_ns: Option<u64>,
 }
 
 /// A running stream; dropping it stops the unit and frees the callback before it returns.
@@ -271,18 +286,15 @@ impl Stream {
             UNIT_MAXIMUM_FRAMES_PER_SLICE,
             Scope::Global,
             Element::Output,
-            Some(&buffer_frames.max(1156)),
+            Some(&buffer_frames.max(DEFAULT_MAX_FRAMES_PER_SLICE)),
         )
         .context("maximum frames per slice")?;
         unit.set_render_callback(move |args: RenderArgs| {
             let RenderArgs {
                 data, time_stamp, ..
             } = args;
-            let output_time_ns = if time_stamp.mHostTime == 0 {
-                0
-            } else {
-                host_ticks_to_ns(time_stamp.mHostTime)
-            };
+            let output_time_ns =
+                (time_stamp.mHostTime != 0).then(|| host_ticks_to_ns(time_stamp.mHostTime));
             on_cycle(Cycle {
                 buffer: data.buffer,
                 output_time_ns,
@@ -291,11 +303,14 @@ impl Stream {
         })
         .context("render callback")?;
         unit.start().context("starting the unit")?;
-        let buffer_frames = get::<u32>(
-            device.id,
-            kAudioDevicePropertyBufferFrameSize,
-            kAudioObjectPropertyScopeGlobal,
-        )
+        // SAFETY: the buffer frame size is a `UInt32`.
+        let buffer_frames = unsafe {
+            get::<u32>(
+                device.id,
+                kAudioDevicePropertyBufferFrameSize,
+                kAudioObjectPropertyScopeGlobal,
+            )
+        }
         .unwrap_or(buffer_frames);
         Ok(Self {
             unit,
@@ -310,7 +325,6 @@ impl Drop for Stream {
     }
 }
 
-/// Flags Core Audio's notification thread raises and the backend polls.
 #[derive(Default)]
 pub(super) struct Notices {
     pub default_changed: AtomicBool,
@@ -351,7 +365,6 @@ unsafe extern "C-unwind" fn on_notice(
     0
 }
 
-/// The listeners on one device and on the system's default, removed on drop.
 pub(super) struct Listeners {
     notices: Arc<Notices>,
     armed: Vec<(AudioObjectID, AudioObjectPropertyAddress)>,
@@ -439,11 +452,14 @@ unsafe impl Send for Workgroup {}
 
 impl Workgroup {
     pub(super) fn of_device(device: &Device) -> Option<Self> {
-        let wg: OsWorkgroup = get(
-            device.id,
-            kAudioDevicePropertyIOThreadOSWorkgroup,
-            kAudioObjectPropertyScopeGlobal,
-        )
+        // SAFETY: the IO thread's workgroup is an `os_workgroup_t`.
+        let wg: OsWorkgroup = unsafe {
+            get(
+                device.id,
+                kAudioDevicePropertyIOThreadOSWorkgroup,
+                kAudioObjectPropertyScopeGlobal,
+            )
+        }
         .ok()?;
         (!wg.is_null()).then_some(Self(wg))
     }
@@ -460,6 +476,7 @@ impl Drop for Workgroup {
 pub(super) struct Joined {
     group: Workgroup,
     token: Box<JoinToken>,
+    stays_on_its_thread: std::marker::PhantomData<*const ()>,
 }
 
 impl Joined {
@@ -474,7 +491,11 @@ impl Joined {
         if rc != 0 {
             bail!("os_workgroup_join failed ({rc})");
         }
-        Ok(Self { group, token })
+        Ok(Self {
+            group,
+            token,
+            stays_on_its_thread: std::marker::PhantomData,
+        })
     }
 }
 
@@ -487,8 +508,6 @@ impl Drop for Joined {
 
 pub(super) struct Realtime;
 
-/// A time-constraint policy for the calling thread: `period_ns` of audio per wake, computed well
-/// inside half of it.
 pub(super) fn set_realtime(period_ns: u64) -> Result<Realtime> {
     let period = ns_to_host_ticks(period_ns) as u32;
     let policy = libc::thread_time_constraint_policy {

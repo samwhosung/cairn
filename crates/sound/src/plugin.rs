@@ -10,19 +10,17 @@ use crate::mixer::{Mixer, MixerSettings};
 use crate::output::Output;
 use crate::tables::KitCatalog;
 
-/// The output and every live kit channel. Not `Send`: a device stream is not on every platform.
+/// The output and every live kit channel.
 pub struct SoundOutput {
     /// `None` without a device: every sound is then refused at the mixer.
     pub mixer: Option<Mixer>,
     pub(crate) channels: Vec<ActiveChannel>,
-    /// The zone's live music and ambience streams, which count against the voice ceiling too.
     pub(crate) zone_streams: usize,
     pub voices_stolen: u64,
     pub voices_denied: u64,
     pub copies_dropped: u64,
     pub(crate) log: Option<PlayLog>,
-    /// The game time plays are logged at.
-    pub(crate) clock: f64,
+    pub(crate) play_time: f64,
     pub(crate) offline: Option<crate::health::OfflineClock>,
 }
 
@@ -44,13 +42,13 @@ impl SoundOutput {
         pos: Option<Vec3>,
     ) {
         if let Some(log) = self.log.as_mut() {
-            log.play(self.clock, played, category, spatial, pos);
+            log.play(self.play_time, played, category, spatial, pos);
         }
     }
 
     pub(crate) fn note_stream(&mut self, slot: &str, kit: u32, path: &str, amp: f32) {
         if let Some(log) = self.log.as_mut() {
-            log.stream(self.clock, slot, kit, path, amp);
+            log.stream(self.play_time, slot, kit, path, amp);
         }
     }
 }
@@ -112,7 +110,7 @@ impl Plugin for SoundPlugin {
             voices_denied: 0,
             copies_dropped: 0,
             log,
-            clock: 0.0,
+            play_time: 0.0,
             offline,
         })
         .insert_non_send_resource(crate::zone::ZoneAudio::default())
@@ -158,7 +156,7 @@ impl Plugin for SoundPlugin {
                 crate::water::water_splashes,
                 crate::liquid_loop::drive_liquid_loops,
                 kit::pump_channels,
-                crate::health::poll_mix_health,
+                crate::health::service_output,
             )
                 .chain()
                 .in_set(SoundSystems),
@@ -189,11 +187,9 @@ fn load_providers(mut commands: Commands<'_, '_>, install: Option<Res<'_, Instal
 }
 
 fn stamp_clock(mut out: NonSendMut<'_, SoundOutput>, time: Res<'_, Time>) {
-    out.clock = time.elapsed_secs_f64();
+    out.play_time = time.elapsed_secs_f64();
 }
 
-/// The listener on the character's head facing where the body faces, so a zoom or an orbit of the
-/// camera never moves a sound; on the camera when there is no character to sit on.
 fn update_audio_listener(
     mut listener: ResMut<'_, AudioListener>,
     mut out: NonSendMut<'_, SoundOutput>,
@@ -214,7 +210,6 @@ fn update_audio_listener(
     }
 }
 
-/// Only on a change: a slider dragged every frame would restart the glide forever.
 fn apply_master_volume(
     mut out: NonSendMut<'_, SoundOutput>,
     config: Res<'_, SoundConfig>,
@@ -235,15 +230,14 @@ fn apply_master_volume(
     }
 }
 
-/// The client goes quiet while its window is in the background. A missing window keeps the gate
-/// open: not knowing whether anyone looks must not be heard as silence.
 fn apply_focus_gate(
     mut out: NonSendMut<'_, SoundOutput>,
     config: Res<'_, SoundConfig>,
     windows: Query<'_, '_, &Window, With<bevy::window::PrimaryWindow>>,
     mut last: Local<'_, Option<bool>>,
 ) {
-    let open = config.background_sound || windows.single().map_or(true, |w| w.focused);
+    let backgrounded = windows.single().is_ok_and(|w| !w.focused);
+    let open = config.background_sound || !backgrounded;
     if *last == Some(open) {
         return;
     }

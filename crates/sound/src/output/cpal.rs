@@ -17,12 +17,10 @@ use cpal::{FromSample, SizedSample};
 
 pub(super) const CHANNELS: u32 = 2;
 
-/// How often the default output is re-read: half a second, kira's own cadence.
 const WATCH_EVERY: Duration = Duration::from_millis(500);
-/// The most frames one [`Cycle`] carries; a longer host buffer is served in several.
 const MAX_CYCLE_FRAMES: usize = 8192;
 
-/// Nanoseconds on a monotonic clock of our own: cpal's instants compare only within one host.
+/// Nanoseconds on a monotonic clock of our own: cpal's instants compare only within one stream.
 pub(super) fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -52,9 +50,12 @@ impl std::fmt::Debug for Device {
     }
 }
 
-pub(super) fn default_output() -> Result<Device> {
-    // The epoch starts here, on the main thread, never on the audio callback.
+fn start_clock() {
     now_ns();
+}
+
+pub(super) fn default_output() -> Result<Device> {
+    start_clock();
     let device = cpal::default_host()
         .default_output_device()
         .context("no default output device")?;
@@ -66,7 +67,6 @@ fn describe(device: cpal::Device) -> Result<Device> {
         |_| "unnamed output device".to_string(),
         |d| d.name().to_string(),
     );
-    // The one config the host guarantees it can open.
     let config = device
         .default_output_config()
         .with_context(|| format!("default output config for {name}"))?;
@@ -95,7 +95,7 @@ fn describe(device: cpal::Device) -> Result<Device> {
 
 pub(super) struct Cycle<'a> {
     pub buffer: &'a mut [f32],
-    pub output_time_ns: u64,
+    pub output_time_ns: Option<u64>,
 }
 
 pub(super) struct Stream {
@@ -128,13 +128,8 @@ impl Stream {
         let observed_frames = Arc::new(AtomicU32::new(buffer_frames));
         let errors = Arc::clone(notices);
         let reported = AtomicBool::new(false);
-        // Only a vanished device or an invalidated stream is fatal; a routine xrun keeps the
-        // stream, and rebuilding on one would be the loudest answer to the quietest problem.
         let on_error = move |e: cpal::StreamError| {
-            if matches!(
-                e,
-                cpal::StreamError::DeviceNotAvailable | cpal::StreamError::StreamInvalidated
-            ) {
+            if is_fatal(&e) {
                 errors.device_died.store(true, Ordering::Release);
                 bevy::log::warn!("audio: output stream lost ({e})");
             } else if !reported.swap(true, Ordering::Relaxed) {
@@ -221,11 +216,9 @@ impl<F: FnMut(Cycle<'_>) + Send + 'static> Callback<F> {
             let stereo = &mut self.scratch[..take * CHANNELS as usize];
             (self.on_cycle)(Cycle {
                 buffer: stereo,
-                output_time_ns: if due == 0 {
-                    0
-                } else {
+                output_time_ns: (due != 0).then(|| {
                     due + (done as u64 * 1_000_000_000) / u64::from(self.sample_rate.max(1))
-                },
+                }),
             });
             spread(stereo, &mut data[done * self.channels..], self.channels);
             done += take;
@@ -233,8 +226,13 @@ impl<F: FnMut(Cycle<'_>) + Send + 'static> Callback<F> {
     }
 }
 
-/// Stereo over the device's channels: mono averages the pair, and anything wider carries left
-/// and right on its first two and silence on the rest, never an invented upmix.
+fn is_fatal(e: &cpal::StreamError) -> bool {
+    matches!(
+        e,
+        cpal::StreamError::DeviceNotAvailable | cpal::StreamError::StreamInvalidated
+    )
+}
+
 fn spread<T: SizedSample + FromSample<f32>>(stereo: &[f32], out: &mut [T], channels: usize) {
     match channels {
         1 => {
@@ -274,8 +272,6 @@ pub(super) struct Notices {
     pub last_overload_ns: AtomicU64,
 }
 
-/// A one-shot watch on the default output: it stops at its first notice, because the answer is
-/// a new stream, which arms a new watch.
 pub(super) struct Listeners {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -299,7 +295,6 @@ impl Listeners {
                         notices.device_died.store(true, Ordering::Release);
                         return;
                     };
-                    // An unreadable device is a transient, not a change.
                     let changed = match (&was_id, now.id()) {
                         (Some(was), Ok(is_now)) => Some(*was != is_now),
                         _ => now.description().ok().map(|d| d.name() != was_name),
@@ -406,10 +401,6 @@ mod mmcss {
 
     /// The calling thread's MMCSS membership, reverted on drop on the same thread.
     pub(super) struct Task(*mut core::ffi::c_void);
-
-    // SAFETY: only the creating thread touches the handle; this keeps `Realtime`'s auto traits
-    // the same on every target.
-    unsafe impl Send for Task {}
 
     impl Task {
         pub(super) fn join(name: &str) -> Result<Self> {

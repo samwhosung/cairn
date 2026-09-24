@@ -1,6 +1,3 @@
-//! The splash as a body's feet cross four tenths of its height under the water, going in or
-//! coming out: waist deep, before it swims. One at a time per body.
-
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use world::collision::Liquids;
@@ -19,7 +16,6 @@ const SPLASH_DEPTH_FRAC: f32 = 0.4;
 type Splashing<'a> = (Entity, &'a Transform, &'a SoundBody, Option<&'a UnitRoom>);
 type Moved = Or<(Changed<Transform>, Changed<SoundBody>)>;
 
-/// Only bodies that moved can have crossed the line; a body's first frame arms it silently.
 pub(crate) fn water_splashes(
     bodies: Query<'_, '_, Splashing<'_>, Moved>,
     liquids: Liquids<'_, '_>,

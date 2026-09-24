@@ -2,11 +2,12 @@ use bevy::prelude::*;
 
 use crate::kit::SoundCategory;
 
-/// The player's sound settings, at the client's own defaults: music 0.4 and ambience 0.6 of full.
+/// The player's sound settings; the volumes default to the client's, music 0.4 and ambience 0.6 of
+/// full.
 #[derive(Resource, Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct SoundConfig {
-    /// Every sound: off, nothing is picked at all.
+    /// Every sound: off, every category at zero and the master shut.
     pub enabled: bool,
     /// The main track only; selection and channels go on, so unmuting is instant.
     pub muted: bool,
@@ -18,8 +19,7 @@ pub struct SoundConfig {
     pub ambience_enabled: bool,
     /// Keep sounding while the window is in the background; the client goes quiet.
     pub background_sound: bool,
-    /// The zone's reverb preset. The client asks for it, but its EAX path has had no hardware to
-    /// render on for as long as anyone has played it, so off is what it is heard to do.
+    /// The zone's reverb preset, which the client plays only through EAX hardware.
     pub reverb: bool,
     /// The output limiter, which the client does not have.
     pub limiter: bool,

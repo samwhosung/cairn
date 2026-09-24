@@ -1,7 +1,7 @@
 //! The kit player: what the client does between "play this `SoundEntries` kit" and the mixer. It
-//! gates on distance, on the kit's voice bus and duplicates, picks a variation from a depleting
-//! pool, varies the shot's volume and pitch, and keeps each playing channel's gain on its
-//! category, rolloff and near field.
+//! gates on distance, the play's voice bus, duplicates and the voice ceiling, picks a variation
+//! from a depleting pool, varies the shot's volume and pitch, and keeps each playing channel's
+//! gain on its category, rolloff and near field.
 
 mod pump;
 #[cfg(test)]
@@ -42,14 +42,11 @@ impl SoundCategory {
     }
 }
 
-/// A kit's variation weights still to play: a pick spends one, and an empty pool refills. With
-/// the data's usual weights of one, no variation repeats until every one has played.
 struct PickState {
     remaining: Vec<u32>,
 }
 
-/// xorshift32. The client draws from its own engine generator; only the transform of the draw
-/// is its behaviour.
+/// Any generator serves: only the transform of the client's draw is its behaviour.
 struct Rng(u32);
 
 impl Rng {
@@ -88,7 +85,6 @@ impl SoundKits {
         &self.catalog
     }
 
-    /// Every file of every kit comes out of the chain.
     pub(crate) fn read(&self, path: &str) -> Result<Vec<u8>> {
         let chain = self.chain.as_ref().context("no install to read from")?;
         chain.read(path).with_context(|| format!("reading {path}"))
@@ -105,7 +101,6 @@ impl SoundKits {
         }
     }
 
-    /// A variation for a streamed kit, `(path, base volume)`: the same pool as a shot.
     pub(crate) fn pick_stream(&mut self, kit_id: u32) -> Option<(String, f32)> {
         let kit = self.catalog.get(kit_id)?;
         if kit.files.is_empty() {
@@ -156,35 +151,28 @@ impl SoundKits {
     }
 }
 
-/// One playing channel.
 pub(crate) struct ActiveChannel {
     pub(crate) kit: u32,
-    /// The entity the channel belongs to: it follows a looping one, and a despawn stops it.
+    /// The entity the channel belongs to; a looping channel follows it.
     source: Option<Entity>,
     tracked: bool,
     handle: mixer::StaticSoundHandle,
-    /// The spatial track keeping a 3-D voice alive; `None` is 2-D.
+    /// The track the pump moves the voice on; `None` in 2-D.
     track: Option<mixer::SpatialTrackHandle>,
     pos: Option<Vec3>,
     min_dist: f32,
     cutoff: f32,
-    /// The shot's own volume, base plus variation.
-    v: f32,
-    /// A driver-animated gain: the fade lane of loops whose volume the pump owns.
-    gain: f32,
+    shot_volume: f32,
+    fade_gain: f32,
     category: SoundCategory,
     pub(crate) bus: Bus,
-    /// A loop is a bed, and the voice cap never steals one.
     looping: bool,
-    /// The last effective amplitude the pump fed, which the voice cap ranks channels by.
-    amp: f32,
+    fed_amp: f32,
 }
 
-/// The rest of the client's play call, beyond which kit, where and in which category.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PlayExtras {
     pub(crate) source: Option<Entity>,
-    /// Loop whatever the kit's own flag says: the drivers whose column is the loop authority.
     pub(crate) force_loop: bool,
     /// Skip the one-shot lane's duplicate suppressors, for a caller that keeps one channel per
     /// kit by construction.
@@ -198,7 +186,7 @@ pub enum KitRef<'a> {
     Name(&'a str),
 }
 
-/// What one play chose, whether or not it opened a channel.
+/// What a play that opened a channel chose.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Played {
     pub kit: u32,
@@ -210,8 +198,8 @@ pub struct Played {
     pub looping: bool,
 }
 
-/// Resolve, gate, pick, decode, play. `pos: None` plays in 2-D. `Ok(false)` is a gate refusing,
-/// which the client did not treat as an error either.
+/// `pos: None` plays in 2-D. `Ok(false)` when a gate refuses the play or there is no output, which
+/// the client did not treat as an error either.
 pub fn play_kit(
     kits: &mut SoundKits,
     out: &mut SoundOutput,
@@ -233,7 +221,6 @@ pub fn play_kit(
     )
 }
 
-/// [`play_kit`] with the rest of the client's play call.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn play_kit_ext(
     kits: &mut SoundKits,
@@ -295,7 +282,6 @@ pub(crate) fn play_kit_ext(
     if looping {
         data = data.loop_region(..);
     }
-    // Last, because it is the one gate that can stop another sound.
     if !voice::claim_voice(out, amp) {
         return Ok(false);
     }
@@ -303,7 +289,6 @@ pub(crate) fn play_kit_ext(
         return Ok(false);
     };
     let (track, handle) = match pos {
-        // A kit with no `SoundSamplePreferences` row is dry however wet the zone is.
         Some(p) => {
             let (t, h) = mixer.play_3d(data, p, eax_def != 0)?;
             (Some(t), h)
@@ -337,17 +322,16 @@ pub(crate) fn play_kit_ext(
         pos,
         min_dist,
         cutoff,
-        v,
-        gain: 1.0,
+        shot_volume: v,
+        fade_gain: 1.0,
         category,
         bus: extras.bus,
         looping,
-        amp,
+        fed_amp: amp,
     });
     Ok(true)
 }
 
-/// Whether the bus cap, the kit's no-duplicates flag or the same-kit cap turns a play away.
 fn turned_away(out: &mut SoundOutput, id: u32, flags: u32, extras: PlayExtras) -> bool {
     if voice::bus_at_cap(out.channels.iter().map(|c| c.bus), extras.bus) {
         return true;
@@ -371,7 +355,6 @@ fn near_field(d_sq: f32, cutoff: f32) -> f32 {
     }
 }
 
-/// The kit's name, `None` when no row has this id.
 pub(crate) fn kit_name(kits: &SoundKits, id: u32) -> Option<&str> {
     kits.catalog.get(id).map(|k| k.name.as_str())
 }

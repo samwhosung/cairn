@@ -13,7 +13,6 @@ assert_no_alloc = "1.1"
 bevy.workspace = true
 dbc = { path = "../dbc" }
 # The mixer, pinned with symphonia below: its later 0.12 releases decode through symphonia 0.6.
-# Its own `cpal` backend stays off: `output` is the device layer.
 kira = { version = "=0.12.1", default-features = false, features = [
   "mp3",
   "wav",

@@ -1,6 +1,5 @@
-//! Records the mix to a stereo float WAV: an effect on the main track copies every frame into a
-//! lock-free ring, and a writer thread drains it, patching the header on every flush so the file
-//! is valid up to the last flush however the process ends.
+//! The header is patched on every flush, so the file is valid up to the last flush however the
+//! process ends.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
@@ -12,12 +11,11 @@ use kira::Frame;
 use kira::effect::{Effect, EffectBuilder};
 use kira::info::Info;
 
-/// The ring's depth; only a writer stalled far past its cadence drops a sample.
 const RING_SECONDS: usize = 8;
 const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Installs a tap writing `path` and returns its frame clock, the file's write position. `None`
-/// when the file cannot be created.
+/// Installs a tap writing `path` and returns its frame clock, the count of frames tapped. `None`
+/// when the file cannot be created or its writer cannot start.
 pub(crate) fn install_at(
     builder: &mut kira::track::MainTrackBuilder,
     path: &Path,
@@ -80,7 +78,6 @@ impl Effect for Tap {
     }
 }
 
-/// Ends when the tap is dropped with the mixer.
 fn writer(mut file: std::fs::File, mut consumer: rtrb::Consumer<f32>, sample_rate: u32) {
     if let Err(e) = file.write_all(&wav_header(sample_rate, 0)) {
         warn!("mix tap: header write failed: {e}");

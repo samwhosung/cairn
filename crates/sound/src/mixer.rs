@@ -34,7 +34,7 @@ use crate::output::{self, Event, Output, OutputBackend, OutputSettings, Window};
 use crate::tables::SoundProvider;
 use crate::{limiter, mix_tap};
 
-/// A zero-length change: a true step, such as a reverb preset switch or an initial value.
+/// A zero-length change, for a switch such as a reverb preset or an initial value.
 pub fn snap() -> Tween {
     Tween {
         duration: std::time::Duration::ZERO,
@@ -42,9 +42,9 @@ pub fn snap() -> Tween {
     }
 }
 
-/// The per-frame volume feed's ramp. kira applies a volume as one gain per 128-frame block, so a
-/// stepped per-frame gain is a click whose loudness scales with the frame hitch; each frame ramps
-/// to its new value instead.
+/// The per-frame volume feed's ramp. kira moves a changed volume across one 128-frame block, so a
+/// per-frame step lands as a near-click that grows with the frame hitch; each frame glides to its
+/// new value instead.
 pub fn glide() -> Tween {
     Tween {
         duration: std::time::Duration::from_millis(GLIDE_MS),
@@ -52,7 +52,6 @@ pub fn glide() -> Tween {
     }
 }
 
-/// Just under a 60 fps frame.
 const GLIDE_MS: u64 = 15;
 
 /// The fade on a stop that may cut a sound at full amplitude.
@@ -60,7 +59,8 @@ pub fn declick() -> Tween {
     glide()
 }
 
-/// A linear fade over `ms`, as the client's constant per-tick decrement is.
+/// A fade over `ms`, linear in decibels as kira fades; the client steps its 0..255 volume down
+/// linearly instead.
 pub fn fade(ms: u64) -> Tween {
     Tween {
         duration: std::time::Duration::from_millis(ms),
@@ -78,7 +78,6 @@ pub fn amp_to_db(amp: f32) -> Decibels {
     }
 }
 
-/// How the mixer is built.
 #[derive(Clone, Debug)]
 pub struct MixerSettings {
     pub output: Output,
@@ -86,34 +85,26 @@ pub struct MixerSettings {
     pub mix_tap: Option<std::path::PathBuf>,
 }
 
-/// The one open output and its listener; the only place kira's manager is touched. There is no
-/// master filter: the client applied none beyond FMOD's reverb.
+/// The one open output and its listener.
 pub struct Mixer {
     manager: AudioManager<OutputBackend>,
     listener: ListenerHandle,
     health: MixHealth,
     window: Window,
-    /// The zone reverb's wet-only send; every 3-D track that takes reverb routes into it, and its
-    /// volume is the zone's wet level.
     reverb_send: SendTrackHandle,
     reverb: ReverbHandle,
     level: Arc<MixLevel>,
     limiter_on: Arc<AtomicBool>,
-    /// First in the main chain, ahead of the limiter.
     master: VolumeControlHandle,
-    /// Last in the main chain, after every tap: unity or silence, never a level.
-    output: VolumeControlHandle,
+    output_gate: VolumeControlHandle,
     audio_pos: Option<Arc<AtomicU64>>,
     sample_rate: Option<u32>,
 }
 
-/// How many 3-D voices may live at once: every positional play takes a spatial track of its own.
-/// kira's default of 128 is a number a fight reaches; the game's own caps decide what plays, and
-/// a refusal past this one is counted.
 const SPATIAL_VOICE_CAPACITY: usize = 512;
 
 impl Mixer {
-    /// Fails cleanly without a device; the caller runs silent.
+    /// Fails without an output device.
     pub fn new(settings: &MixerSettings) -> Result<Self> {
         let sample_rate = output::probe_sample_rate(settings.output);
         let level = Arc::new(MixLevel::default());
@@ -162,7 +153,7 @@ impl Mixer {
             level,
             limiter_on,
             master: chain.master,
-            output: chain.output,
+            output_gate: chain.output_gate,
             audio_pos: chain.audio_pos,
             sample_rate,
         })
@@ -195,7 +186,7 @@ impl Mixer {
         self.master.set_volume(amp_to_db(amp), glide());
     }
 
-    /// Opens or shuts the output after every tap, so recordings keep the mix while the speakers
+    /// Opens or shuts the output after every tap, so the mix tap keeps the mix while the speakers
     /// are silent.
     pub fn set_output_gate(&mut self, open: bool) {
         let db = if open {
@@ -203,9 +194,11 @@ impl Mixer {
         } else {
             Decibels::SILENCE
         };
-        self.output.set_volume(db, glide());
+        self.output_gate.set_volume(db, glide());
     }
 
+    /// Off fades the limiter out through its delay line; on under an overload pulls the gain down
+    /// at once.
     pub fn set_limiter(&mut self, on: bool) {
         self.limiter_on.store(on, Ordering::Relaxed);
     }
@@ -281,7 +274,7 @@ pub struct MixHealth {
     pub load: f32,
     pub peak_load: f32,
     /// Device cycles the ring could not fill: each went out as silence.
-    pub overruns: u64,
+    pub underruns: u64,
     pub stream_errors: u64,
     pub voices_refused: u64,
 }
@@ -309,14 +302,14 @@ impl Mixer {
                 ),
                 Event::Lost(why) => warn!("audio: output stream dropped: {why}; reopening"),
                 Event::OpenFailed(what) => warn!("audio: output device refused: {what}; retrying"),
-                Event::Dead(what) => error!("audio: output is gone for good: {what}"),
+                Event::RingLost(what) => error!("audio: output is gone for good: {what}"),
             }
         }
         if window.render_chunks > 0 && window.chunk_ms > 0.0 {
             self.health.load = (window.render_wall_max_ms / window.chunk_ms) as f32;
             self.health.peak_load = self.health.peak_load.max(self.health.load);
         }
-        self.health.overruns += window.underruns;
+        self.health.underruns += window.underruns;
         self.window.merge(window);
         self.health
     }
@@ -330,9 +323,8 @@ impl Mixer {
     }
 }
 
-/// The main track's chain in signal order: master, meter, limiter, tap, output gate. kira
-/// applies a track's own volume after its effects, so the master is an effect to stay ahead of
-/// the limiter.
+/// kira applies a track's own volume after its effects, so the master is an effect to stay ahead
+/// of the limiter.
 fn main_track(
     level: &Arc<MixLevel>,
     limiter_on: &Arc<AtomicBool>,
@@ -351,11 +343,11 @@ fn main_track(
         }
         _ => None,
     };
-    let output = main.add_effect(VolumeControlBuilder::new(Decibels::IDENTITY));
+    let output_gate = main.add_effect(VolumeControlBuilder::new(Decibels::IDENTITY));
     MainChain {
         builder: main,
         master,
-        output,
+        output_gate,
         audio_pos,
     }
 }
@@ -363,11 +355,10 @@ fn main_track(
 struct MainChain {
     builder: kira::track::MainTrackBuilder,
     master: VolumeControlHandle,
-    output: VolumeControlHandle,
+    output_gate: VolumeControlHandle,
     audio_pos: Option<Arc<AtomicU64>>,
 }
 
-/// Moves a live spatial track's emitter.
 pub fn set_track_position(track: &mut SpatialTrackHandle, pos: Vec3) {
     track.set_position(mint_vec(pos), snap());
 }
@@ -392,7 +383,7 @@ fn mint_quat(q: Quat) -> mint::Quaternion<f32> {
 }
 
 /// An EAX preset as Freeverb `(feedback, damping, wet)`: feedback from the decay time through
-/// Freeverb's RT60 at its mean comb delay, capped short of runaway; damping from the high
+/// Freeverb's RT60 at a 36 ms comb delay, capped short of runaway; damping from the high
 /// frequency decay ratio and the room's high cut; wet from room plus reverb, at most +6 dB.
 fn freeverb_projection(p: &SoundProvider) -> (f64, f64, Decibels) {
     let feedback = if p.decay_time > 0.0 {
@@ -424,7 +415,7 @@ pub fn loop_from_bytes(bytes: Vec<u8>) -> Result<StaticSoundData> {
 }
 
 /// Compressed audio decoded as it plays, through a source that raises its decode thread's quality
-/// of service.
+/// of service on macOS.
 pub fn stream_from_bytes(bytes: Vec<u8>) -> Result<StreamingSoundData<FromFileError>> {
     StreamingSoundData::from_media_source(PromotingSource(std::io::Cursor::new(bytes)))
         .context("opening stream")

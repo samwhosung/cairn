@@ -1,12 +1,4 @@
 //! Zone music and ambience, from the area the player stands in and the room over it.
-//!
-//! Music: a change of the zone's music row fades the playing track out over 4 s while the new
-//! row's track starts at once, at full volume; within one zone, tracks are separated by a random
-//! silence from the row. An entry fanfare takes the slot first when its throttle allows.
-//!
-//! Ambience: the bed is the submerged loop under water, else the room's, else the area's, by day
-//! or by night. A change crossfades over 5 s, except going under or coming up, which is instant.
-//! Day is 05:30 to 21:00.
 
 use std::collections::HashMap;
 
@@ -23,14 +15,11 @@ use crate::kit::{SoundCategory, SoundKits};
 use crate::mixer::{self, StaticSoundHandle, StreamWatch, StreamingSoundHandle};
 use crate::tables::AreaSounds;
 
-/// `UnderWaterLoop`.
 const UNDERWATER_LOOP_KIT: u32 = 4123;
 const MUSIC_FADE_OUT_MS: u64 = 4000;
 const AMBIENCE_TRANSITION_FADE_MS: u64 = 5000;
-/// Without a row to say how long, the silence before the next track.
 const DEFAULT_SILENCE_SECS: f64 = 6.0;
 
-/// 0 by day, 1 by night: the index into the tables' day and night pairs.
 fn phase(time: TimeOfDay) -> usize {
     usize::from(!(330..1260).contains(&time.minute))
 }
@@ -65,20 +54,17 @@ fn fade_in_gain(fade: &mut Option<FadeIn>, now: f64) -> f32 {
     }
 }
 
-/// The two slots and their schedule.
 pub(crate) struct ZoneAudio {
     zone_music: u32,
     music: Option<StreamingSoundHandle<FromFileError>>,
     music_watch: StreamWatch,
     music_kit_vol: f32,
-    /// When the next track starts; `None` while one plays or the zone has none.
     next_track_at: Option<f64>,
     ambience_kit: u32,
     ambience: Option<StaticSoundHandle>,
     ambience_kit_vol: f32,
     ambience_fade_in: Option<FadeIn>,
-    /// The fanfare throttle: row id to when it last played.
-    intro_last: HashMap<u32, f64>,
+    fanfare_last_played: HashMap<u32, f64>,
     area: Option<u32>,
     interior: Option<InteriorAudio>,
     was_underwater: bool,
@@ -97,7 +83,7 @@ impl Default for ZoneAudio {
             ambience: None,
             ambience_kit_vol: 1.0,
             ambience_fade_in: None,
-            intro_last: HashMap::new(),
+            fanfare_last_played: HashMap::new(),
             area: None,
             interior: None,
             was_underwater: false,
@@ -139,7 +125,6 @@ pub(crate) fn load_area_sounds(
     }
 }
 
-/// What the world under the player says this frame.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Place<'w> {
     area: Res<'w, CurrentArea>,
@@ -196,14 +181,14 @@ pub(crate) fn zone_audio(
             let mut slot_taken = false;
             if let Some(intro) = intro {
                 let ok_at = zone
-                    .intro_last
+                    .fanfare_last_played
                     .get(&intro.id)
                     .map(|t| t + f64::from(intro.min_delay_minutes) * 60.0);
                 if ok_at.is_none_or(|t| now >= t)
                     && intro.sound_id != 0
                     && start_music_stream(zone, &mut out, &mut kits, &config, intro.sound_id)
                 {
-                    zone.intro_last.insert(intro.id, now);
+                    zone.fanfare_last_played.insert(intro.id, now);
                     slot_taken = true;
                 }
             }
@@ -284,8 +269,6 @@ pub(crate) fn zone_audio(
     }
 }
 
-/// When the next track of the row starts after one ends: after the row's random silence for the
-/// phase, or at once with no delay set; never without a row.
 fn next_track_time(
     zone: &mut ZoneAudio,
     areas: &AreaSounds,
@@ -309,7 +292,6 @@ fn next_track_time(
     })
 }
 
-/// Opens a music kit on the slot at full volume, fading out whatever held it; whether it opened.
 fn start_music_stream(
     zone: &mut ZoneAudio,
     out: &mut SoundOutput,
@@ -351,8 +333,6 @@ fn start_music_stream(
     }
 }
 
-/// Fades the bed out over `fade_ms` while the new one starts silent and ramps in over the same;
-/// `kit_id` 0 leaves the slot empty.
 fn swap_ambience(
     zone: &mut ZoneAudio,
     out: &mut SoundOutput,
@@ -408,7 +388,6 @@ fn swap_ambience(
     }
 }
 
-/// The slots' live streams, counted against the voice ceiling afresh every frame.
 pub(crate) fn report_stream_voices(
     zone: NonSend<'_, ZoneAudio>,
     mut out: NonSendMut<'_, SoundOutput>,

@@ -13,7 +13,7 @@ pub struct SoundProvider {
     pub flags: u32,
     /// Seconds.
     pub decay_time: f32,
-    /// Millibels.
+    /// Millibels, as are `room_hf`, `reflections` and `reverb`.
     pub room: i32,
     pub room_hf: i32,
     pub decay_hf_ratio: f32,

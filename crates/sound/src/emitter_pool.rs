@@ -1,8 +1,6 @@
-//! The ambient emitter pool: the client voices sound ids, not doodads. A doodad's `$DSL` key
-//! registers its position as one record in the entry holding that id; each entry runs one channel,
-//! at whichever of its records is nearest the listener, moved rather than restarted as that
-//! changes. Of the 32 entries the first four, in claim order and not by distance, may sound at
-//! once; a fifth fades out over 3 s. An entry holds up to 256 records.
+//! The ambient emitter pool. The client voices sound ids, not doodads: every doodad naming an id
+//! is a record in that id's entry, which sounds from the record nearest the listener. The first
+//! [`PLAYING_CAP`] entries in slot order sound, not the nearest.
 
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
@@ -19,7 +17,6 @@ const RECORDS_PER_ENTRY: usize = 256;
 const PLAYING_CAP: usize = 4;
 const FADE_SECS: f32 = 3.0;
 
-/// The entity an entry's channel rides; moving it is the reposition.
 #[derive(Component)]
 pub(crate) struct PoolEmitter;
 
@@ -32,9 +29,7 @@ struct Record {
 struct Entry {
     /// The `SoundEntries` id held; 0 is free.
     id: u32,
-    /// The kit resolves to no row. The client negates the id instead, which makes the owner
-    /// re-register every cycle; flagging it keeps the owner where it is, silent either way.
-    failed: bool,
+    unknown_kit: bool,
     /// In claim order.
     records: Vec<Record>,
     voice: Option<Entity>,
@@ -42,10 +37,9 @@ struct Entry {
 
 impl Entry {
     fn entitled(&self) -> bool {
-        self.id != 0 && !self.failed && !self.records.is_empty()
+        self.id != 0 && !self.unknown_kit && !self.records.is_empty()
     }
 
-    /// A tie keeps the first record.
     fn nearest(&self, listener: Vec3) -> Option<Vec3> {
         self.records
             .iter()
@@ -55,7 +49,6 @@ impl Entry {
     }
 }
 
-/// A channel let go, fading out: the entry is free to claim again while it dies.
 struct Fading {
     emitter: Entity,
     kit: u32,
@@ -65,8 +58,7 @@ struct Fading {
 #[derive(Resource)]
 pub(crate) struct AmbientEmitterPool {
     entries: [Entry; POOL_ENTRIES],
-    /// Each owner's entry: one registration per owner.
-    handles: EntityHashMap<usize>,
+    entry_of_owner: EntityHashMap<usize>,
     fading: Vec<Fading>,
     complained: std::collections::HashSet<u32>,
     last_census: Vec<(u32, bool)>,
@@ -77,7 +69,7 @@ impl Default for AmbientEmitterPool {
     fn default() -> Self {
         Self {
             entries: std::array::from_fn(|_| Entry::default()),
-            handles: EntityHashMap::default(),
+            entry_of_owner: EntityHashMap::default(),
             fading: Vec::new(),
             complained: std::collections::HashSet::new(),
             last_census: Vec::new(),
@@ -87,10 +79,8 @@ impl Default for AmbientEmitterPool {
 }
 
 impl AmbientEmitterPool {
-    /// The same id again only moves the owner's record; another id releases it and registers
-    /// anew, so two keys on one sequence alternate through one registration.
     pub(crate) fn register(&mut self, owner: Entity, id: u32, pos: Vec3, listener: Vec3) {
-        if let Some(&e) = self.handles.get(&owner) {
+        if let Some(&e) = self.entry_of_owner.get(&owner) {
             if self.entries[e].id == id {
                 self.reposition(e, owner, pos);
                 return;
@@ -107,11 +97,9 @@ impl AmbientEmitterPool {
         };
         if self.entries[e].id == 0 {
             self.entries[e].id = id;
-            self.entries[e].failed = false;
+            self.entries[e].unknown_kit = false;
         }
         if self.entries[e].records.len() >= RECORDS_PER_ENTRY {
-            // The first record farther than the newcomer goes, in claim order; none farther
-            // rejects the newcomer.
             let d = math::dist_sq(listener, pos);
             let Some(victim) = self.entries[e]
                 .records
@@ -121,10 +109,10 @@ impl AmbientEmitterPool {
                 return;
             };
             let gone = self.entries[e].records.remove(victim);
-            self.handles.remove(&gone.owner);
+            self.entry_of_owner.remove(&gone.owner);
         }
         self.entries[e].records.push(Record { owner, pos });
-        self.handles.insert(owner, e);
+        self.entry_of_owner.insert(owner, e);
     }
 
     fn reposition(&mut self, e: usize, owner: Entity, pos: Vec3) {
@@ -137,9 +125,9 @@ impl AmbientEmitterPool {
         }
     }
 
-    /// The owner's last record going frees the entry, and its channel fades out.
+    /// Drops the owner's record; the entry's last going frees it and fades its channel.
     pub(crate) fn release(&mut self, owner: Entity) {
-        let Some(e) = self.handles.remove(&owner) else {
+        let Some(e) = self.entry_of_owner.remove(&owner) else {
             return;
         };
         let entry = &mut self.entries[e];
@@ -158,11 +146,10 @@ impl AmbientEmitterPool {
         }
     }
 
-    /// Marks each entry whose kit has no `SoundEntries` row as failed, so it never sounds.
     fn fail_unknown_kits(&mut self, kits: &SoundKits) {
         for entry in &mut self.entries {
-            if entry.id != 0 && !entry.failed && kit_name(kits, entry.id).is_none() {
-                entry.failed = true;
+            if entry.id != 0 && !entry.unknown_kit && kit_name(kits, entry.id).is_none() {
+                entry.unknown_kit = true;
                 if self.complained.insert(entry.id) {
                     warn!(
                         "doodad emitter kit {}: no SoundEntries row, silent",
@@ -173,8 +160,7 @@ impl AmbientEmitterPool {
         }
     }
 
-    /// Fades the entry's channel and keeps everything else, to sound again under the cap.
-    fn retire(&mut self, e: usize) {
+    fn fade_voice(&mut self, e: usize) {
         let (kit, voice) = {
             let entry = &mut self.entries[e];
             (entry.id, entry.voice.take())
@@ -196,8 +182,6 @@ enum CapStep {
     Retire,
 }
 
-/// The count is of entries that came back live and in range: an entitled entry past its kit's
-/// cutoff, or whose start failed, holds none of the four.
 const fn cap_step(entitled: bool, sounding_so_far: usize) -> CapStep {
     if !entitled {
         CapStep::Skip
@@ -245,12 +229,12 @@ pub(crate) fn pump_emitters(
     for e in 0..POOL_ENTRIES {
         match cap_step(pool.entries[e].entitled(), sounding) {
             CapStep::Skip => {
-                pool.retire(e);
+                pool.fade_voice(e);
                 continue;
             }
             CapStep::Retire => {
                 withheld.push(pool.entries[e].id);
-                pool.retire(e);
+                pool.fade_voice(e);
                 continue;
             }
             CapStep::Service => {}
@@ -278,8 +262,6 @@ pub(crate) fn pump_emitters(
             census.push((id, true));
             continue;
         }
-        // Past the kit's cutoff the channel was stopped rather than left at zero gain, so it
-        // restarts here; a hum out of earshot loses only its phase.
         if let Err(err) = play_kit_ext(
             &mut kits,
             &mut out,
@@ -314,7 +296,6 @@ pub(crate) fn pump_emitters(
     }
 }
 
-/// A doodad gone releases its record; the id sounds on while any other names it.
 pub(crate) fn release_on_despawn(
     mut hosts: RemovedComponents<'_, '_, world::doodad_sound::SoundHost>,
     mut pool: ResMut<'_, AmbientEmitterPool>,

@@ -29,7 +29,7 @@ pub use config::SoundConfig;
 pub use footsteps::SoundBody;
 pub use interior::{CurrentInterior, InteriorAudio};
 pub use kit::{KitRef, Played, SoundCategory, SoundKits, play_kit};
-pub use liquid_loop::Listening;
+pub use liquid_loop::{LIQUID_LOOP_REACH, Listening};
 pub use mixer::{Mixer, MixerSettings};
 pub use output::{OFFLINE_SAMPLE_RATE, Output};
 pub use plugin::{AudioListener, ListenerCharacter, SoundOutput, SoundPlugin, SoundSystems};

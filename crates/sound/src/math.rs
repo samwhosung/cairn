@@ -25,7 +25,7 @@ pub fn variation_volume(draw: Option<i32>, base: f32, mult: f32) -> f32 {
 }
 
 /// A shot's playback frequency in Hz: the client's integer `22050 · (draw + 85) / 100`, absolute,
-/// so a 44.1 kHz file plays at half speed as it did there.
+/// so a 44.1 kHz file plays at half speed, as in the client.
 pub fn variation_pitch_freq(draw: i32) -> i32 {
     22050i32.wrapping_mul(draw.wrapping_add(0x55)) / 100
 }

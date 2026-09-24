@@ -1,5 +1,3 @@
-//! No device: the renderer waits for the app to ask for the next frames.
-
 use kira::backend::Renderer;
 
 pub(crate) struct OfflineOutput {
@@ -25,8 +23,7 @@ impl OfflineOutput {
         self.sample_rate
     }
 
-    /// The next `frames` stereo frames, interleaved, with every command sent before the call
-    /// applied from the first of them.
+    /// Every command sent before the call applies from its first frame.
     pub(crate) fn render(&mut self, frames: usize) -> &[f32] {
         self.buffer.clear();
         self.buffer.resize(frames * 2, 0.0);

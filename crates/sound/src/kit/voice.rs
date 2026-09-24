@@ -1,5 +1,3 @@
-//! How many sounds may play: per voice bus, per kit, and in all.
-
 use super::mixer;
 use crate::SoundOutput;
 
@@ -9,7 +7,7 @@ use crate::SoundOutput;
 pub struct Bus(pub u8);
 
 impl Bus {
-    /// Uncapped: music, ambience, the world's emitters and every bus not otherwise named.
+    /// Uncapped: the bus of every play that names none.
     pub const DEFAULT: Bus = Bus(0);
     /// The terrain step of a footfall, six at once.
     pub const FOOTSTEP: Bus = Bus(9);
@@ -18,7 +16,7 @@ impl Bus {
 /// The client's per-bus caps, a table no code writes.
 const BUS_CAP: [u32; 13] = [0x7fff_ffff, 1, 2, 2, 1, 1, 2, 2, 1, 6, 4, 1, 2];
 
-/// Live copies of one kit the kits without the no-duplicates flag may have: sample-aligned copies
+/// How many live copies of a kit without the no-duplicates flag may play: sample-aligned copies
 /// sum coherently, so a third is louder, not denser. The client caps only flagged kits, at one.
 const SAME_KIT_MAX: usize = 2;
 
@@ -33,7 +31,7 @@ pub(super) fn same_kit_cap_blocks(dedupe_exempt: bool, live_same_kit: usize) -> 
     !dedupe_exempt && live_same_kit >= SAME_KIT_MAX
 }
 
-/// Counts allocated channels, not audible ones; bus 0's cap is never reached.
+/// Counts allocated channels, not audible ones.
 pub(super) fn bus_at_cap(live: impl Iterator<Item = Bus>, bus: Bus) -> bool {
     let cap = BUS_CAP[usize::from(bus.0)];
     cap != BUS_CAP[0] && live.filter(|b| *b == bus).count() as u32 >= cap
@@ -46,9 +44,7 @@ pub(super) enum VoiceSlot {
     Denied,
 }
 
-/// At the ceiling the quietest live one-shot loses to a strictly louder newcomer, and a newcomer
-/// quieter than all of them is dropped. The client drops the newcomer every time; stealing keeps
-/// the loudest twelve.
+/// The client drops the newcomer every time; stealing keeps the loudest one-shots.
 pub(super) fn pick_voice_slot(
     stealable: impl Iterator<Item = (usize, f32)>,
     live_voices: usize,
@@ -63,10 +59,8 @@ pub(super) fn pick_voice_slot(
     }
 }
 
-/// Makes room for one more voice, or refuses.
 pub(super) fn claim_voice(out: &mut SoundOutput, candidate_amp: f32) -> bool {
     if out.live_voices() >= SOFTWARE_CHANNELS {
-        // A sound that ended earlier this frame is still listed until the pump reaps it.
         out.channels
             .retain(|c| c.handle.state() != kira::sound::PlaybackState::Stopped);
     }
@@ -75,7 +69,7 @@ pub(super) fn claim_voice(out: &mut SoundOutput, candidate_amp: f32) -> bool {
         .iter()
         .enumerate()
         .filter(|(_, c)| !c.looping)
-        .map(|(i, c)| (i, c.amp));
+        .map(|(i, c)| (i, c.fed_amp));
     match pick_voice_slot(stealable, out.live_voices(), candidate_amp) {
         VoiceSlot::Free => true,
         VoiceSlot::Steal(i) => {

@@ -1,11 +1,12 @@
 //! The sound of the building room the player is in: its `WMOAreaTable` row's music, fanfare,
-//! ambience and reverb, each overriding the terrain area's where it is set.
+//! ambience and reverb, each overriding the area's where it is set.
 
 use bevy::prelude::*;
 use world::WmoAreas;
 use world::interior::CurrentWmoInterior;
 
-/// The room's audio columns; `None` outdoors, zeros for a room with none of its own.
+/// The room's audio columns; `None` outdoors or in a room with no `WMOAreaTable` row; zeros where
+/// the row sets none.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CurrentInterior(pub Option<InteriorAudio>);
 

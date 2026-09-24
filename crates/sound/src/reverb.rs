@@ -1,6 +1,4 @@
-//! The zone's reverb preset on the mixer's reverb send: the room's, else the area's, the
-//! underwater column while the eye is submerged; applied at once on a change, and only when the
-//! reverb setting is on.
+//! The zone's reverb preset on the mixer's reverb send.
 
 use bevy::prelude::*;
 use world::interior::CurrentArea;
@@ -11,7 +9,6 @@ use crate::config::SoundConfig;
 use crate::interior::CurrentInterior;
 use crate::tables::{AreaSounds, SoundProviders};
 
-/// The preset last applied; `None` until the first.
 #[derive(Resource, Default)]
 pub(crate) struct AppliedPreset(Option<u32>);
 

@@ -1,10 +1,6 @@
 //! A look-ahead brickwall limiter on the mix, stereo-linked, so kira's hard clamp never shapes
 //! the waveform. Every 1.12 effect is mastered to full scale and the mix is a plain sum, so two
 //! close sounds already ask for more than full scale; the client itself clipped.
-//!
-//! Per frame the required gain is `CEILING / peak`; a sliding minimum of it over the look-ahead,
-//! averaged over the same span, is at most the required gain of the frame leaving the delay line,
-//! so the output never overshoots. The gain then returns to unity over [`RELEASE_MS`].
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -18,17 +14,14 @@ use crate::meter::MixLevel;
 
 /// A hair under full scale, so the renderer's clamp never fires.
 const CEILING: f32 = 0.99;
-/// Both the anticipation window and the latency added; longer than a percussive attack.
 const LOOKAHEAD_MS: f32 = 2.0;
-/// Long enough not to modulate at audio rate, short enough to leave no quiet hole behind a burst.
-const RELEASE_MS: f32 = 120.0;
+const RELEASE_TIME_CONSTANT_MS: f32 = 120.0;
 
 #[cfg(test)]
 pub(crate) fn ceiling() -> f32 {
     CEILING
 }
 
-/// `enabled` is read once a block; the delay line runs either way, so a toggle fades.
 pub(crate) fn install(
     builder: &mut kira::track::MainTrackBuilder,
     level: &Arc<MixLevel>,
@@ -89,7 +82,6 @@ impl Effect for Limiter {
 pub(crate) struct LimiterCore {
     delay: Vec<Frame>,
     delay_w: usize,
-    /// `(sample index, required gain)`, increasing: the sliding minimum.
     win: VecDeque<(u64, f32)>,
     n: u64,
     hist: Vec<f32>,
@@ -116,7 +108,7 @@ impl LimiterCore {
         }
     }
 
-    /// The one allocating call; kira runs it off the render path.
+    /// The one allocating call, made at build and again on a sample-rate change.
     pub(crate) fn resize(&mut self, sample_rate: u32) {
         let rate = sample_rate.max(1) as f32;
         self.lookahead = ((LOOKAHEAD_MS / 1000.0 * rate).round() as usize).max(1);
@@ -131,11 +123,9 @@ impl LimiterCore {
         self.hist_w = 0;
         self.hist_sum = self.lookahead as f64;
         self.gain = 1.0;
-        self.release = (-1000.0 / (RELEASE_MS * rate)).exp();
+        self.release = (-1000.0 / (RELEASE_TIME_CONSTANT_MS * rate)).exp();
     }
 
-    /// One frame in, one frame out with the gain applied to it. Bypass steers the target to unity
-    /// rather than skipping the delay.
     pub(crate) fn step(&mut self, input: Frame, bypass: bool) -> (Frame, f32) {
         let peak = input.left.abs().max(input.right.abs());
         let required = if peak > CEILING { CEILING / peak } else { 1.0 };

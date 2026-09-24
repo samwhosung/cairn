@@ -1,5 +1,3 @@
-//! The per-frame channel pump, and the operations on channels their owners make.
-
 use bevy::prelude::*;
 use kira::sound::PlaybackState;
 
@@ -7,9 +5,7 @@ use super::mixer;
 use crate::config::SoundConfig;
 use crate::{AudioListener, SoundOutput, math};
 
-/// Reaps finished channels, follows a looping channel's source, stops a positional channel past
-/// its cutoff, and feeds each live channel `category · v · gain · rolloff · near field`. The
-/// client virtualises a channel past its cutoff; this stops it, and its trigger restarts it.
+/// The client virtualises a channel past its cutoff; this stops it, and its trigger restarts it.
 #[allow(
     clippy::float_cmp,
     reason = "an unchanged amp is bit-identical to the last frame's"
@@ -40,11 +36,11 @@ pub fn pump_channels(
         // Writes only when the amp moved: a volume write is a command into the audio thread
         // whether or not the value changed.
         let Some(p) = ch.pos else {
-            let amp = config.category_amp(ch.category) * ch.v * ch.gain;
-            if amp != ch.amp {
-                ch.amp = amp;
+            let amp = config.category_amp(ch.category) * ch.shot_volume * ch.fade_gain;
+            if amp != ch.fed_amp {
+                ch.fed_amp = amp;
                 ch.handle
-                    .set_volume(mixer::amp_to_db(ch.amp), mixer::glide());
+                    .set_volume(mixer::amp_to_db(ch.fed_amp), mixer::glide());
             }
             return true;
         };
@@ -54,31 +50,30 @@ pub fn pump_channels(
             return false;
         }
         let amp = config.category_amp(ch.category)
-            * ch.v
-            * ch.gain
+            * ch.shot_volume
+            * ch.fade_gain
             * math::fmod_rolloff(d_sq, ch.min_dist)
             * super::near_field(d_sq, ch.cutoff);
-        if amp != ch.amp {
-            ch.amp = amp;
+        if amp != ch.fed_amp {
+            ch.fed_amp = amp;
             ch.handle
-                .set_volume(mixer::amp_to_db(ch.amp), mixer::glide());
+                .set_volume(mixer::amp_to_db(ch.fed_amp), mixer::glide());
         }
         true
     });
 }
 
-/// Whether `source` holds a channel playing `kit_id`.
 pub(crate) fn source_kit_playing(out: &SoundOutput, source: Entity, kit_id: u32) -> bool {
     out.channels
         .iter()
         .any(|c| c.source == Some(source) && c.kit == kit_id)
 }
 
-/// The pump multiplies this in from the next frame on.
+/// The pump multiplies this in on its next run.
 pub(crate) fn set_source_kit_gain(out: &mut SoundOutput, source: Entity, kit_id: u32, gain: f32) {
     for c in &mut out.channels {
         if c.source == Some(source) && c.kit == kit_id {
-            c.gain = gain.clamp(0.0, 1.0);
+            c.fade_gain = gain.clamp(0.0, 1.0);
         }
     }
 }
@@ -94,9 +89,7 @@ pub(crate) fn stop_source_kit(out: &mut SoundOutput, source: Entity, kit_id: u32
     });
 }
 
-/// Stops every channel of `source`, returning how many there were.
-pub(crate) fn stop_source(out: &mut SoundOutput, source: Entity) -> usize {
-    let before = out.channels.len();
+pub(crate) fn stop_source(out: &mut SoundOutput, source: Entity) {
     out.channels.retain_mut(|c| {
         if c.source == Some(source) {
             c.handle.stop(mixer::declick());
@@ -105,5 +98,4 @@ pub(crate) fn stop_source(out: &mut SoundOutput, source: Entity) -> usize {
             true
         }
     });
-    before - out.channels.len()
 }
