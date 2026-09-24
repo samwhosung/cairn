@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use world::collision::{LiquidClaim, Liquids};
+use world::collision::Liquids;
 use world::coords::bevy_to_wow;
 use world::interior::UnitRoom;
 use world::rig_events::{AnimEvent, is_footstep_sound};
@@ -17,14 +17,6 @@ pub struct SoundBody {
     pub display: u32,
     pub collision_height: f32,
     pub wade_max: f32,
-}
-
-pub(crate) fn claim_of(room: Option<&UnitRoom>) -> LiquidClaim {
-    match room.map(UnitRoom::room) {
-        Some(Some(_)) => LiquidClaim::Inside,
-        Some(None) => LiquidClaim::Outdoors,
-        None => LiquidClaim::Unknown,
-    }
 }
 
 pub(crate) fn load_footsteps(
@@ -76,7 +68,7 @@ pub(crate) fn footstep_sounds(
         let feet = transform.translation();
         let wow = bevy_to_wow(feet);
         let depth = liquids
-            .water_surface_at(wow, claim_of(room))
+            .water_surface_at(wow)
             .map(|s| s - wow[2])
             .filter(|d| *d > 0.0);
         if depth.is_some_and(|d| d > body.wade_max) {

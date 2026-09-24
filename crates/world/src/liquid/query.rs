@@ -102,8 +102,9 @@ pub struct LiquidGrid {
     v: [f32; 2],
     /// `None` when the grid is degenerate in XY; queries then fall back to the box.
     inv_det: Option<f32>,
-    /// The highest wet vertex: the degenerate grid's answer only.
+    /// The highest wet vertex: the degenerate grid's answer, and a dry cell's nearest point's.
     fallback_z: f32,
+    sound_nibble: u8,
 }
 
 impl LiquidGrid {
@@ -134,6 +135,7 @@ impl LiquidGrid {
             v: [0.0; 2],
             inv_det: None,
             fallback_z: f32::MIN,
+            sound_nibble: 0,
         };
         if !sane {
             return out;
@@ -168,6 +170,21 @@ impl LiquidGrid {
 
     pub fn kind(&self) -> LiquidKind {
         self.kind
+    }
+
+    pub(crate) fn sound_nibble(&self) -> u8 {
+        self.sound_nibble
+    }
+
+    /// The point of the wet footprint's box nearest a WoW XY, on the surface there, or at the
+    /// highest wet vertex where that lands over a dry cell; `None` for a grid with no wet cell.
+    pub(crate) fn nearest_point(&self, x: f32, y: f32) -> Option<[f32; 3]> {
+        if self.min[0] > self.max[0] {
+            return None;
+        }
+        let cx = x.clamp(self.min[0], self.max[0]);
+        let cy = y.clamp(self.min[1], self.max[1]);
+        Some([cx, cy, self.surface_z_at(cx, cy).unwrap_or(self.fallback_z)])
     }
 
     /// The surface height (WoW Z) at a WoW XY, or `None` where this liquid is not.
@@ -237,13 +254,15 @@ pub fn wet_footprint(mesh: &LiquidMesh, transform: &Transform, source: LiquidSou
         .iter()
         .map(|&p| bevy_to_wow(transform.transform_point(wow_to_bevy(p))))
         .collect();
-    LiquidGrid::new(
+    let mut grid = LiquidGrid::new(
         source,
         mesh.kind,
         [mesh.grid[0] as usize, mesh.grid[1] as usize],
         positions,
         mesh.wet.clone(),
-    )
+    );
+    grid.sound_nibble = mesh.sound_nibble;
+    grid
 }
 
 /// One liquid a query landed in.

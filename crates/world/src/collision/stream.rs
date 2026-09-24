@@ -9,11 +9,13 @@ use terrain::{Doodad, WmoInstance};
 
 use super::assets::{M2Hull, TileCollision, WmoHull};
 use super::colliders::{PendingCollider, build_collider_task, placement_collider_data};
-use super::liquid::{LiquidSurface, liquid_collider};
+use super::liquid::{LiquidSurface, PlacedRooms, liquid_collider};
 use super::weld::HullWelds;
 use super::{camera_layers, liquid_layers, walk_layers};
 use crate::CurrentMap;
-use crate::coords::{placement_rotation, wmo_doodad_local, wow_to_bevy};
+use crate::coords::{bevy_to_wow, placement_rotation, wmo_doodad_local, wow_to_bevy};
+use crate::interior::WmoRoom;
+use crate::liquid::{LiquidSource, WmoPool, wet_footprint};
 use crate::source::{MPQ_SOURCE, m2_url, wmo_url};
 use crate::stream::Window;
 use crate::view::{FARCLIP, WorldCamera};
@@ -40,7 +42,7 @@ impl CollisionResidency {
 
 enum TileState {
     Loading(Handle<TileCollision>),
-    Built,
+    Built(Handle<TileCollision>),
     Failed,
 }
 
@@ -152,7 +154,7 @@ pub(super) fn stream_collision(
         let handle = handle.clone();
         if let Some(tc) = tiles.get(&handle) {
             tile.entities = spawn_tile(&mut commands, tc);
-            tile.state = TileState::Built;
+            tile.state = TileState::Built(handle.clone());
             for d in &tc.doodads {
                 register_doodad(streamer, &server, d, key);
             }
@@ -194,13 +196,60 @@ fn spawn_tile(commands: &mut Commands<'_, '_>, tc: &TileCollision) -> Vec<Entity
         );
     }
     for liquid in &tc.liquids {
-        let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface::from_mesh(liquid)));
-        if let Some(collider) = liquid_collider(liquid) {
+        let grid = wet_footprint(liquid, &Transform::IDENTITY, LiquidSource::AdtChunk);
+        let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface(grid)));
+        if let Some(collider) = liquid_collider(liquid, &Transform::IDENTITY) {
             entity.insert((collider, liquid_layers()));
         }
         entities.push(entity.id());
     }
     entities
+}
+
+/// A building's rooms, and a surface for each group's liquid, owned by those rooms when the
+/// building has portals or an area id.
+fn spawn_wmo_liquids(
+    commands: &mut Commands<'_, '_>,
+    hull: &Handle<WmoHull>,
+    wmo: &WmoHull,
+    at: &Transform,
+) -> Vec<Entity> {
+    let rooms = &wmo.rooms;
+    let instance = commands
+        .spawn(PlacedRooms {
+            hull: hull.clone(),
+            world_from_local: at.compute_affine(),
+        })
+        .id();
+    let owned = rooms.has_portals() || rooms.wmo_id != 0;
+    let mut entities = vec![instance];
+    for (gi, liquid) in rooms.group_liquids.iter().enumerate() {
+        let Some(liquid) = liquid else { continue };
+        let room = WmoRoom {
+            instance,
+            group: gi as u16,
+        };
+        let pool = WmoPool::new(owned.then_some(room), at, rooms.group_nav.get(gi));
+        let grid = wet_footprint(liquid, at, LiquidSource::WmoGroup(pool));
+        let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface(grid)));
+        if let Some(collider) = liquid_collider(liquid, at) {
+            entity.insert((collider, liquid_layers()));
+        }
+        entities.push(entity.id());
+    }
+    entities
+}
+
+impl CollisionStreamer {
+    /// The ground's height (WoW Z) under a Bevy position, from its tile when that has arrived.
+    pub(super) fn terrain_z_under(&self, tiles: &Assets<TileCollision>, at: Vec3) -> Option<f32> {
+        let wow = bevy_to_wow(at);
+        let key = wdt::world_to_tile(wow[0], wow[1]);
+        let TileState::Built(handle) = &self.tiles.get(&key)?.state else {
+            return None;
+        };
+        terrain::terrain_height_at(&tiles.get(handle)?.chunks, wow)
+    }
 }
 
 fn claim(streamer: &mut CollisionStreamer, uid: u32, tile: (u32, u32)) -> bool {
@@ -297,6 +346,8 @@ pub(super) fn spawn_placement_colliders(
                 if let Some(wmo) = wmos.get(hull) {
                     p.entities
                         .extend(spawn_wmo(&mut commands, wmo, &p.transform));
+                    p.entities
+                        .extend(spawn_wmo_liquids(&mut commands, hull, wmo, &p.transform));
                     p.props = wmo_props(&server, wmo, *doodad_set, p.transform);
                     p.model = None;
                 } else if server.load_state(hull).is_failed() {

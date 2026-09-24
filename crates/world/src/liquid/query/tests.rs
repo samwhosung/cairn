@@ -425,3 +425,28 @@ fn the_eye_margin_is_waters_alone() {
         Some((Submersion::Ocean, 0.0))
     );
 }
+
+#[test]
+fn the_nearest_point_is_on_the_surface_at_the_clamped_column() {
+    let mut g = grid(
+        LiquidSource::AdtChunk,
+        LiquidKind::Still,
+        [3, 3],
+        10.0,
+        vec![true, false, true, true],
+        |i, _| i as f32,
+    );
+    g.sound_nibble = 5;
+    assert_eq!(g.sound_nibble(), 5);
+    assert_eq!(g.nearest_point(-5.0, 5.0), Some([0.0, 5.0, 0.0]));
+    let over_dry = g.nearest_point(15.0, 5.0).expect("wet cells");
+    assert_eq!(over_dry, [15.0, 5.0, 2.0]);
+    let none = LiquidGrid::new(
+        LiquidSource::AdtChunk,
+        LiquidKind::Still,
+        [2, 2],
+        vec![[0.0; 3]; 4],
+        vec![false],
+    );
+    assert!(none.nearest_point(0.0, 0.0).is_none());
+}

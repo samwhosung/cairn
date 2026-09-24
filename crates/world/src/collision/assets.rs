@@ -8,10 +8,11 @@ use bevy::asset::{Asset, AssetLoader, LoadContext};
 use bevy::math::Vec3;
 use bevy::reflect::TypePath;
 use model::{CollisionMesh, WmoDoodad, WmoDoodadSet};
-use terrain::{Doodad, LiquidMesh, WmoInstance};
+use terrain::{ChunkMesh, Doodad, LiquidMesh, WmoInstance};
 
 use super::colliders::{impassable_wall_data, terrain_collider_data};
 use crate::source::MPQ_SOURCE;
+use crate::wmo::{RoomsBuilder, WmoRooms};
 
 type Soup = (Vec<Vec3>, Vec<[u32; 3]>);
 
@@ -24,20 +25,23 @@ pub struct TileCollision {
     pub(super) liquids: Vec<LiquidMesh>,
     pub(super) doodads: Vec<Doodad>,
     pub(super) wmos: Vec<WmoInstance>,
+    /// The ground's height field, for the room down-ray's race against it.
+    pub(super) chunks: Vec<ChunkMesh>,
 }
 
 /// An M2's collision hull in model space; `None` when the model has none.
 #[derive(Asset, TypePath)]
 pub struct M2Hull(pub Option<CollisionMesh>);
 
-/// A WMO's walking faces and camera faces over all its groups, in model space, and the doodads
-/// its sets place.
+/// A WMO's walking faces and camera faces over all its groups, in model space, the doodads its
+/// sets place, and its rooms and their liquid.
 #[derive(Asset, TypePath)]
 pub struct WmoHull {
     pub(super) walk: Option<CollisionMesh>,
     pub(super) camera: Option<CollisionMesh>,
     pub(super) doodads: Vec<WmoDoodad>,
     pub(super) doodad_sets: Vec<WmoDoodadSet>,
+    pub(super) rooms: WmoRooms,
 }
 
 fn invalid(e: impl std::fmt::Display) -> io::Error {
@@ -64,17 +68,22 @@ impl AssetLoader for TileCollisionLoader {
         (): &(),
         _ctx: &mut LoadContext<'_>,
     ) -> io::Result<TileCollision> {
-        let tile = terrain::adt_to_tile_mesh(&read_all(reader).await?).map_err(invalid)?;
+        let mut tile = terrain::adt_to_tile_mesh(&read_all(reader).await?).map_err(invalid)?;
+        let liquids = tile
+            .chunks
+            .iter_mut()
+            .flat_map(|c| std::mem::take(&mut c.liquids))
+            .collect();
+        for chunk in &mut tile.chunks {
+            chunk.alpha_map = None;
+        }
         Ok(TileCollision {
             terrain: terrain_collider_data(&tile.chunks),
             walls: impassable_wall_data(&tile.chunks),
-            liquids: tile
-                .chunks
-                .iter()
-                .flat_map(|c| c.liquids.iter().cloned())
-                .collect(),
+            liquids,
             doodads: tile.doodads,
             wmos: tile.wmos,
+            chunks: tile.chunks,
         })
     }
 
@@ -120,10 +129,12 @@ impl AssetLoader for WmoHullLoader {
         (): &(),
         ctx: &mut LoadContext<'_>,
     ) -> io::Result<WmoHull> {
-        let root = model::parse_wmo_root(&read_all(reader).await?).map_err(invalid)?;
+        let bytes = read_all(reader).await?;
+        let root = model::parse_wmo_root(&bytes).map_err(invalid)?;
         let path = ctx.path().path().to_string_lossy().to_ascii_lowercase();
         let stem = path.strip_suffix(".wmo").unwrap_or(&path).to_owned();
         let (mut walk, mut camera) = (CollisionMesh::default(), CollisionMesh::default());
+        let mut rooms = RoomsBuilder::new(&root, &bytes);
         for gi in 0..root.group_count() {
             // A group that is missing or does not parse is skipped, as the client skips it.
             let Ok(group) = ctx
@@ -138,12 +149,14 @@ impl AssetLoader for WmoHullLoader {
                 &mut camera.positions,
                 &mut camera.indices,
             );
+            rooms.add_group(gi as usize, &group);
         }
         Ok(WmoHull {
             walk: (!walk.is_empty()).then_some(walk),
             camera: (!camera.is_empty()).then_some(camera),
             doodads: root.doodads().to_vec(),
             doodad_sets: root.doodad_sets().to_vec(),
+            rooms: rooms.finish(),
         })
     }
 

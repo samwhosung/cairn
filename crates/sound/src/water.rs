@@ -2,10 +2,9 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 use world::collision::Liquids;
 use world::coords::bevy_to_wow;
-use world::interior::UnitRoom;
 
 use crate::config::SoundConfig;
-use crate::footsteps::{SoundBody, claim_of};
+use crate::footsteps::SoundBody;
 use crate::kit::{KitRef, PlayExtras, SoundCategory, SoundKits, play_kit_ext, source_kit_playing};
 use crate::{AudioListener, SoundOutput};
 
@@ -13,7 +12,7 @@ use crate::{AudioListener, SoundOutput};
 const SPLASH_KIT: u32 = 1096;
 const SPLASH_DEPTH_FRAC: f32 = 0.4;
 
-type Splashing<'a> = (Entity, &'a Transform, &'a SoundBody, Option<&'a UnitRoom>);
+type Splashing<'a> = (Entity, &'a Transform, &'a SoundBody);
 type Moved = Or<(Changed<Transform>, Changed<SoundBody>)>;
 
 pub(crate) fn water_splashes(
@@ -29,10 +28,10 @@ pub(crate) fn water_splashes(
         return;
     };
     let listener = listener.pos;
-    for (entity, transform, body, room) in &bodies {
+    for (entity, transform, body) in &bodies {
         let wow = bevy_to_wow(transform.translation);
         let submerged = liquids
-            .water_surface_at(wow, claim_of(room))
+            .water_surface_at(wow)
             .is_some_and(|s| s - wow[2] > SPLASH_DEPTH_FRAC * body.collision_height);
         let was = wet.insert(entity, submerged);
         if was.is_some_and(|w| w != submerged) && !source_kit_playing(&out, entity, SPLASH_KIT) {

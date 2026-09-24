@@ -17,7 +17,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::time::TimeUpdateStrategy;
 use sound::{AudioListener, SoundBody};
 use world::DoodadAnimHost;
-use world::collision::{CollisionPlugin, LiquidClaim, Liquids};
+use world::collision::{CollisionPlugin, Liquids};
 use world::coords::bevy_to_wow;
 use world::interior::{
     CurrentArea, CurrentAreaInterior, CurrentWmoInterior, UnitRoom, WmoInteriorKeys,
@@ -125,14 +125,6 @@ fn vec(v: Vec3) -> String {
     format!("[{},{},{}]", v.x, v.y, v.z)
 }
 
-fn claim_of(room: Option<&UnitRoom>) -> LiquidClaim {
-    match room.map(UnitRoom::room) {
-        Some(Some(_)) => LiquidClaim::Inside,
-        Some(None) => LiquidClaim::Outdoors,
-        None => LiquidClaim::Unknown,
-    }
-}
-
 type Heard<'a> = (
     Entity,
     Ref<'a, Transform>,
@@ -163,9 +155,8 @@ fn body_line(
     surface: &SurfaceUnderfoot<'_, '_>,
 ) -> String {
     let last_frame = feet_last_frame.translation();
-    let claim = claim_of(room);
-    let water_last_frame = liquids.water_surface_at(bevy_to_wow(last_frame), claim);
-    let water_now = liquids.water_surface_at(bevy_to_wow(feet_now.translation), claim);
+    let water_last_frame = liquids.water_surface_at(bevy_to_wow(last_frame));
+    let water_now = liquids.water_surface_at(bevy_to_wow(feet_now.translation));
     let under = match surface.at(room.and_then(UnitRoom::room), last_frame) {
         Some(Underfoot::Terrain(t)) => format!(r#"{{"t":{t}}}"#),
         Some(Underfoot::GroundEffect(g)) => format!(r#"{{"g":{g}}}"#),
