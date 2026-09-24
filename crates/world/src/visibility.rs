@@ -232,4 +232,86 @@ mod tests {
         assert_eq!(alpha_bits(0.0), 1);
         assert_eq!(with_interior_fog(t, false) & INTERIOR_FOG_BIT, 0);
     }
+
+    #[test]
+    fn a_named_building_without_portals_draws_its_pools() {
+        use std::sync::Arc;
+
+        use crate::adt::AdtTile;
+        use crate::liquid::{LiquidSource, WmoPool};
+        use crate::portal::{CameraInteriorClaim, compute_wmo_pvs};
+        use crate::room::CameraRoom;
+        use crate::stream::Streamer;
+        use crate::wmo::{WmoGroupNav, WmoModel, WmoRooms};
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<WmoModel>()
+            .init_asset::<AdtTile>()
+            .init_resource::<Streamer>()
+            .init_resource::<CameraRoom>()
+            .init_resource::<CameraInteriorClaim>()
+            .init_resource::<FarSide>()
+            .add_systems(Update, (compute_wmo_pvs, apply_model_visibility).chain());
+        let rooms = WmoRooms {
+            wmo_id: 63,
+            group_nav: vec![WmoGroupNav {
+                flags: crate::portal::EXTERIOR,
+                wmo_group_id: 0,
+                bbox_min: [0.0; 3],
+                bbox_max: [4.0; 3],
+                ref_start: 0,
+                ref_count: 0,
+                interior: false,
+                flooded: None,
+                fog_indices: [0; 4],
+            }],
+            ..WmoRooms::default()
+        };
+        let instance = app.world_mut().spawn_empty().id();
+        let basin = LiquidGrid::new(
+            LiquidSource::WmoGroup(WmoPool::of(&rooms, 0, instance, &Transform::IDENTITY)),
+            terrain::LiquidKind::Still,
+            [2, 2],
+            vec![
+                [0.0, 0.0, 1.0],
+                [4.0, 0.0, 1.0],
+                [0.0, 4.0, 1.0],
+                [4.0, 4.0, 1.0],
+            ],
+            vec![true],
+        );
+        let model = app
+            .world_mut()
+            .resource_mut::<Assets<WmoModel>>()
+            .add(WmoModel {
+                rooms,
+                ..WmoModel::default()
+            });
+        app.world_mut()
+            .entity_mut(instance)
+            .insert(WmoPortalInstance::new(model, &Transform::IDENTITY, 1, 0));
+        let pool = app
+            .world_mut()
+            .spawn((
+                WmoGroupVis {
+                    instance,
+                    groups: Arc::from([0].as_slice()),
+                },
+                basin,
+                Visibility::Hidden,
+                MeshTag(0),
+            ))
+            .id();
+        app.world_mut().spawn((
+            WorldCamera,
+            GlobalTransform::IDENTITY,
+            Projection::default(),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(pool),
+            Some(&Visibility::Inherited)
+        );
+    }
 }

@@ -119,7 +119,8 @@ pub(crate) fn compute_wmo_pvs(
         let groups = rooms.group_nav.len();
         if !rooms.has_portals() {
             let (visible, fog) = (vec![true; groups], vec![false; groups]);
-            if inst.visible != visible || inst.interior_fog != fog {
+            if inst.visible != visible || inst.interior_fog != fog || inst.ever_flooded != visible {
+                inst.ever_flooded.clone_from(&visible);
                 inst.visible = visible;
                 inst.interior_fog = fog;
             }

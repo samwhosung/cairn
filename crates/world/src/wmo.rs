@@ -20,7 +20,7 @@ pub(crate) use rooms::{RoomsBuilder, Triangle, bounds};
 
 /// A WMO building as the world draws it: every group's render batches, the rooms and portal graph
 /// that decide which groups draw, and the doodads it places. Positions are the WMO's own space.
-#[derive(Asset, TypePath)]
+#[derive(Asset, TypePath, Default)]
 pub struct WmoModel {
     pub submeshes: Vec<ModelSubmesh>,
     /// The group each of [`Self::submeshes`] belongs to.

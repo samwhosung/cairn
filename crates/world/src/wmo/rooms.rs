@@ -29,6 +29,7 @@ pub struct WmoGroupNav {
 
 /// A building's rooms, in its own space: each group's box and flags, the portals between them, the
 /// faces that say which group a point stands in, and each group's liquid.
+#[derive(Default)]
 pub struct WmoRooms {
     /// The root's key into `WMOAreaTable`; `0` for none.
     pub wmo_id: u32,
