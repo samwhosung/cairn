@@ -200,6 +200,9 @@ fn emit_foam(
     grids: Query<'_, '_, &LiquidGrid, With<FoamPatch>>,
     mut foam: ResMut<'_, WaterFoam>,
 ) {
+    if time.delta().is_zero() {
+        return;
+    }
     let (Some(wader), Some(_)) = (wader, stencils) else {
         return;
     };
@@ -208,8 +211,7 @@ fn emit_foam(
         foam.emitter = None;
         return;
     };
-    let now = time.elapsed_secs();
-    let dt = time.delta_secs().max(1.0e-4);
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs());
     let WaterFoam {
         pool,
         cursor,
@@ -426,6 +428,19 @@ mod tests {
                 (super::super::spatial::maintain_water_index, emit_foam).chain(),
             );
         app.world_mut().spawn((grid(vec![true; 4]), FoamPatch));
+        let pooled = |app: &App| {
+            app.world()
+                .resource::<WaterFoam>()
+                .pool
+                .iter()
+                .flatten()
+                .count()
+        };
+        app.update();
+        assert_eq!(pooled(&app), 0, "a held clock births nothing");
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(16));
         app.update();
         let foam = app.world().resource::<WaterFoam>();
         let live: Vec<&FoamRecord> = foam.pool.iter().flatten().collect();
