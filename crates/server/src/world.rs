@@ -4,28 +4,24 @@ use std::sync::Mutex;
 use protocol::{Appearance, Claim, Hello, Movement};
 use rayon::prelude::*;
 
-use crate::rules::{Rules, Verdict};
+use crate::rules::{ClockPin, Rules, Verdict, Why};
 use crate::stats::Phase;
 
-/// Entities stepped per task.
-const CHUNK: usize = 256;
-/// Inputs per task when the control scrambles their order.
-const RACY_CHUNK: usize = 4;
+const ENTITIES_PER_TASK: usize = 256;
+const RACY_INPUTS_PER_TASK: usize = 4;
 
-/// Where a joining player first stands.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spawn {
     pub pos: [f32; 3],
     pub facing: f32,
 }
 
-/// What a connection asked of the world, stamped with the connection, its order on that
-/// connection, and when the server received it.
+/// An input with its connection, its place in that connection's order, and when it arrived.
 #[derive(Clone, Debug)]
 pub struct Stamped {
     pub conn: u32,
     pub seq: u32,
-    pub at_ms: u32,
+    pub received_ms: u32,
     pub input: Input,
 }
 
@@ -38,40 +34,36 @@ pub enum Input {
 
 /// The order a tick applies each entity's inputs in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Order {
+pub enum InputOrder {
     /// As each connection sent them.
     Canonical,
-    /// As worker threads happened to hand them over: the control that must break determinism.
+    /// As worker threads happened to hand them over.
     Racy,
 }
 
-/// One entity's simulated state: the last movement the server accepted and what judging its
-/// claims needs.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Body {
     pub movement: Movement,
     pub alive: bool,
-    /// Whether a claim has been accepted, which pins the client's clock to the server's.
-    pub clocked: bool,
-    pub clock_time: u32,
-    pub clock_at: u32,
-    /// The latest correction; claims count again once they acknowledge it.
-    pub seq: u32,
-    /// The tick of the latest refusal, `u32::MAX` before any.
-    pub corrected: u32,
-    /// The tick the movement last changed.
-    pub changed: u32,
-    /// The tick the movement flags last changed.
-    pub turned: u32,
+    pub clock: Option<ClockPin>,
+    pub correction_seq: u32,
+    pub corrected_at: Option<u32>,
+    pub moved_at: u32,
+    pub flags_changed_at: u32,
     pub refused: u32,
     pub stale: u32,
 }
 
-/// One of an entity's inputs for this tick, routed to its slot.
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
-    Claim { slot: u32, at_ms: u32, claim: Claim },
-    Leave { slot: u32 },
+    Claim {
+        slot: u32,
+        received_ms: u32,
+        claim: Claim,
+    },
+    Leave {
+        slot: u32,
+    },
 }
 
 impl Act {
@@ -82,17 +74,33 @@ impl Act {
     }
 }
 
-/// What one tick's step did; refusals by [`crate::rules::Why`].
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Stepped {
     pub claims: u32,
-    pub refused: [u32; 6],
+    pub refused: [u32; Why::ALL.len()],
     pub stale: u32,
+    pub refusals: Vec<Refusal>,
 }
 
-/// The world: plain arrays indexed by slot, which is also the entity's id. `prev` is the last
-/// tick's world, read by every rule; `next` is this tick's, each slot written only by its own
-/// entity's step.
+/// A refused claim, and the last accepted movement it was judged against.
+#[derive(Clone, Debug)]
+pub struct Refusal {
+    pub tick: u32,
+    pub id: u32,
+    pub name: String,
+    pub why: Why,
+    pub received_ms: u32,
+    pub last: Movement,
+    pub claim: Movement,
+}
+
+pub struct Admitted {
+    pub conn: u32,
+    pub slot: u32,
+}
+
+/// Every entity's state as plain arrays indexed by slot, which is also its id: last tick's and
+/// this tick's.
 pub struct World {
     tick: u32,
     prev: Vec<Body>,
@@ -102,6 +110,7 @@ pub struct World {
     slot_of: HashMap<u32, u32>,
     spawns: Vec<Spawn>,
     rules: Rules,
+    keep_refusals: bool,
 }
 
 impl World {
@@ -123,7 +132,12 @@ impl World {
             slot_of: HashMap::new(),
             spawns,
             rules,
+            keep_refusals: false,
         }
+    }
+
+    pub fn keep_refusals(&mut self) {
+        self.keep_refusals = true;
     }
 
     pub fn tick(&self) -> u32 {
@@ -151,10 +165,8 @@ impl World {
         self.next.iter().filter(|b| b.alive).count()
     }
 
-    /// Gives every join among `inputs` a slot at its spawn, in input order, and returns the
-    /// connections and slots it gave.
-    pub fn admit(&mut self, inputs: &[Stamped]) -> Vec<(u32, u32)> {
-        let mut joined = Vec::new();
+    pub fn admit(&mut self, inputs: &[Stamped]) -> Vec<Admitted> {
+        let mut admitted = Vec::new();
         for s in inputs {
             let Input::Join(hello) = &s.input else {
                 continue;
@@ -171,9 +183,8 @@ impl World {
                     ..Movement::default()
                 },
                 alive: true,
-                corrected: u32::MAX,
-                changed: self.tick,
-                turned: self.tick,
+                moved_at: self.tick,
+                flags_changed_at: self.tick,
                 ..Body::default()
             };
             self.prev.push(body);
@@ -181,14 +192,14 @@ impl World {
             self.names.push(hello.name.clone());
             self.looks.push(hello.appearance);
             self.slot_of.insert(s.conn, slot);
-            joined.push((s.conn, slot));
+            admitted.push(Admitted { conn: s.conn, slot });
         }
-        joined
+        admitted
     }
 
-    /// The claims and leaves among `inputs`, routed to their slots and sorted by slot: in each
-    /// connection's own order, or in `Order::Racy` as the worker threads hand them over.
-    pub fn route(&self, inputs: &[Stamped], order: Order) -> Vec<Act> {
+    /// The claims and leaves among `inputs`, routed to their slots and sorted by slot; within a
+    /// slot they keep `order`.
+    pub fn route(&self, inputs: &[Stamped], order: InputOrder) -> Vec<Act> {
         let acts: Vec<Act> = inputs
             .iter()
             .filter_map(|s| {
@@ -197,7 +208,7 @@ impl World {
                     Input::Join(_) => None,
                     Input::Claim(claim) => Some(Act::Claim {
                         slot,
-                        at_ms: s.at_ms,
+                        received_ms: s.received_ms,
                         claim: *claim,
                     }),
                     Input::Leave => Some(Act::Leave { slot }),
@@ -205,10 +216,10 @@ impl World {
             })
             .collect();
         let mut acts = match order {
-            Order::Canonical => acts,
-            Order::Racy => {
+            InputOrder::Canonical => acts,
+            InputOrder::Racy => {
                 let arrived = Mutex::new(Vec::with_capacity(acts.len()));
-                acts.par_chunks(RACY_CHUNK).for_each(|c| {
+                acts.par_chunks(RACY_INPUTS_PER_TASK).for_each(|c| {
                     if let Ok(mut a) = arrived.lock() {
                         a.extend(c.iter().rev());
                     }
@@ -220,18 +231,22 @@ impl World {
         acts
     }
 
-    /// Steps every entity from `prev` into `next`, in parallel: each applies its own acts, in
-    /// the order `acts` holds them, and nothing else.
+    /// Steps every entity from last tick's state into this tick's, in parallel: each applies
+    /// its own acts, in the order `acts` holds them, and writes nothing else.
     pub fn step(&mut self, acts: &[Act], phase: &Phase) -> Stepped {
         let prev = &self.prev;
-        let rules = &self.rules;
-        let tick = self.tick;
-        self.next
-            .par_chunks_mut(CHUNK)
+        let judge = Judge {
+            rules: &self.rules,
+            tick: self.tick,
+            keep_refusals: self.keep_refusals,
+        };
+        let mut stepped = self
+            .next
+            .par_chunks_mut(ENTITIES_PER_TASK)
             .enumerate()
             .map(|(ci, chunk)| {
                 phase.time(|| {
-                    let lo = (ci * CHUNK) as u32;
+                    let lo = (ci * ENTITIES_PER_TASK) as u32;
                     let hi = lo + chunk.len() as u32;
                     chunk.copy_from_slice(&prev[lo as usize..hi as usize]);
                     let a = acts.partition_point(|a| a.slot() < lo);
@@ -239,82 +254,116 @@ impl World {
                     let mut done = Stepped::default();
                     for act in &acts[a..b] {
                         let body = &mut chunk[(act.slot() - lo) as usize];
-                        apply(body, act, tick, rules, &mut done);
+                        judge.apply(body, act, &mut done);
                     }
                     done
                 })
             })
-            .reduce(Stepped::default, |x, y| Stepped {
-                claims: x.claims + y.claims,
-                refused: std::array::from_fn(|i| x.refused[i] + y.refused[i]),
-                stale: x.stale + y.stale,
-            })
+            .reduce(Stepped::default, |mut x, y| {
+                x.claims += y.claims;
+                x.stale += y.stale;
+                for (a, b) in x.refused.iter_mut().zip(y.refused) {
+                    *a += b;
+                }
+                x.refusals.extend(y.refusals);
+                x
+            });
+        for r in &mut stepped.refusals {
+            r.name.clone_from(&self.names[r.id as usize]);
+        }
+        stepped
     }
 
-    /// A hash of every entity's simulated state, the same whatever the thread count.
+    /// A hash of every entity's state, the same whatever the thread count.
     pub fn hash(&self, phase: &Phase) -> u64 {
         self.next
-            .par_chunks(CHUNK)
+            .par_chunks(ENTITIES_PER_TASK)
             .enumerate()
             .map(|(ci, chunk)| {
                 phase.time(|| {
                     chunk.iter().enumerate().fold(0u64, |h, (j, b)| {
-                        h.wrapping_add(hash_body((ci * CHUNK + j) as u32, b))
+                        h.wrapping_add(hash_body((ci * ENTITIES_PER_TASK + j) as u32, b))
                     })
                 })
             })
             .reduce(|| 0, u64::wrapping_add)
     }
 
-    /// Ends the tick: this tick's world becomes the snapshot the next one reads.
     pub fn finish(&mut self) {
         std::mem::swap(&mut self.prev, &mut self.next);
         self.tick += 1;
     }
 }
 
-fn apply(body: &mut Body, act: &Act, tick: u32, rules: &Rules, done: &mut Stepped) {
-    if !body.alive {
-        return;
-    }
-    let (at_ms, claim) = match *act {
-        Act::Claim { at_ms, claim, .. } => (at_ms, claim),
-        Act::Leave { .. } => {
-            body.alive = false;
-            body.changed = tick;
+struct Judge<'a> {
+    rules: &'a Rules,
+    tick: u32,
+    keep_refusals: bool,
+}
+
+impl Judge<'_> {
+    fn apply(&self, body: &mut Body, act: &Act, done: &mut Stepped) {
+        if !body.alive {
             return;
         }
-    };
-    done.claims += 1;
-    match rules.judge(body, &claim, at_ms) {
-        Verdict::Accept => {
-            let m = claim.movement;
-            if !body.clocked {
-                body.clocked = true;
-                body.clock_time = m.time;
-                body.clock_at = at_ms;
+        let tick = self.tick;
+        let (received_ms, claim) = match *act {
+            Act::Claim {
+                received_ms, claim, ..
+            } => (received_ms, claim),
+            Act::Leave { .. } => {
+                body.alive = false;
+                body.moved_at = tick;
+                return;
             }
-            if m.flags != body.movement.flags {
-                body.turned = tick;
+        };
+        done.claims += 1;
+        match self.rules.judge(body, &claim, received_ms) {
+            Verdict::Accept => {
+                let m = claim.movement;
+                let pin = body.clock.map_or(
+                    ClockPin {
+                        client: m.time,
+                        server: received_ms,
+                        moved: 0,
+                    },
+                    |pin| pin.follow(m.time, received_ms, self.rules.clock_slack_ms),
+                );
+                body.clock = Some(pin);
+                if m.flags != body.movement.flags {
+                    body.flags_changed_at = tick;
+                }
+                body.movement = m;
+                body.moved_at = tick;
             }
-            body.movement = m;
-            body.changed = tick;
-        }
-        Verdict::Stale => {
-            body.stale += 1;
-            done.stale += 1;
-        }
-        Verdict::Refuse(why) => {
-            body.seq = body.seq.wrapping_add(1);
-            body.corrected = tick;
-            body.refused += 1;
-            done.refused[why as usize] += 1;
+            Verdict::Stale => {
+                body.stale += 1;
+                done.stale += 1;
+            }
+            Verdict::Refuse(why) => {
+                if self.keep_refusals {
+                    done.refusals.push(Refusal {
+                        tick,
+                        id: act.slot(),
+                        name: String::new(),
+                        why,
+                        received_ms,
+                        last: body.movement,
+                        claim: claim.movement,
+                    });
+                }
+                body.correction_seq = body.correction_seq.wrapping_add(1);
+                body.corrected_at = Some(tick);
+                body.refused += 1;
+                done.refused[why as usize] += 1;
+            }
         }
     }
 }
 
 fn hash_body(slot: u32, b: &Body) -> u64 {
     let m = &b.movement;
+    let pin = b.clock.unwrap_or_default();
     let words = [
         slot,
         u32::from(b.alive),
@@ -330,13 +379,14 @@ fn hash_body(slot: u32, b: &Body) -> u64 {
         m.jump.cos.to_bits(),
         m.jump.sin.to_bits(),
         m.jump.xy_speed.to_bits(),
-        u32::from(b.clocked),
-        b.clock_time,
-        b.clock_at,
-        b.seq,
-        b.corrected,
-        b.changed,
-        b.turned,
+        u32::from(b.clock.is_some()),
+        pin.client,
+        pin.server,
+        pin.moved,
+        b.correction_seq,
+        b.corrected_at.unwrap_or(u32::MAX),
+        b.moved_at,
+        b.flags_changed_at,
         b.refused,
         b.stale,
     ];

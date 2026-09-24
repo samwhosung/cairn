@@ -7,19 +7,24 @@ use crate::world::{Body, World};
 /// How far a player sees, and how often what it sees is refreshed.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
-    /// Entities within this many yards come into view...
+    /// Entities within this many yards come into view.
     pub radius: f32,
-    /// ...and leave it only past this many more.
+    /// Yards past the radius an entity in view must go before it leaves.
     pub grey: f32,
     /// Ticks between rechecks of who is in view, staggered across observers.
     pub aoi_every: u32,
     /// Movement refreshes by distance, nearest tier first. A change of movement flags goes out
     /// at once at any distance.
     pub tiers: [Tier; 3],
-    /// A client with more than this many bytes queued gets no refreshes until it drains...
+    /// A client with more than this many bytes queued gets no refreshes until it drains.
     pub shed_bytes: usize,
-    /// ...and is dropped past this many.
+    /// A client that says it is more than this many ticks behind gets no refreshes until it
+    /// catches up.
+    pub shed_ticks: u32,
+    /// A client with more than this many bytes queued is dropped.
     pub kick_bytes: usize,
+    /// A client that says it is more than this many ticks behind is dropped.
+    pub kick_ticks: u32,
 }
 
 /// Within `within` yards, at most one movement refresh per `every` ticks.
@@ -50,7 +55,9 @@ impl Default for View {
                 },
             ],
             shed_bytes: 256 << 10,
-            kick_bytes: 16 << 20,
+            shed_ticks: 10,
+            kick_bytes: 2 << 20,
+            kick_ticks: 200,
         }
     }
 }
@@ -64,14 +71,12 @@ impl View {
     }
 }
 
-/// An entity in view and the tick its movement last went out.
 #[derive(Clone, Copy, Debug)]
 struct Seen {
     slot: u32,
-    sent: u32,
+    sent_tick: u32,
 }
 
-/// A player's view of the world, and the connection its batches go to.
 pub struct Observer {
     pub slot: u32,
     seen: Vec<Seen>,
@@ -92,7 +97,6 @@ impl Observer {
     }
 }
 
-/// What one tick's replication did, summed over observers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Built {
     pub appeared: u32,
@@ -118,55 +122,53 @@ impl Built {
     }
 }
 
-/// Buffers one worker reuses across the observers it builds for.
 #[derive(Default)]
 pub struct Scratch {
     near: Vec<u32>,
     seen: Vec<Seen>,
 }
 
-/// Everything one observer's pass reads.
 pub struct Scene<'a> {
     pub world: &'a World,
     pub grid: &'a Grid,
     pub view: &'a View,
 }
 
-/// Builds this tick's batch for `o` and hands it to its connection: a correction if its own
-/// claim was refused, who came into and left view, and the movement it is owed.
-pub fn build(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
+pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
     let mut built = Built::default();
-    let queued = o.outbox.as_ref().map_or(0, Outbox::queued);
-    if queued > scene.view.kick_bytes {
+    let world = scene.world;
+    let tick = world.tick();
+    let view = scene.view;
+    let queued = o.outbox.as_ref().map_or(0, Outbox::queued_bytes);
+    let behind = o.outbox.as_ref().and_then(|b| b.behind(tick)).unwrap_or(0);
+    if queued > view.kick_bytes || behind > view.kick_ticks {
         o.outbox = None;
         built.kicked = 1;
     }
-    let world = scene.world;
-    let tick = world.tick();
     let bodies = world.bodies();
     let me = bodies[o.slot as usize];
     let mut out = Vec::with_capacity(o.size_hint);
     let start = begin_batch(&mut out, tick);
-    if me.corrected == tick {
-        write_correct(&mut out, me.seq, &me.movement);
+    if me.corrected_at == Some(tick) {
+        write_correct(&mut out, me.correction_seq, &me.movement);
         built.corrections += 1;
     }
     let mut pass = Pass {
         me: &me,
         world,
         bodies,
-        view: scene.view,
+        view,
         tick,
-        shedding: queued > scene.view.shed_bytes,
+        shedding: queued > view.shed_bytes || behind > view.shed_ticks,
         out: &mut out,
         built: &mut built,
     };
-    if o.fresh || (tick + o.slot).is_multiple_of(scene.view.aoi_every.max(1)) {
+    if o.fresh || (tick + o.slot).is_multiple_of(view.aoi_every.max(1)) {
         s.near.clear();
         scene.grid.query(
             bodies,
             me.movement.pos,
-            scene.view.radius + scene.view.grey,
+            view.radius + view.grey,
             &mut s.near,
         );
         s.near.retain(|&n| n != o.slot);
@@ -203,8 +205,8 @@ impl Pass<'_> {
         (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)
     }
 
-    /// Merges who was in view with who is near now, both sorted by slot, into `next`.
     fn recheck(&mut self, seen: &[Seen], near: &[u32], next: &mut Vec<Seen>) {
+        debug_assert!(seen.is_sorted_by_key(|e| e.slot) && near.is_sorted());
         next.clear();
         let r2 = self.view.radius * self.view.radius;
         let (mut i, mut j) = (0, 0);
@@ -227,7 +229,7 @@ impl Pass<'_> {
                         self.appear(n);
                         next.push(Seen {
                             slot: n,
-                            sent: self.tick,
+                            sent_tick: self.tick,
                         });
                     }
                     j += 1;
@@ -244,7 +246,6 @@ impl Pass<'_> {
         self.built.appeared += 1;
     }
 
-    /// Between rechecks: a dead entity leaves view; a living one gets what it is owed.
     fn keep(&mut self, e: &mut Seen) -> bool {
         if !self.bodies[e.slot as usize].alive {
             write_vanish(self.out, e.slot);
@@ -255,15 +256,13 @@ impl Pass<'_> {
         true
     }
 
-    /// Sends `e`'s movement if it changed since last sent: at once for a change of flags,
-    /// otherwise once its distance tier's period has passed and the client is keeping up.
     fn refresh(&mut self, e: &mut Seen) {
         let b = &self.bodies[e.slot as usize];
-        if b.changed <= e.sent {
+        if b.moved_at <= e.sent_tick {
             return;
         }
-        if b.turned <= e.sent {
-            if self.tick - e.sent < self.view.every(self.dist2(b)) {
+        if b.flags_changed_at <= e.sent_tick {
+            if self.tick - e.sent_tick < self.view.every(self.dist2(b)) {
                 return;
             }
             if self.shedding {
@@ -272,7 +271,7 @@ impl Pass<'_> {
             }
         }
         write_move(self.out, e.slot, &b.movement);
-        e.sent = self.tick;
+        e.sent_tick = self.tick;
         self.built.moves += 1;
     }
 }

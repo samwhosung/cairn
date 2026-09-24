@@ -3,8 +3,7 @@ use crate::frame::{Kind, begin_frame, finish_frame};
 use crate::reader::Reader;
 use crate::{Appearance, Error, Movement};
 
-/// Names longer than this many bytes are cut at a character boundary.
-pub(crate) const MAX_NAME: usize = 255;
+pub(crate) const MAX_NAME: usize = u8::MAX as usize;
 
 /// What a client says first: which protocol it speaks, who it is and what it looks like.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,6 +25,9 @@ pub struct Claim {
 pub enum ClientMessage {
     Hello(Hello),
     Claim(Claim),
+    /// The latest tick whose batch the client has taken in, so the server can tell how far
+    /// behind it is wherever the bytes between them wait.
+    Seen(u32),
 }
 
 impl ClientMessage {
@@ -45,6 +47,11 @@ impl ClientMessage {
                 c.movement.write(out);
                 finish_frame(out, start);
             }
+            Self::Seen(tick) => {
+                let start = begin_frame(out, Kind::Seen);
+                out.extend_from_slice(&tick.to_le_bytes());
+                finish_frame(out, start);
+            }
         }
     }
 
@@ -61,6 +68,7 @@ impl ClientMessage {
                 ack: r.u32()?,
                 movement: Movement::read(&mut r)?,
             }),
+            Kind::Seen => Self::Seen(r.u32()?),
             other => return Err(Error::Unexpected(other as u8)),
         };
         r.finish()?;
@@ -175,7 +183,7 @@ mod tests {
                 ..Movement::default()
             },
         });
-        for msg in [hello, claim] {
+        for msg in [hello, claim, ClientMessage::Seen(77)] {
             let mut out = Vec::new();
             msg.write(&mut out);
             assert_eq!(ClientMessage::read(&one_frame(&out)), Ok(msg));

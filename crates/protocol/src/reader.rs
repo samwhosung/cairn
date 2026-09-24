@@ -1,6 +1,5 @@
 use crate::Error;
 
-/// Little-endian reads that step through a message, failing when it runs out.
 #[derive(Clone)]
 pub(crate) struct Reader<'a> {
     bytes: &'a [u8],

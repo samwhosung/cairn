@@ -14,38 +14,60 @@ use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
-use crate::check::{Checks, EXACT_YD, PRESENCE_SLACK_YD, Traffic, VIEW_YD, bound_yd, tier};
+use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic};
 use crate::ground::Ground;
-use crate::mover::Mover;
+use crate::mover::{Mover, Told};
 use crate::region::Scenario;
 use crate::track::{Track, plan};
 
-/// How often a bot moves and reports, ms.
 const FRAME_MS: u64 = 50;
-/// How long after a bot joins before others must see it and before it checks what it sees.
-const SETTLE_MS: u32 = 2000;
+const JOIN_GRACE_MS: u32 = 2000;
 const SWEEP_MS: u32 = 1000;
+const FRAMES_PER_SEEN: u32 = 10;
 const READ_BUF: usize = 64 << 10;
+const HUMAN: u8 = 1;
 
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Milliseconds on the clock every bot shares, which is also every bot's client clock.
 pub fn now_ms() -> u32 {
-    EPOCH.elapsed().as_millis() as u32
+    ms_at(Instant::now())
 }
 
-/// Every bot's walk by entity id, and what the bots count between them.
+fn ms_at(at: Instant) -> u32 {
+    at.saturating_duration_since(*EPOCH).as_millis() as u32
+}
+
+#[derive(Default)]
+struct Member {
+    track: OnceLock<Track>,
+    joined_ms: AtomicU32,
+    gone: AtomicBool,
+}
+
+/// Bots below `liars` lie; the next `checkers` check what they are shown.
+#[derive(Clone, Copy, Debug)]
+pub struct Roles {
+    pub liars: usize,
+    pub checkers: usize,
+}
+
+impl Roles {
+    pub fn is_liar(&self, i: usize) -> bool {
+        i < self.liars
+    }
+
+    pub fn is_checker(&self, i: usize) -> bool {
+        !self.is_liar(i) && i < self.liars + self.checkers
+    }
+}
+
 pub struct Crowd {
     pub scenario: Scenario,
     pub ground: Ground,
-    tracks: Vec<OnceLock<Track>>,
-    joined: Vec<AtomicU32>,
-    gone: Vec<AtomicBool>,
-    /// Bots below this index lie; the next `checkers` check what they see.
-    pub liars: usize,
-    pub checkers: usize,
-    /// When the walks end, ms.
-    pub until: u32,
+    by_id: Vec<Member>,
+    pub roles: Roles,
+    pub walks_end_ms: u32,
+    pub limits: Limits,
     pub checks: Checks,
     pub traffic: Traffic,
     pub stop: AtomicBool,
@@ -56,18 +78,16 @@ impl Crowd {
         scenario: Scenario,
         ground: Ground,
         room: usize,
-        roles: (usize, usize),
-        until: u32,
+        roles: Roles,
+        walks_end_ms: u32,
     ) -> Self {
         Self {
             scenario,
             ground,
-            tracks: (0..room).map(|_| OnceLock::new()).collect(),
-            joined: (0..room).map(|_| AtomicU32::new(0)).collect(),
-            gone: (0..room).map(|_| AtomicBool::new(false)).collect(),
-            liars: roles.0,
-            checkers: roles.1,
-            until,
+            by_id: (0..room).map(|_| Member::default()).collect(),
+            roles,
+            walks_end_ms,
+            limits: Limits::of_server(),
             checks: Checks::default(),
             traffic: Traffic::default(),
             stop: AtomicBool::new(false),
@@ -75,15 +95,16 @@ impl Crowd {
     }
 
     fn track(&self, id: u32) -> Option<&Track> {
-        self.tracks.get(id as usize)?.get()
+        self.by_id.get(id as usize)?.track.get()
     }
 
     /// The walk of a bot that is in the world and has been long enough to be seen.
     fn settled(&self, id: u32, now: u32) -> Option<&Track> {
-        let joined = self.joined.get(id as usize)?.load(Ordering::Relaxed);
-        let gone = self.gone.get(id as usize)?.load(Ordering::Relaxed);
-        (joined != 0 && !gone && now >= joined + SETTLE_MS)
-            .then(|| self.track(id))
+        let m = self.by_id.get(id as usize)?;
+        let joined = m.joined_ms.load(Ordering::Relaxed);
+        let gone = m.gone.load(Ordering::Relaxed);
+        (joined != 0 && !gone && now >= joined + JOIN_GRACE_MS)
+            .then(|| m.track.get())
             .flatten()
     }
 }
@@ -96,7 +117,6 @@ fn ground(p: [f32; 3]) -> [f32; 2] {
     [p[0], p[1]]
 }
 
-/// Runs bot `i` against `addr` until the crowd stops or the server closes the connection.
 pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
     let Some(stream) = connect(addr).await else {
         crowd.traffic.closed.fetch_add(1, Ordering::Relaxed);
@@ -104,10 +124,11 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
     };
     let _ = stream.set_nodelay(true);
     let (mut r, mut w) = stream.into_split();
+    let liar = crowd.roles.is_liar(i);
     let mut hello = Vec::new();
     ClientMessage::Hello(Hello {
         version: VERSION,
-        name: format!("Bot{i}"),
+        name: format!("{}{i}", if liar { "Liar" } else { "Bot" }),
         appearance: look(i),
     })
     .write(&mut hello);
@@ -116,7 +137,7 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         Ok(()) => welcomed(&mut r, &mut frames).await,
         Err(_) => None,
     };
-    let Some(welcome) = welcome.filter(|w| (w.id as usize) < crowd.tracks.len()) else {
+    let Some(welcome) = welcome.filter(|w| (w.id as usize) < crowd.by_id.len()) else {
         crowd.traffic.closed.fetch_add(1, Ordering::Relaxed);
         return;
     };
@@ -125,35 +146,37 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         pos: welcome.spawn.pos,
         facing: welcome.spawn.facing,
     };
-    let liar = i < crowd.liars;
     let track = plan(
         &crowd.scenario,
         &crowd.ground,
         &spawn,
-        (now + 100, crowd.until),
+        now + 100,
+        crowd.walks_end_ms,
         u64::from(welcome.id) + 1,
         liar,
     );
     let id = welcome.id;
-    let _ = crowd.tracks[id as usize].set(track);
-    crowd.joined[id as usize].store(now, Ordering::Relaxed);
+    let member = &crowd.by_id[id as usize];
+    let _ = member.track.set(track);
+    member.joined_ms.store(now, Ordering::Relaxed);
     crowd.traffic.welcomed.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write(id, spawn, w, crowd.clone(), rx));
-    let checker = !liar && i < crowd.liars + crowd.checkers;
+    let seen = Arc::new(AtomicU32::new(welcome.tick));
+    let writer = tokio::spawn(write(id, spawn, w, crowd.clone(), rx, seen.clone()));
     let mut reader = Reader {
         me: id,
         welcome,
         welcomed_at: now,
         crowd: crowd.clone(),
         corrections: tx,
-        view: checker.then(HashMap::new),
+        seen,
+        view: crowd.roles.is_checker(i).then(HashMap::new),
         last_tick: None,
-        next_sweep: now + SETTLE_MS,
-        late: Vec::new(),
+        next_sweep: now + JOIN_GRACE_MS,
+        late_ms: Vec::new(),
     };
     reader.read(&mut r, frames).await;
-    crowd.gone[id as usize].store(true, Ordering::Relaxed);
+    crowd.by_id[id as usize].gone.store(true, Ordering::Relaxed);
     crowd.traffic.closed.fetch_add(1, Ordering::Relaxed);
     writer.abort();
 }
@@ -168,11 +191,10 @@ async fn connect(addr: SocketAddr) -> Option<TcpStream> {
     None
 }
 
-/// A human of either sex with customization choices picked by `i`.
 fn look(i: usize) -> Appearance {
     let dial = |n: usize| (i / n % 5) as u8;
     Appearance {
-        race: 1,
+        race: HUMAN,
         sex: (i % 2) as u8,
         skin: dial(2),
         face: dial(3),
@@ -203,27 +225,33 @@ async fn write(
     mut w: OwnedWriteHalf,
     crowd: Arc<Crowd>,
     mut corrections: mpsc::UnboundedReceiver<u32>,
+    seen: Arc<AtomicU32>,
 ) {
     let Some(track) = crowd.track(id) else {
         return;
     };
     let mut mover = Mover::new(spawn.pos[2], spawn.facing);
     let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let (mut claims, mut bytes) = (Vec::<Movement>::new(), Vec::new());
+    let mut frame = 0u32;
     while !crowd.stop.load(Ordering::Relaxed) {
-        ticker.tick().await;
+        frame += 1;
+        let frame_at = ms_at(ticker.tick().await.into_std());
         while let Ok(seq) = corrections.try_recv() {
             mover.correct(seq);
         }
         claims.clear();
-        if mover.frame(now_ms(), track, &crowd.ground, &mut claims) {
-            Checks::count(&crowd.checks.lies);
-        }
-        if claims.is_empty() {
-            continue;
+        if mover.frame(frame_at, track, &crowd.ground, &mut claims) == Told::Lie {
+            Checks::count(&crowd.checks.lying_frames);
         }
         bytes.clear();
+        if frame.is_multiple_of(FRAMES_PER_SEEN) {
+            ClientMessage::Seen(seen.load(Ordering::Relaxed)).write(&mut bytes);
+        }
+        if claims.is_empty() && bytes.is_empty() {
+            continue;
+        }
         for movement in &claims {
             ClientMessage::Claim(Claim {
                 ack: mover.ack,
@@ -244,7 +272,6 @@ async fn write(
     }
 }
 
-/// Where a checking bot last saw another.
 struct Seen {
     pos: [f32; 3],
 }
@@ -255,11 +282,11 @@ struct Reader {
     welcomed_at: u32,
     crowd: Arc<Crowd>,
     corrections: mpsc::UnboundedSender<u32>,
+    seen: Arc<AtomicU32>,
     view: Option<HashMap<u32, Seen>>,
     last_tick: Option<u32>,
     next_sweep: u32,
-    /// How late each batch came against the tick clock while the window was open, ms.
-    late: Vec<i64>,
+    late_ms: Vec<i64>,
 }
 
 impl Reader {
@@ -303,15 +330,16 @@ impl Reader {
             Checks::count(&traffic.gaps);
         }
         self.last_tick = Some(batch.tick);
+        self.seen.store(batch.tick, Ordering::Relaxed);
         let ticks = batch.tick.saturating_sub(self.welcome.tick);
         let due = self.welcomed_at + ticks * u32::from(self.welcome.tick_ms);
         if crowd.checks.is_open() {
-            self.late.push(i64::from(now) - i64::from(due));
-        } else if let Some(&soonest) = self.late.iter().min() {
-            for &late in &self.late {
-                traffic.lag((late - soonest) as u32);
+            self.late_ms.push(i64::from(now) - i64::from(due));
+        } else if let Some(&soonest) = self.late_ms.iter().min() {
+            for &late in &self.late_ms {
+                traffic.jitter.add((late - soonest) as u32);
             }
-            self.late.clear();
+            self.late_ms.clear();
         }
         for record in batch {
             Checks::count(&traffic.records);
@@ -346,13 +374,18 @@ impl Reader {
         let _ = self.corrections.send(seq);
     }
 
-    /// Judges a relayed position against where its bot was when it claimed it.
-    fn exact(&self, id: u32, movement: &Movement) {
+    fn judge_relayed(&self, id: u32, movement: &Movement) {
         if let Some(track) = self.crowd.track(id)
             && self.crowd.checks.is_open()
         {
             let e = dist(ground(movement.pos), track.xy(movement.time));
-            self.crowd.checks.exact.judge(e, EXACT_YD);
+            let checks = &self.crowd.checks;
+            let judged = if track.lie.is_some() {
+                &checks.relayed_liars
+            } else {
+                &checks.relayed_honest
+            };
+            judged.judge(e, RELAYED_EPSILON_YD);
         }
     }
 
@@ -361,7 +394,7 @@ impl Reader {
         if view.contains_key(&id) && self.crowd.checks.is_open() {
             Checks::count(&self.crowd.checks.double_appears);
         }
-        self.exact(id, movement);
+        self.judge_relayed(id, movement);
         if let Some(view) = &mut self.view {
             view.insert(id, Seen { pos: movement.pos });
         }
@@ -369,38 +402,39 @@ impl Reader {
 
     fn moved(&mut self, id: u32, movement: &Movement, now: u32) {
         let Some(view) = &self.view else { return };
-        let checks = &self.crowd.checks;
+        let crowd = &self.crowd;
+        let checks = &crowd.checks;
         match view.get(&id) {
             None if checks.is_open() => Checks::count(&checks.unknown_moves),
             Some(prev) if checks.is_open() => {
                 if let (Some(me), Some(them)) = (
-                    self.crowd.track(self.me),
-                    self.crowd.settled(id, now).filter(|t| t.lie.is_none()),
+                    crowd.track(self.me),
+                    crowd.settled(id, now).filter(|t| t.lie.is_none()),
                 ) {
                     let truth = them.xy(now);
-                    let t = tier(dist(me.xy(now), truth));
-                    checks.stale[t].judge(dist(truth, ground(prev.pos)), bound_yd(t));
+                    let t = crowd.limits.tier(dist(me.xy(now), truth));
+                    let bound = crowd.limits.view_lag_bound_yd(t);
+                    checks.stale_by_tier[t].judge(dist(truth, ground(prev.pos)), bound);
                 }
             }
             _ => {}
         }
-        self.exact(id, movement);
+        self.judge_relayed(id, movement);
         if let Some(view) = &mut self.view {
             view.insert(id, Seen { pos: movement.pos });
         }
     }
 
-    /// Checks who this bot is shown against who is really near, and where.
     fn sweep(&self, now: u32) {
         let (Some(view), Some(me)) = (&self.view, self.crowd.track(self.me)) else {
             return;
         };
-        if now < self.welcomed_at + SETTLE_MS {
+        if now < self.welcomed_at + JOIN_GRACE_MS {
             return;
         }
-        let checks = &self.crowd.checks;
+        let (checks, limits) = (&self.crowd.checks, &self.crowd.limits);
         let here = me.xy(now);
-        for id in 0..self.crowd.tracks.len() as u32 {
+        for id in 0..self.crowd.by_id.len() as u32 {
             let Some(them) = self.crowd.settled(id, now) else {
                 continue;
             };
@@ -410,13 +444,17 @@ impl Reader {
             let truth = them.xy(now);
             let d = dist(here, truth);
             match view.get(&id) {
-                None if d <= VIEW_YD - PRESENCE_SLACK_YD => checks.missing(d),
+                None if d <= limits.view_yd - limits.presence_slack_yd => {
+                    Checks::count(&checks.missing);
+                    checks.missing_depth_yd.note(limits.view_yd - d);
+                }
                 Some(seen) => {
-                    if d > VIEW_YD + PRESENCE_SLACK_YD {
+                    if d > limits.view_yd + limits.presence_slack_yd {
                         Checks::count(&checks.spurious);
                     }
-                    let t = tier(d);
-                    checks.swept[t].judge(dist(truth, ground(seen.pos)), bound_yd(t));
+                    let t = limits.tier(d);
+                    let bound = limits.view_lag_bound_yd(t);
+                    checks.swept_by_tier[t].judge(dist(truth, ground(seen.pos)), bound);
                 }
                 None => {}
             }

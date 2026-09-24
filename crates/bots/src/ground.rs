@@ -7,15 +7,14 @@ const AREA_TABLE: &str = "DBFilesClient\\AreaTable.dbc";
 const AREA_ID: usize = 0;
 const AREA_PARENT: usize = 2;
 
-/// Terrain heights and zones over a block of tiles, read once from the install.
 pub struct Ground {
     tiles: HashMap<(u32, u32), Vec<ChunkMesh>>,
     parent: HashMap<u32, u32>,
 }
 
 impl Ground {
-    /// Loads `map`'s tiles `x0..=x1` by `y0..=y1`, as in `Map_<x>_<y>.adt`; a tile that is
-    /// missing or fails to build is left out.
+    /// Loads `map`'s tiles `x.0..=x.1` by `y.0..=y.1`, numbered as in `Map_<x>_<y>.adt`; a tile
+    /// that is missing or fails to build is left out.
     pub fn load(
         chain: &mpq::Chain,
         map: &str,
@@ -32,7 +31,7 @@ impl Ground {
                 .collect();
             jobs.into_iter()
                 .filter_map(|j| j.join().ok())
-                .filter_map(|(tx, ty, mesh)| Some(((tx, ty), heights_only(mesh.ok()?.chunks))))
+                .filter_map(|(tx, ty, mesh)| Some(((tx, ty), strip_for_queries(mesh.ok()?.chunks))))
                 .collect()
         });
         if tiles.is_empty() {
@@ -44,7 +43,6 @@ impl Ground {
         })
     }
 
-    /// Ground with no tiles: every height query misses, so a mover keeps its height.
     #[cfg(test)]
     pub fn none() -> Self {
         Self {
@@ -75,8 +73,7 @@ impl Ground {
     }
 }
 
-/// Keeps what a height or zone query reads.
-fn heights_only(mut chunks: Vec<ChunkMesh>) -> Vec<ChunkMesh> {
+fn strip_for_queries(mut chunks: Vec<ChunkMesh>) -> Vec<ChunkMesh> {
     for c in &mut chunks {
         c.normals = Vec::new();
         c.uvs = Vec::new();

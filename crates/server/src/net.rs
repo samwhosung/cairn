@@ -13,38 +13,57 @@ use crate::world::{Input, Stamped};
 
 const READ_BUF: usize = 16 << 10;
 
-/// Where one connection's batches queue for its writer.
 pub struct Outbox {
     tx: mpsc::UnboundedSender<Vec<u8>>,
-    queued: Arc<AtomicUsize>,
+    queued_bytes: Arc<AtomicUsize>,
+    /// One more than the latest tick the client has seen; 0 until it says.
+    seen: Arc<AtomicU32>,
 }
 
 impl Outbox {
-    /// An outbox and the end its batches arrive at, with no connection behind it.
     pub fn channel() -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let queued = Arc::new(AtomicUsize::new(0));
-        (Self { tx, queued }, rx)
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(AtomicU32::new(0));
+        let outbox = Self {
+            tx,
+            queued_bytes,
+            seen,
+        };
+        (outbox, rx)
     }
 
-    pub fn send(&self, bytes: Vec<u8>) {
-        self.queued.fetch_add(bytes.len(), Ordering::Relaxed);
-        if let Err(e) = self.tx.send(bytes) {
-            self.queued.fetch_sub(e.0.len(), Ordering::Relaxed);
+    #[cfg(test)]
+    pub fn seen_by(&self) -> impl Fn(u32) + use<> {
+        let seen = self.seen.clone();
+        move |tick| {
+            seen.fetch_max(tick + 1, Ordering::Relaxed);
         }
     }
 
-    /// Bytes handed to the connection that it has not written yet.
-    pub fn queued(&self) -> usize {
-        self.queued.load(Ordering::Relaxed)
+    /// How many ticks behind `tick` the client says it is, once it has said.
+    pub fn behind(&self, tick: u32) -> Option<u32> {
+        match self.seen.load(Ordering::Relaxed) {
+            0 => None,
+            seen => Some((tick + 1).saturating_sub(seen)),
+        }
+    }
+
+    pub fn send(&self, bytes: Vec<u8>) {
+        self.queued_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
+        if let Err(e) = self.tx.send(bytes) {
+            self.queued_bytes.fetch_sub(e.0.len(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn queued_bytes(&self) -> usize {
+        self.queued_bytes.load(Ordering::Relaxed)
     }
 }
 
-/// What the connections and the tick share: the inputs waiting for the next tick, and the
-/// outboxes of connections the world has not admitted yet.
 pub struct Shared {
     inbox: Mutex<Vec<Stamped>>,
-    waiting: Mutex<HashMap<u32, Outbox>>,
+    unadmitted: Mutex<HashMap<u32, Outbox>>,
     next_conn: AtomicU32,
     pub bytes_in: AtomicU64,
     pub stop: AtomicBool,
@@ -61,7 +80,7 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             inbox: Mutex::new(Vec::new()),
-            waiting: Mutex::new(HashMap::new()),
+            unadmitted: Mutex::new(HashMap::new()),
             next_conn: AtomicU32::new(0),
             bytes_in: AtomicU64::new(0),
             stop: AtomicBool::new(false),
@@ -69,8 +88,7 @@ impl Shared {
         }
     }
 
-    /// Milliseconds since the server started: the clock inputs are stamped with.
-    pub fn now_ms(&self) -> u32 {
+    pub fn ms_since_start(&self) -> u32 {
         self.started.elapsed().as_millis() as u32
     }
 
@@ -82,17 +100,15 @@ impl Shared {
         inputs
     }
 
-    /// Holds a new connection's outbox until the world admits it.
     pub fn hold_outbox(&self, conn: u32, outbox: Outbox) {
-        self.waiting
+        self.unadmitted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(conn, outbox);
     }
 
-    /// The outbox of a connection the world is admitting.
-    pub fn claim_outbox(&self, conn: u32) -> Option<Outbox> {
-        self.waiting
+    pub fn take_outbox(&self, conn: u32) -> Option<Outbox> {
+        self.unadmitted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&conn)
@@ -106,7 +122,6 @@ impl Shared {
     }
 }
 
-/// Accepts connections until the runtime shuts down.
 pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
     loop {
         let Ok((socket, _)) = listener.accept().await else {
@@ -117,10 +132,10 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
         let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
         let (reader, writer) = socket.into_split();
         let (outbox, rx) = Outbox::channel();
-        let queued = outbox.queued.clone();
+        let (queued, seen) = (outbox.queued_bytes.clone(), outbox.seen.clone());
         shared.hold_outbox(conn, outbox);
         tokio::spawn(write(writer, rx, queued));
-        tokio::spawn(read(conn, reader, shared.clone()));
+        tokio::spawn(read(conn, reader, seen, shared.clone()));
     }
 }
 
@@ -137,9 +152,7 @@ async fn write(
     }
 }
 
-/// Reads a connection's frames into the inbox: a hello first, then claims. Anything else, or
-/// the connection closing, ends it with a leave.
-async fn read(conn: u32, mut r: OwnedReadHalf, shared: Arc<Shared>) {
+async fn read(conn: u32, mut r: OwnedReadHalf, seen: Arc<AtomicU32>, shared: Arc<Shared>) {
     let mut frames = Frames::default();
     let mut buf = vec![0u8; READ_BUF];
     let (mut seq, mut joined, mut batch) = (0u32, false, Vec::new());
@@ -150,7 +163,7 @@ async fn read(conn: u32, mut r: OwnedReadHalf, shared: Arc<Shared>) {
         };
         shared.bytes_in.fetch_add(n as u64, Ordering::Relaxed);
         frames.extend(&buf[..n]);
-        let at_ms = shared.now_ms();
+        let received_ms = shared.ms_since_start();
         loop {
             let input = match frames.next_frame().map(|f| f.map(ClientMessage::read)) {
                 Ok(None) => break,
@@ -159,6 +172,10 @@ async fn read(conn: u32, mut r: OwnedReadHalf, shared: Arc<Shared>) {
                     Input::Join(h)
                 }
                 Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
+                Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
+                    seen.fetch_max(tick.saturating_add(1), Ordering::Relaxed);
+                    continue;
+                }
                 _ => {
                     shared.push(&mut batch);
                     break 'conn;
@@ -167,7 +184,7 @@ async fn read(conn: u32, mut r: OwnedReadHalf, shared: Arc<Shared>) {
             batch.push(Stamped {
                 conn,
                 seq,
-                at_ms,
+                received_ms,
                 input,
             });
             seq += 1;
@@ -175,17 +192,17 @@ async fn read(conn: u32, mut r: OwnedReadHalf, shared: Arc<Shared>) {
         shared.push(&mut batch);
     }
     if joined {
-        let at_ms = shared.now_ms();
+        let received_ms = shared.ms_since_start();
         batch.push(Stamped {
             conn,
             seq,
-            at_ms,
+            received_ms,
             input: Input::Leave,
         });
         shared.push(&mut batch);
     }
     shared
-        .waiting
+        .unadmitted
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&conn);

@@ -9,28 +9,32 @@ use crate::track::Track;
 pub const HEARTBEAT_MS: u32 = 500;
 const JUMP_SPEED: f32 = 7.955_547;
 const GRAVITY: f32 = 19.291_105;
-/// How far a teleporting liar claims to have gone, yards.
 const TELEPORT_YD: f32 = 200.0;
 
-/// An arc in progress: when it launched, from what height, and its horizontal launch.
 #[derive(Clone, Copy)]
 struct Air {
-    at: u32,
-    z0: f32,
-    speed: f32,
+    launched_at: u32,
+    launch_z: f32,
+    xy_speed: f32,
     facing: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Told {
+    Truth,
+    Lie,
 }
 
 /// A client's movement stream as the 1.12 client sends it, frame by frame: a claim for each
 /// change of movement flags (the direction keys go quiet mid-air), one for each frame the facing
-/// changes off the turn keys, and a heartbeat when half a second has passed without either
+/// changes off the turn keys, and a heartbeat when [`HEARTBEAT_MS`] has passed without either
 /// while moving.
 pub struct Mover {
     sent_flags: u32,
     facing: f32,
-    last_send: Option<u32>,
-    /// The last ground height found, kept over holes.
-    ground_z: f32,
+    last_send: u32,
+    report_now: bool,
+    last_ground_z: f32,
     air: Option<Air>,
     jumped_leg: Option<usize>,
     teleported: bool,
@@ -42,8 +46,9 @@ impl Mover {
         Self {
             sent_flags: 0,
             facing: facing.rem_euclid(TAU),
-            last_send: Some(0),
-            ground_z,
+            last_send: 0,
+            report_now: false,
+            last_ground_z: ground_z,
             air: None,
             jumped_leg: None,
             teleported: false,
@@ -51,49 +56,46 @@ impl Mover {
         }
     }
 
-    /// Takes a correction: claims now carry `seq`, and the next frame reports at once.
     pub fn correct(&mut self, seq: u32) {
         self.ack = seq;
-        self.last_send = None;
+        self.report_now = true;
     }
 
-    /// The claims to send for the frame at `t`: true, or for a liar at its moment, not. Whether
-    /// it lied.
     pub fn frame(
         &mut self,
         t: u32,
         track: &Track,
         ground: &Ground,
         out: &mut Vec<Movement>,
-    ) -> bool {
+    ) -> Told {
         let pose = track.pose(t);
-        let [x, y] = pose.xy;
-        let ground_z = ground.height(x, y).unwrap_or(self.ground_z);
-        self.ground_z = ground_z;
+        let [x, y] = pose.place.xy;
+        let ground_z = ground.height(x, y).unwrap_or(self.last_ground_z);
+        self.last_ground_z = ground_z;
         let mut live = pose.flags;
-        if let Some((at, speed)) = pose.jump
-            && t >= at
+        if let Some(jump) = pose.jump
+            && t >= jump.at_ms
             && self.air.is_none()
             && self.jumped_leg != Some(pose.leg)
         {
             self.jumped_leg = Some(pose.leg);
             self.air = Some(Air {
-                at,
-                z0: ground_z,
-                speed,
-                facing: pose.facing,
+                launched_at: jump.at_ms,
+                launch_z: ground_z,
+                xy_speed: jump.speed,
+                facing: pose.place.facing,
             });
         }
         let mut movement = Movement {
             time: t,
             pos: [x, y, ground_z],
-            facing: pose.facing.rem_euclid(TAU),
+            facing: pose.place.facing.rem_euclid(TAU),
             ..Movement::default()
         };
         if let Some(air) = self.air {
-            let secs = (t - air.at) as f32 / 1000.0;
-            let z = air.z0 + JUMP_SPEED * secs - 0.5 * GRAVITY * secs * secs;
-            movement.fall_time = t - air.at;
+            let secs = (t - air.launched_at) as f32 / 1000.0;
+            let z = air.launch_z + JUMP_SPEED * secs - 0.5 * GRAVITY * secs * secs;
+            movement.fall_time = t - air.launched_at;
             if secs > 0.2 && z <= ground_z {
                 self.air = None;
             } else {
@@ -103,18 +105,15 @@ impl Mover {
                     z_speed: -JUMP_SPEED,
                     cos: air.facing.cos(),
                     sin: air.facing.sin(),
-                    xy_speed: air.speed,
+                    xy_speed: air.xy_speed,
                 };
             }
         }
         movement.flags = live;
         let changes = self.changes(live, movement.facing);
-        let due = self
-            .last_send
-            .is_none_or(|last| t.saturating_sub(last) >= HEARTBEAT_MS);
-        let mut claims =
-            changes + usize::from(changes == 0 && (live != 0 || self.last_send.is_none()) && due);
-        let fast = track.lie_xy(t);
+        let heartbeat = live != 0 && t.saturating_sub(self.last_send) >= HEARTBEAT_MS;
+        let mut claims = changes + usize::from(changes == 0 && (heartbeat || self.report_now));
+        let fast = track.fast_lie_xy(t);
         if let Some(lie) = fast {
             movement.pos[0] = lie[0];
             movement.pos[1] = lie[1];
@@ -128,17 +127,20 @@ impl Mover {
             claims = claims.max(1);
         }
         if claims > 0 {
-            self.last_send = Some(t);
+            self.last_send = t;
+            self.report_now = false;
         }
         out.extend(std::iter::repeat_n(movement, claims));
         self.sent_flags = live;
         self.facing = movement.facing;
-        claims > 0 && (fast.is_some() || teleport)
+        if claims > 0 && (fast.is_some() || teleport) {
+            Told::Lie
+        } else {
+            Told::Truth
+        }
     }
 
-    /// How many claims this frame's changes make: one per movement flag axis that changed, the
-    /// direction axes quiet mid-air, and one when the facing moved with the turn keys up. The
-    /// claim that releases a turn key carries the turn's last facing itself.
+    /// The claim that releases a turn key carries the turn's last facing itself.
     fn changes(&self, live: u32, facing: f32) -> usize {
         let changed = live ^ self.sent_flags;
         let airborne = live & flags::FALLING != 0;
@@ -164,25 +166,24 @@ mod tests {
     use super::*;
     use crate::track::{Leg, Lie, Motion, RUN};
 
-    fn leg(start: u32, end: u32, motion: Motion) -> Leg {
+    fn leg(start_ms: u32, end_ms: u32, motion: Motion) -> Leg {
         Leg {
-            start,
-            end,
+            start_ms,
+            end_ms,
             from: [0.0, 0.0],
             facing: 0.0,
             motion,
         }
     }
 
-    fn run(jump: Option<u32>) -> Motion {
+    fn run(jump_at: Option<u32>) -> Motion {
         Motion::Run {
             speed: RUN,
             walk: false,
-            jump,
+            jump_at,
         }
     }
 
-    /// Every claim the mover makes in 50 ms frames from 0 to `until`, with the frame's time.
     fn claims(track: &Track, until: u32) -> Vec<(u32, Movement)> {
         let ground = Ground::none();
         let mut mover = Mover::new(10.0, 0.0);

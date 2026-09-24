@@ -1,8 +1,8 @@
 //! The native wire between cairn's client and server: frames, messages and their encoding.
 //!
 //! Every message travels as one frame: a little-endian `u32` counting the bytes after it, a kind
-//! byte, then the message. A client sends a [`Hello`] and then [`Claim`]s; the server answers
-//! with a [`Welcome`] and then one [`Batch`] per tick.
+//! byte, then the message. A client sends a [`Hello`] and then [`Claim`]s, and says which tick it
+//! has seen now and then; the server answers with a [`Welcome`] and then one [`Batch`] per tick.
 
 mod appearance;
 mod batch;
@@ -21,5 +21,4 @@ pub use frame::{Frames, Kind, LEN_BYTES, MAX_FRAME, begin_frame, finish_frame};
 pub use message::{Claim, ClientMessage, Hello, ServerMessage, Welcome};
 pub use movement::{Jump, Movement, flags};
 
-/// The protocol version this crate speaks.
 pub const VERSION: u16 = 0;

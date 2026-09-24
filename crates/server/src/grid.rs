@@ -1,15 +1,12 @@
 use crate::world::Body;
 
-/// A uniform grid over the living entities' bounding box, rebuilt each tick by counting sort:
-/// its cost follows the entities and the box they span, not the map.
 pub struct Grid {
     cell: f32,
     origin: [f32; 2],
     w: usize,
     h: usize,
-    /// Where each cell's slots start in `items`; one more entry than there are cells.
-    starts: Vec<u32>,
-    items: Vec<u32>,
+    cell_offsets: Vec<u32>,
+    slots: Vec<u32>,
     cell_of: Vec<u32>,
 }
 
@@ -20,8 +17,8 @@ impl Grid {
             origin: [0.0; 2],
             w: 0,
             h: 0,
-            starts: vec![0],
-            items: Vec::new(),
+            cell_offsets: vec![0],
+            slots: Vec::new(),
             cell_of: Vec::new(),
         }
     }
@@ -40,10 +37,10 @@ impl Grid {
         self.origin = lo;
         self.w = ((hi[0] - lo[0]) / self.cell) as usize + 1;
         self.h = ((hi[1] - lo[1]) / self.cell) as usize + 1;
-        self.starts.clear();
-        self.starts.resize(self.w * self.h + 1, 0);
+        self.cell_offsets.clear();
+        self.cell_offsets.resize(self.w * self.h + 1, 0);
         self.cell_of.clear();
-        self.items.clear();
+        self.slots.clear();
         for b in bodies {
             let c = if b.alive {
                 self.cell_index(b.movement.pos)
@@ -52,17 +49,18 @@ impl Grid {
             };
             self.cell_of.push(c);
             if c != u32::MAX {
-                self.starts[c as usize + 1] += 1;
+                self.cell_offsets[c as usize + 1] += 1;
             }
         }
         for i in 0..self.w * self.h {
-            self.starts[i + 1] += self.starts[i];
+            self.cell_offsets[i + 1] += self.cell_offsets[i];
         }
-        self.items.resize(self.starts[self.w * self.h] as usize, 0);
-        let mut fill = self.starts.clone();
+        self.slots
+            .resize(self.cell_offsets[self.w * self.h] as usize, 0);
+        let mut fill = self.cell_offsets.clone();
         for (slot, &c) in self.cell_of.iter().enumerate() {
             if c != u32::MAX {
-                self.items[fill[c as usize] as usize] = slot as u32;
+                self.slots[fill[c as usize] as usize] = slot as u32;
                 fill[c as usize] += 1;
             }
         }
@@ -86,8 +84,9 @@ impl Grid {
         let r2 = r * r;
         for y in y0..=y1 {
             let row = y * self.w;
-            let cells = self.starts[row + x0] as usize..self.starts[row + x1 + 1] as usize;
-            for &slot in &self.items[cells] {
+            let cells =
+                self.cell_offsets[row + x0] as usize..self.cell_offsets[row + x1 + 1] as usize;
+            for &slot in &self.slots[cells] {
                 let p = bodies[slot as usize].movement.pos;
                 let (dx, dy) = (p[0] - at[0], p[1] - at[1]);
                 if dx * dx + dy * dy <= r2 {

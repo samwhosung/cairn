@@ -2,59 +2,60 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::time::{ClockId, clock_gettime};
 
-/// CPU time this thread has run, ns: other processes preempting it do not count.
+use crate::rules::Why;
+
 pub fn thread_cpu_ns() -> u64 {
     let t = clock_gettime(ClockId::ThreadCPUTime);
     t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
 }
 
-/// CPU time the whole process has run, ns.
 pub fn process_cpu_ns() -> u64 {
     let t = clock_gettime(ClockId::ProcessCPUTime);
     t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
 }
 
-/// One phase of a tick's CPU, summed over the threads that ran it, and its largest single task.
 #[derive(Default)]
 pub struct Phase {
-    cpu: AtomicU64,
-    largest: AtomicU64,
+    cpu_ns: AtomicU64,
+    largest_task_ns: AtomicU64,
+}
+
+pub struct PhaseTaken {
+    pub cpu_ns: u64,
+    pub largest_task_ns: u64,
 }
 
 impl Phase {
-    /// Runs `f` on this thread and counts the CPU it took as one task of this phase.
+    /// Runs `f` and counts the CPU this thread spent on it as one task of the phase.
     pub fn time<R>(&self, f: impl FnOnce() -> R) -> R {
         let started = thread_cpu_ns();
         let out = f();
         let ns = thread_cpu_ns().saturating_sub(started);
-        self.cpu.fetch_add(ns, Ordering::Relaxed);
-        self.largest.fetch_max(ns, Ordering::Relaxed);
+        self.cpu_ns.fetch_add(ns, Ordering::Relaxed);
+        self.largest_task_ns.fetch_max(ns, Ordering::Relaxed);
         out
     }
 
-    /// The CPU and the largest task since the last take.
-    pub fn take(&self) -> (u64, u64) {
-        (
-            self.cpu.swap(0, Ordering::Relaxed),
-            self.largest.swap(0, Ordering::Relaxed),
-        )
+    pub fn take(&self) -> PhaseTaken {
+        PhaseTaken {
+            cpu_ns: self.cpu_ns.swap(0, Ordering::Relaxed),
+            largest_task_ns: self.largest_task_ns.swap(0, Ordering::Relaxed),
+        }
     }
 }
 
-/// The phases of a tick, in order.
+/// The phases of a tick in the order they run, which is also the order of every per-phase array.
 pub const PHASES: [&str; 5] = ["admit", "step", "index", "replicate", "hash"];
 
-/// What one tick cost and did.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TickStats {
     pub tick: u32,
     pub players: u32,
-    pub cpu: [u64; 5],
-    pub largest: [u64; 5],
-    pub wall: [u64; 5],
+    pub cpu_ns: [u64; 5],
+    pub largest_task_ns: [u64; 5],
+    pub wall_ns: [u64; 5],
     pub claims: u32,
-    /// Refusals by why: malformed, clock, speed, climb, fall, launch.
-    pub refused: [u32; 6],
+    pub refused: [u32; Why::ALL.len()],
     pub stale: u32,
     pub appeared: u32,
     pub vanished: u32,
@@ -67,24 +68,23 @@ pub struct TickStats {
 }
 
 impl TickStats {
-    /// The tick an idle machine with `threads` cores would take, ns: each phase's CPU spread
-    /// over the threads, or its largest task when that is longer.
-    pub fn ideal(&self, threads: usize) -> u64 {
+    /// The tick an idle machine with `threads` cores would take, ns.
+    pub fn ideal_ns(&self, threads: usize) -> u64 {
         (0..PHASES.len())
-            .map(|p| (self.cpu[p] / threads.max(1) as u64).max(self.largest[p]))
+            .map(|p| (self.cpu_ns[p] / threads.max(1) as u64).max(self.largest_task_ns[p]))
             .sum()
     }
 
-    pub fn cpu_total(&self) -> u64 {
-        self.cpu.iter().sum()
+    pub fn cpu_total_ns(&self) -> u64 {
+        self.cpu_ns.iter().sum()
     }
 
-    pub fn wall_total(&self) -> u64 {
-        self.wall.iter().sum()
+    pub fn wall_total_ns(&self) -> u64 {
+        self.wall_ns.iter().sum()
     }
 }
 
-/// A run's ticks over its measured window, summarised.
+/// A run's ticks over its measured window.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
     pub threads: usize,
@@ -92,18 +92,18 @@ pub struct Summary {
     pub players: u32,
     /// Percentiles 50, 99 and 100 of the ideal tick, ms.
     pub ideal: [f64; 3],
-    /// …of the CPU a tick took over all threads, ms.
+    /// Percentiles 50, 99 and 100 of the CPU a tick took over all threads, ms.
     pub cpu: [f64; 3],
-    /// …of the tick's wall time, ms.
+    /// Percentiles 50, 99 and 100 of the tick's wall time, ms.
     pub wall: [f64; 3],
-    /// Mean CPU per tick by phase, ms.
+    /// Mean CPU per tick of each of [`PHASES`], ms.
     pub phase_cpu: [f64; 5],
     pub out_per_client: f64,
     pub in_per_client: f64,
     pub out_total: f64,
     pub claims_per_client: f64,
-    /// Refusals by why: malformed, clock, speed, climb, fall, launch.
-    pub refused: [u64; 6],
+    /// Refusals by each of [`Why::ALL`].
+    pub refused: [u64; Why::ALL.len()],
     pub stale: u64,
     pub deferred: u64,
     pub kicked: u64,
@@ -114,35 +114,33 @@ pub struct Summary {
 }
 
 impl Summary {
-    /// Summarises `ticks`, which ran `secs` of real time while `bytes_in` arrived and the
-    /// process spent `process_ns` of CPU.
     pub fn of(
         ticks: &[TickStats],
         threads: usize,
-        secs: f64,
+        wall_secs: f64,
         bytes_in: u64,
         process_ns: u64,
     ) -> Self {
         let n = ticks.len().max(1) as f64;
         let players = ticks.iter().map(|t| t.players).max().unwrap_or(0);
-        let per_client_s = f64::from(players.max(1)) * secs.max(1e-9);
+        let per_client_s = f64::from(players.max(1)) * wall_secs.max(1e-9);
         let sum = |f: &dyn Fn(&TickStats) -> u64| ticks.iter().map(f).sum::<u64>();
-        let ms = |f: &dyn Fn(&TickStats) -> u64| percentiles(ticks.iter().map(f).collect());
+        let ms = |f: &dyn Fn(&TickStats) -> u64| p50_p99_max_ms(ticks.iter().map(f).collect());
         let mut phase_cpu = [0.0; 5];
         for (p, v) in phase_cpu.iter_mut().enumerate() {
-            *v = sum(&|t| t.cpu[p]) as f64 / n / 1e6;
+            *v = sum(&|t| t.cpu_ns[p]) as f64 / n / 1e6;
         }
         Self {
             threads,
             ticks: ticks.len(),
             players,
-            ideal: ms(&|t| t.ideal(threads)),
-            cpu: ms(&TickStats::cpu_total),
-            wall: ms(&TickStats::wall_total),
+            ideal: ms(&|t| t.ideal_ns(threads)),
+            cpu: ms(&TickStats::cpu_total_ns),
+            wall: ms(&TickStats::wall_total_ns),
             phase_cpu,
             out_per_client: sum(&|t| t.bytes_out) as f64 / per_client_s,
             in_per_client: bytes_in as f64 / per_client_s,
-            out_total: sum(&|t| t.bytes_out) as f64 / secs.max(1e-9),
+            out_total: sum(&|t| t.bytes_out) as f64 / wall_secs.max(1e-9),
             claims_per_client: sum(&|t| u64::from(t.claims)) as f64 / per_client_s,
             refused: std::array::from_fn(|i| sum(&|t| u64::from(t.refused[i]))),
             stale: sum(&|t| u64::from(t.stale)),
@@ -150,17 +148,23 @@ impl Summary {
             kicked: sum(&|t| u64::from(t.kicked)),
             moves_per_client: sum(&|t| u64::from(t.moves)) as f64 / per_client_s,
             hash: ticks.last().map_or(0, |t| t.hash),
-            process_share: process_ns as f64 / 1e9 / secs.max(1e-9),
+            process_share: process_ns as f64 / 1e9 / wall_secs.max(1e-9),
         }
     }
-}
 
-impl Summary {
-    /// The header of [`Summary::row`]'s table.
-    pub const HEADER: &str = "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: admit / step / index / replicate / hash, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | moves/s per client | refused: malformed / clock / speed / climb / fall / launch | stale | deferred | kicked | process % of a core | world hash | load |";
+    pub fn header() -> String {
+        let why: Vec<String> = Why::ALL
+            .iter()
+            .map(|w| format!("{w:?}").to_lowercase())
+            .collect();
+        format!(
+            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | moves/s per client | refused: {} | stale | deferred | kicked | process % of a core | world hash | load |",
+            PHASES.join(" / "),
+            why.join(" / ")
+        )
+    }
 
-    /// One markdown row: the tick's cost, the bytes, what was refused and shed, and the load
-    /// average when it was printed.
+    /// One markdown row of [`Summary::header`]'s table, with the load average when it is made.
     pub fn row(&self, label: &str) -> String {
         let [i50, i99, imax] = self.ideal;
         let [c50, c99, _] = self.cpu;
@@ -207,8 +211,7 @@ pub fn load_average() -> String {
     .unwrap_or_default()
 }
 
-/// Percentiles 50, 99 and 100 of `ns`, in ms.
-fn percentiles(mut ns: Vec<u64>) -> [f64; 3] {
+fn p50_p99_max_ms(mut ns: Vec<u64>) -> [f64; 3] {
     if ns.is_empty() {
         return [0.0; 3];
     }
@@ -224,23 +227,23 @@ mod tests {
     #[test]
     fn the_ideal_tick_is_spread_cpu_or_the_largest_task() {
         let t = TickStats {
-            cpu: [100, 1400, 10, 2800, 0],
-            largest: [100, 50, 10, 400, 0],
+            cpu_ns: [100, 1400, 10, 2800, 0],
+            largest_task_ns: [100, 50, 10, 400, 0],
             ..TickStats::default()
         };
-        assert_eq!(t.ideal(14), 100 + 100 + 10 + 400);
-        assert_eq!(t.ideal(1), 4310);
+        assert_eq!(t.ideal_ns(14), 100 + 100 + 10 + 400);
+        assert_eq!(t.ideal_ns(1), 4310);
     }
 
     #[test]
     fn a_thread_clock_counts_work_and_not_sleep() {
         let phase = Phase::default();
         phase.time(|| std::thread::sleep(std::time::Duration::from_millis(30)));
-        let (slept, _) = phase.take();
+        let slept = phase.take().cpu_ns;
         assert!(slept < 10_000_000, "{slept} ns");
         let spun = phase.time(|| (0..200_000u64).fold(0u64, |a, b| a.wrapping_add(b * b)));
         std::hint::black_box(spun);
-        let (cpu, largest) = phase.take();
-        assert!(cpu > 0 && largest == cpu, "{cpu} {largest}");
+        let taken = phase.take();
+        assert!(taken.cpu_ns > 0 && taken.largest_task_ns == taken.cpu_ns);
     }
 }

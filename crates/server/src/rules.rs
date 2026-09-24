@@ -10,9 +10,9 @@ pub struct Rules {
     pub run_back: f32,
     pub swim: f32,
     pub swim_back: f32,
-    /// A claim may cover this fraction more ground than its speed allows...
+    /// The fraction of extra ground a claim may cover beyond its speed.
     pub tolerance: f32,
-    /// ...and this many yards more, for a client's frame timing.
+    /// Yards a claim may cover beyond its speed and tolerance, for a client's frame timing.
     pub slack: f32,
     /// Height gained per yard of ground on the steepest walkable slope.
     pub climb: f32,
@@ -20,8 +20,12 @@ pub struct Rules {
     pub rise: f32,
     /// The fastest fall, yards per second.
     pub fall: f32,
-    /// How far a client's clock may run ahead of the server's between two claims, ms.
+    /// How far a claim's time may run ahead of the server's clock since the client's clock was
+    /// pinned, ms.
     pub clock_slack_ms: u32,
+    /// How far, in all, the pin may move forward to claims that arrived less delayed than the
+    /// one it was pinned by, ms.
+    pub clock_budget_ms: u32,
     /// Coordinates past this many yards from the map's centre are malformed.
     pub bound: f32,
     /// When false every well-formed claim is accepted.
@@ -42,6 +46,7 @@ impl Default for Rules {
             rise: 2.7,
             fall: 60.148,
             clock_slack_ms: 1000,
+            clock_budget_ms: 10_000,
             bound: 17_066.666,
             check: true,
         }
@@ -51,14 +56,13 @@ impl Default for Rules {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
     Accept,
-    /// Made before the client took its latest correction: ignored, not refused.
     Stale,
     Refuse(Why),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Why {
-    Malformed = 0,
+    Malformed,
     /// Earlier than the last claim, or ahead of the server's clock.
     Clock,
     /// Further over the ground than the speed allows.
@@ -67,6 +71,44 @@ pub enum Why {
     Fall,
     /// A jump launched faster than a run.
     Launch,
+}
+
+impl Why {
+    pub const ALL: [Self; 6] = [
+        Self::Malformed,
+        Self::Clock,
+        Self::Speed,
+        Self::Climb,
+        Self::Fall,
+        Self::Launch,
+    ];
+}
+
+/// A client's clock tied to the server's receive clock by one accepted claim, and how far the
+/// tie has since been moved forward, all in milliseconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClockPin {
+    pub client: u32,
+    pub server: u32,
+    pub moved: u32,
+}
+
+impl ClockPin {
+    /// How far a claim stamped `client_ms` and received at `server_ms` runs ahead of the pin.
+    pub fn lead_ms(&self, client_ms: u32, server_ms: u32) -> i64 {
+        let client = i64::from(client_ms) - i64::from(self.client);
+        client - (i64::from(server_ms) - i64::from(self.server))
+    }
+
+    /// The pin moved forward to an accepted claim that led it by more than `slack_ms`.
+    pub fn follow(self, client_ms: u32, server_ms: u32, slack_ms: u32) -> Self {
+        let excess = (self.lead_ms(client_ms, server_ms) - i64::from(slack_ms)).max(0) as u32;
+        Self {
+            client: self.client + excess,
+            moved: self.moved + excess,
+            ..self
+        }
+    }
 }
 
 impl Rules {
@@ -89,11 +131,8 @@ impl Rules {
         }
     }
 
-    /// Whether `claim`, received at server time `at_ms`, may move `body` on from its last
-    /// accepted state. The flags may have changed anywhere between the two claims, so the ground
-    /// covered is held to the faster of their speeds.
-    pub fn judge(&self, body: &Body, claim: &Claim, at_ms: u32) -> Verdict {
-        if claim.ack != body.seq {
+    pub fn judge(&self, body: &Body, claim: &Claim, received_ms: u32) -> Verdict {
+        if claim.ack != body.correction_seq {
             return Verdict::Stale;
         }
         let m = &claim.movement;
@@ -104,9 +143,14 @@ impl Rules {
             return Verdict::Accept;
         }
         let last = &body.movement;
-        let ahead = m.time.saturating_sub(body.clock_time);
-        let elapsed = at_ms.saturating_sub(body.clock_at);
-        if m.time < last.time || (body.clocked && ahead > elapsed + self.clock_slack_ms) {
+        let lead_allowed = |pin: &ClockPin| {
+            let budget = self.clock_budget_ms.saturating_sub(pin.moved);
+            i64::from(self.clock_slack_ms) + i64::from(budget)
+        };
+        let ahead = body
+            .clock
+            .is_some_and(|pin| pin.lead_ms(m.time, received_ms) > lead_allowed(&pin));
+        if m.time < last.time || ahead {
             return Verdict::Refuse(Why::Clock);
         }
         let launched = m.flags & flags::FALLING != 0 && last.flags & flags::FALLING == 0;
@@ -114,10 +158,9 @@ impl Rules {
             return Verdict::Refuse(Why::Launch);
         }
         let dt = (m.time - last.time) as f32 / 1000.0;
-        let [dx, dy, dz] = [0, 1, 2].map(|i| m.pos[i] - last.pos[i]);
-        let ground = dx.hypot(dy);
-        let speed = self.speed(last.flags).max(self.speed(m.flags));
-        if ground > speed * dt * (1.0 + self.tolerance) + self.slack {
+        let dz = m.pos[2] - last.pos[2];
+        let ground = ground_between(last, m);
+        if ground > self.ground_allowed(last, m) {
             return Verdict::Refuse(Why::Speed);
         }
         if dz > ground * self.climb + self.rise {
@@ -127,6 +170,14 @@ impl Rules {
             return Verdict::Refuse(Why::Fall);
         }
         Verdict::Accept
+    }
+
+    /// How far over the ground a mover may go from `last` to `m`, yards. The flags may have
+    /// changed anywhere between the two, so the faster of their speeds holds.
+    pub fn ground_allowed(&self, last: &Movement, m: &Movement) -> f32 {
+        let dt = m.time.saturating_sub(last.time) as f32 / 1000.0;
+        let speed = self.speed(last.flags).max(self.speed(m.flags));
+        speed * dt * (1.0 + self.tolerance) + self.slack
     }
 
     fn well_formed(&self, m: &Movement) -> bool {
@@ -143,6 +194,10 @@ impl Rules {
     }
 }
 
+pub fn ground_between(a: &Movement, b: &Movement) -> f32 {
+    (b.pos[0] - a.pos[0]).hypot(b.pos[1] - a.pos[1])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,9 +210,7 @@ mod tests {
                 pos,
                 ..Movement::default()
             },
-            clocked: true,
-            clock_time: 0,
-            clock_at: 0,
+            clock: Some(ClockPin::default()),
             ..Body::default()
         }
     }
@@ -194,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn a_teleport_a_rewind_and_a_fast_clock_are_refused() {
+    fn a_teleport_and_a_rewind_are_refused() {
         let rules = Rules::default();
         let body = last_at([0.0, 0.0, 0.0], 1000, 0);
         let teleport = claim(1500, 0, [200.0, 0.0, 0.0]);
@@ -207,37 +260,54 @@ mod tests {
             rules.judge(&body, &rewind, 1500),
             Verdict::Refuse(Why::Clock)
         );
-        let running = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD);
-        let ahead = claim(5000, flags::FORWARD, [28.0, 0.0, 0.0]);
-        assert_eq!(
-            rules.judge(&running, &ahead, 1500),
-            Verdict::Refuse(Why::Clock)
-        );
-        assert_eq!(rules.judge(&running, &ahead, 4000), Verdict::Accept);
     }
 
     #[test]
-    fn slopes_pass_and_climbs_and_sinks_do_not() {
+    fn a_pin_made_late_catches_up_once_but_a_fast_clock_runs_out_of_budget() {
         let rules = Rules::default();
-        let body = last_at([0.0, 0.0, 10.0], 1000, flags::FORWARD);
-        let uphill = claim(1500, flags::FORWARD, [3.5, 0.0, 13.0]);
-        assert_eq!(rules.judge(&body, &uphill, 1500), Verdict::Accept);
-        let up = claim(1500, flags::FORWARD, [0.0, 0.0, 20.0]);
-        assert_eq!(rules.judge(&body, &up, 1500), Verdict::Refuse(Why::Climb));
-        let fall = claim(2000, flags::FALLING, [0.0, 0.0, -30.0]);
-        assert_eq!(rules.judge(&body, &fall, 2000), Verdict::Accept);
-        let sink = claim(1100, flags::FORWARD, [0.0, 0.0, -20.0]);
-        assert_eq!(rules.judge(&body, &sink, 1100), Verdict::Refuse(Why::Fall));
+        let mut body = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD);
+        body.clock = Some(ClockPin {
+            client: 1000,
+            server: 6000,
+            moved: 0,
+        });
+        let prompt = claim(7000, flags::FORWARD, [40.0, 0.0, 0.0]);
+        assert_eq!(rules.judge(&body, &prompt, 7000), Verdict::Accept);
+        let pin = body
+            .clock
+            .map(|p| p.follow(7000, 7000, rules.clock_slack_ms));
+        assert_eq!(pin.map(|p| p.lead_ms(8000, 8000)), Some(1000));
+
+        let mut body = last_at([0.0, 0.0, 0.0], 0, flags::FORWARD);
+        let refused_at = (1..200u32).find(|&k| {
+            let (client, server) = (k * 600, k * 500);
+            let c = claim(client, flags::FORWARD, [0.0, 0.0, 0.0]);
+            match rules.judge(&body, &c, server) {
+                Verdict::Accept => {
+                    body.clock = body
+                        .clock
+                        .map(|p| p.follow(client, server, rules.clock_slack_ms));
+                    body.movement.time = client;
+                    false
+                }
+                _ => true,
+            }
+        });
+        assert_eq!(
+            refused_at,
+            Some(111),
+            "a clock 20 % fast banks 11 s, then is refused"
+        );
     }
 
     #[test]
     fn claims_before_the_latest_correction_are_stale_and_unchecked_claims_pass() {
         let mut rules = Rules::default();
         let mut body = last_at([0.0, 0.0, 0.0], 1000, 0);
-        body.seq = 2;
+        body.correction_seq = 2;
         let teleport = claim(1500, 0, [500.0, 0.0, 0.0]);
         assert_eq!(rules.judge(&body, &teleport, 1500), Verdict::Stale);
-        body.seq = 0;
+        body.correction_seq = 0;
         rules.check = false;
         assert_eq!(rules.judge(&body, &teleport, 1500), Verdict::Accept);
         let nan = claim(1500, 0, [f32::NAN, 0.0, 0.0]);

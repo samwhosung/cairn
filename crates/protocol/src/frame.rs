@@ -4,7 +4,6 @@ use crate::Error;
 pub const LEN_BYTES: usize = 4;
 /// The longest frame either side accepts.
 pub const MAX_FRAME: usize = 16 << 20;
-/// Spent bytes are dropped from the front of [`Frames`]' buffer once there are this many.
 const COMPACT_AT: usize = 1 << 16;
 
 /// What a frame carries, as its first byte says.
@@ -15,6 +14,7 @@ pub enum Kind {
     Claim = 2,
     Welcome = 3,
     Batch = 4,
+    Seen = 5,
 }
 
 impl Kind {
@@ -24,6 +24,7 @@ impl Kind {
             2 => Ok(Self::Claim),
             3 => Ok(Self::Welcome),
             4 => Ok(Self::Batch),
+            5 => Ok(Self::Seen),
             k => Err(Error::UnknownKind(k)),
         }
     }
@@ -48,24 +49,24 @@ pub fn finish_frame(out: &mut [u8], start: usize) {
 #[derive(Default)]
 pub struct Frames {
     buf: Vec<u8>,
-    start: usize,
+    consumed: usize,
 }
 
 impl Frames {
     pub fn extend(&mut self, bytes: &[u8]) {
-        if self.start == self.buf.len() {
+        if self.consumed == self.buf.len() {
             self.buf.clear();
-            self.start = 0;
-        } else if self.start >= COMPACT_AT {
-            self.buf.drain(..self.start);
-            self.start = 0;
+            self.consumed = 0;
+        } else if self.consumed >= COMPACT_AT {
+            self.buf.drain(..self.consumed);
+            self.consumed = 0;
         }
         self.buf.extend_from_slice(bytes);
     }
 
     /// The next whole frame, kind byte first, or `None` until more bytes arrive.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>, Error> {
-        let rest = &self.buf[self.start..];
+        let rest = &self.buf[self.consumed..];
         let Some(prefix) = rest.first_chunk::<LEN_BYTES>() else {
             return Ok(None);
         };
@@ -76,14 +77,14 @@ impl Frames {
         if rest.len() < LEN_BYTES + len {
             return Ok(None);
         }
-        let body = self.start + LEN_BYTES;
-        self.start = body + len;
+        let body = self.consumed + LEN_BYTES;
+        self.consumed = body + len;
         Ok(Some(&self.buf[body..body + len]))
     }
 
     /// Bytes held that no whole frame has taken yet.
     pub fn pending(&self) -> usize {
-        self.buf.len() - self.start
+        self.buf.len() - self.consumed
     }
 }
 

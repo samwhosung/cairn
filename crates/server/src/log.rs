@@ -12,7 +12,6 @@ const JOIN: u8 = 1;
 const CLAIM: u8 = 2;
 const LEAVE: u8 = 3;
 
-/// What a replay must match: the spawns, whether claims were checked, and the tick length.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Header {
     pub tick_ms: u16,
@@ -20,7 +19,6 @@ pub struct Header {
     pub spawns: Vec<Spawn>,
 }
 
-/// Writes every tick's inputs, in the order the tick applied them, and the world hash after it.
 pub struct LogWriter {
     out: BufWriter<File>,
     buf: Vec<u8>,
@@ -45,13 +43,13 @@ impl LogWriter {
         })
     }
 
-    pub fn tick(&mut self, tick: u32, inputs: &[Stamped], hash: u64) -> io::Result<()> {
+    pub fn tick(&mut self, tick: u32, applied: &[Stamped], hash_after: u64) -> io::Result<()> {
         self.buf.clear();
         self.buf.extend_from_slice(&tick.to_le_bytes());
         self.buf
-            .extend_from_slice(&(inputs.len() as u32).to_le_bytes());
-        for s in inputs {
-            for v in [s.conn, s.seq, s.at_ms] {
+            .extend_from_slice(&(applied.len() as u32).to_le_bytes());
+        for s in applied {
+            for v in [s.conn, s.seq, s.received_ms] {
                 self.buf.extend_from_slice(&v.to_le_bytes());
             }
             match &s.input {
@@ -66,7 +64,7 @@ impl LogWriter {
                 Input::Leave => self.buf.push(LEAVE),
             }
         }
-        self.buf.extend_from_slice(&hash.to_le_bytes());
+        self.buf.extend_from_slice(&hash_after.to_le_bytes());
         self.out.write_all(&self.buf)
     }
 
@@ -75,13 +73,11 @@ impl LogWriter {
     }
 }
 
-/// Reads a log back, one tick at a time.
 pub struct LogReader {
     input: BufReader<File>,
     pub header: Header,
 }
 
-/// One logged tick.
 pub struct LoggedTick {
     pub tick: u32,
     pub inputs: Vec<Stamped>,
@@ -133,7 +129,7 @@ impl LogReader {
         let n = read_u32(&mut self.input)?;
         let mut inputs = Vec::with_capacity(n.min(1 << 20) as usize);
         for _ in 0..n {
-            let (conn, seq, at_ms) = (
+            let (conn, seq, received_ms) = (
                 read_u32(&mut self.input)?,
                 read_u32(&mut self.input)?,
                 read_u32(&mut self.input)?,
@@ -143,14 +139,16 @@ impl LogReader {
                 JOIN | CLAIM => match ClientMessage::read(&self.frame()?) {
                     Ok(ClientMessage::Hello(h)) => Input::Join(h),
                     Ok(ClientMessage::Claim(c)) => Input::Claim(c),
-                    Err(_) => return Err(bad("a logged message does not parse")),
+                    Ok(ClientMessage::Seen(_)) | Err(_) => {
+                        return Err(bad("a logged message is not a hello or a claim"));
+                    }
                 },
                 _ => return Err(bad("an unknown input tag")),
             };
             inputs.push(Stamped {
                 conn,
                 seq,
-                at_ms,
+                received_ms,
                 input,
             });
         }

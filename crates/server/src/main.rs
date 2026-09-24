@@ -1,11 +1,11 @@
-//! Serves one world over TCP until its measured window ends, or replays a recorded run.
+//! Serves one world over TCP, or replays a recorded run.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use server::{Config, Order, Rules, Spawn, Summary, Window};
+use server::{Config, InputOrder, Refusal, Rules, Spawn, Summary, Window, ground_between};
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
@@ -17,9 +17,10 @@ usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unche
          and world hash to FILE.
        server header
          print the header of the summary row's table.
-       server replay FILE [--threads N] [--racy]
+       server replay FILE [--threads N] [--racy] [--refusals]
          replay a recorded run and compare the world after every tick; --racy applies
-         each entity's inputs in the order worker threads hand them over.
+         each entity's inputs in the order worker threads hand them over; --refusals
+         prints every refused claim and what it was judged against.
 
 FILE of spawns: one `x y z facing` per line, WoW world coordinates and radians.";
 
@@ -28,7 +29,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("replay") => replay(&args[1..]),
         Some("header") => {
-            println!("{}", Summary::HEADER);
+            println!("{}", Summary::header());
             Ok(())
         }
         _ => serve(&args),
@@ -42,7 +43,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `--flag value` pairs and bare `--switch`es.
 fn flags(args: &[String], switches: &[&str]) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     let mut it = args.iter();
@@ -90,7 +90,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     };
     let cfg = Config {
         addr: SocketAddr::from(([127, 0, 0, 1], num(&f, "port", 7777)?)),
-        threads: num(&f, "threads", defaults.threads)?,
+        tick_threads: num(&f, "threads", defaults.tick_threads)?,
         io_threads: num(&f, "io-threads", defaults.io_threads)?,
         spawns,
         rules: Rules {
@@ -111,14 +111,20 @@ fn serve(args: &[String]) -> Result<(), String> {
 
 fn replay(args: &[String]) -> Result<(), String> {
     let (path, rest) = args.split_first().ok_or("replay needs a FILE")?;
-    let f = flags(rest, &["racy"])?;
+    let f = flags(rest, &["racy", "refusals"])?;
     let threads = num(&f, "threads", 1)?;
     let order = if f.contains_key("racy") {
-        Order::Racy
+        InputOrder::Racy
     } else {
-        Order::Canonical
+        InputOrder::Canonical
     };
-    let r = server::replay(Path::new(path), threads, order).map_err(|e| format!("{path}: {e}"))?;
+    let keep_refusals = f.contains_key("refusals");
+    let r = server::replay(Path::new(path), threads, order, keep_refusals)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let rules = Rules::default();
+    for refusal in &r.refusals {
+        println!("{}", refusal_line(refusal, &rules));
+    }
     let verdict = r
         .first_mismatch
         .map_or("every tick matches".to_string(), |t| {
@@ -129,6 +135,28 @@ fn replay(args: &[String]) -> Result<(), String> {
         r.ticks, r.hash
     );
     Ok(())
+}
+
+fn refusal_line(r: &Refusal, rules: &Rules) -> String {
+    let at = |m: &server::Movement| {
+        format!(
+            "t={} flags={:#x} ({:.2}, {:.2}, {:.2})",
+            m.time, m.flags, m.pos[0], m.pos[1], m.pos[2]
+        )
+    };
+    format!(
+        "tick {} id {} {} {:?} (received at {} ms): {} -> {}: {:.2} yd over the ground in {} ms, {:.2} allowed",
+        r.tick,
+        r.id,
+        r.name,
+        r.why,
+        r.received_ms,
+        at(&r.last),
+        at(&r.claim),
+        ground_between(&r.last, &r.claim),
+        r.claim.time.saturating_sub(r.last.time),
+        rules.ground_allowed(&r.last, &r.claim),
+    )
 }
 
 fn read_spawns(path: &Path) -> Result<Vec<Spawn>, String> {

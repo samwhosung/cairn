@@ -12,11 +12,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::bot::{Crowd, now_ms};
-use crate::check::{Traffic, bound_yd};
+use crate::bot::{Crowd, Roles, now_ms};
+use crate::check::{Counters, Percentiles};
 use crate::ground::Ground;
 use crate::region::Scenario;
 
@@ -42,7 +42,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("spawns") => spawns(&args[1..]),
         Some("header") => {
-            println!("{HEADER}");
+            println!("{REPORT_HEADER}");
             Ok(())
         }
         _ => load(&args),
@@ -116,11 +116,14 @@ fn load(args: &[String]) -> Result<(), String> {
     let count: usize = num(&f, "count", 100)?;
     let settle: u64 = num(&f, "settle", 10)?;
     let secs: u64 = num(&f, "secs", 30)?;
-    let roles = (num(&f, "liars", 1)?, num(&f, "checkers", count)?);
+    let roles = Roles {
+        liars: num(&f, "liars", 1)?,
+        checkers: num(&f, "checkers", count)?,
+    };
     let running = if f.contains_key("in-process") {
         let cfg = server::Config {
             spawns: region::spawns(&scenario, &ground, count, 1)?,
-            threads: num(&f, "server-threads", 1)?,
+            tick_threads: num(&f, "server-threads", 1)?,
             io_threads: 1,
             rules: server::Rules {
                 check: !f.contains_key("unchecked"),
@@ -140,8 +143,8 @@ fn load(args: &[String]) -> Result<(), String> {
             .parse()
             .map_err(|_| "--addr wants HOST:PORT")?,
     };
-    let until = now_ms() + ((settle + secs + 120) * 1000) as u32;
-    let crowd = Arc::new(Crowd::new(scenario, ground, count * 2, roles, until));
+    let walks_end_ms = now_ms() + ((settle + secs + 120) * 1000) as u32;
+    let crowd = Arc::new(Crowd::new(scenario, ground, count * 2, roles, walks_end_ms));
     let mut rt = tokio::runtime::Builder::new_multi_thread();
     if let Ok(n) = num::<usize>(&f, "threads", 0)
         && n > 0
@@ -163,11 +166,9 @@ fn load(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Counters at the window's two ends, and what the process spent in between.
 struct Measured {
-    before: Vec<u64>,
-    after: Vec<u64>,
-    lag: Vec<u64>,
+    counters: Counters,
+    jitter: Percentiles,
     secs: f64,
     cpu_ns: u64,
 }
@@ -193,71 +194,70 @@ async fn drive(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     tokio::time::sleep(Duration::from_secs(settle)).await;
-    let (before, cpu0, t0) = (t.snapshot(), server::process_cpu_ns(), Instant::now());
+    let (before, cpu0, t0) = (t.counters(), server::process_cpu_ns(), Instant::now());
     crowd.checks.open.store(true, Ordering::Relaxed);
     tokio::time::sleep(Duration::from_secs(secs)).await;
     crowd.checks.open.store(false, Ordering::Relaxed);
-    let (after, secs, cpu_ns) = (
-        t.snapshot(),
+    let (counters, secs, cpu_ns) = (
+        t.counters().since(before),
         t0.elapsed().as_secs_f64(),
         server::process_cpu_ns() - cpu0,
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let lag = t.lag.iter().map(|b| b.load(Ordering::Relaxed)).collect();
+    let jitter = t.jitter.percentiles();
     crowd.stop.store(true, Ordering::Relaxed);
     Measured {
-        before,
-        after,
-        lag,
+        counters,
+        jitter,
         secs,
         cpu_ns,
     }
 }
 
-/// The header of [`report`]'s table.
-const HEADER: &str = "| run | bots in | checkers | batches/s per bot | batch jitter p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions checked / off / worst yd | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lies / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
+const REPORT_HEADER: &str = "| run | bots in | checkers | batches/s per bot | batch jitter p50 / p99 / max ms | in KB/s per bot | out B/s per bot | claims/s per bot | relayed positions of honest bots checked / off / worst yd; of liars off / worst | view error near: worst yd (bound) / over | middle | far | swept views over bound | missing (deepest yd) / spurious | moves unannounced / appears doubled | lying frames / liar corrections / honest corrections | batch gaps / decode errors | process % of a core | load |";
 
 fn report(label: &str, crowd: &Crowd, count: usize, m: &Measured) -> String {
-    let d = |i: usize| m.after[i] - m.before[i];
     let bots = crowd.traffic.welcomed.load(Ordering::Relaxed);
     let per_bot = |v: u64| v as f64 / m.secs / bots.max(1) as f64;
-    let [l50, l99, lmax] = Traffic::lag_percentiles(&m.lag);
     let c = &crowd.checks;
-    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
     let tiers: Vec<String> = (0..3)
         .map(|t| {
-            let j = &c.stale[t];
-            format!(
-                "{:.2} ({:.2}) / {}",
-                j.worst.get(),
-                bound_yd(t),
-                get(&j.bad)
-            )
+            let j = &c.stale_by_tier[t];
+            let bound = crowd.limits.view_lag_bound_yd(t);
+            format!("{:.2} ({bound:.2}) / {}", j.worst.get(), get(&j.bad))
         })
         .collect();
-    let swept: u64 = c.swept.iter().map(|j| get(&j.bad)).sum();
+    let swept: u64 = c.swept_by_tier.iter().map(|j| get(&j.bad)).sum();
+    let n = m.counters;
+    let p = &m.jitter;
     format!(
-        "| {label} | {bots}/{count} | {} | {:.1} | {l50} / {l99} / {lmax} | {:.2} | {:.0} | {:.2} | {} / {} / {:.3} | {} | {} | {} ({:.1}) / {} | {} / {} | {} / {} / {} | {} / {} | {:.1} | {} |",
-        crowd.checkers.min(count),
-        per_bot(d(2)),
-        per_bot(d(0)) / 1e3,
-        per_bot(d(1)),
-        per_bot(d(4)),
-        get(&c.exact.checked),
-        get(&c.exact.bad),
-        c.exact.worst.get(),
+        "| {label} | {bots}/{count} | {} | {:.1} | {} / {} / {} | {:.2} | {:.0} | {:.2} | {} / {} / {:.3}; {} / {:.3} | {} | {} | {} ({:.1}) / {} | {} / {} | {} / {} / {} | {} / {} | {:.1} | {} |",
+        crowd.roles.checkers.min(count),
+        per_bot(n.batches),
+        p.p50,
+        p.p99,
+        p.max,
+        per_bot(n.bytes_in) / 1e3,
+        per_bot(n.bytes_out),
+        per_bot(n.claims),
+        get(&c.relayed_honest.checked),
+        get(&c.relayed_honest.bad),
+        c.relayed_honest.worst.get(),
+        get(&c.relayed_liars.bad),
+        c.relayed_liars.worst.get(),
         tiers.join(" | "),
         swept,
         get(&c.missing),
-        c.missing_depth.get(),
+        c.missing_depth_yd.get(),
         get(&c.spurious),
         get(&c.unknown_moves),
         get(&c.double_appears),
-        get(&c.lies),
+        get(&c.lying_frames),
         get(&c.liar_corrections),
         get(&c.honest_corrections),
-        d(5),
-        d(6),
+        n.gaps,
+        n.decode_errors,
         m.cpu_ns as f64 / 1e9 / m.secs * 100.0,
         server::load_average(),
     )

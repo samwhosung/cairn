@@ -1,19 +1,18 @@
 use std::time::Instant;
 
 use protocol::{VERSION, Welcome};
+use rayon::ThreadPool;
 use rayon::prelude::*;
 
 use crate::grid::Grid;
 use crate::net::Shared;
-use crate::replicate::{Built, Observer, Scene, Scratch, View, build};
+use crate::replicate::{Built, Observer, Scene, Scratch, View, send_batch};
 use crate::rules::Rules;
 use crate::stats::{Phase, TickStats};
-use crate::world::{Order, Spawn, Stamped, World};
+use crate::world::{InputOrder, Refusal, Spawn, Stamped, World};
 
-/// Observers one replication task builds for.
 const OBSERVERS_PER_TASK: usize = 16;
 
-/// The world and everyone's view of it, advanced one tick at a time.
 pub struct Sim {
     world: World,
     grid: Grid,
@@ -22,6 +21,7 @@ pub struct Sim {
     map: u32,
     tick_ms: u16,
     phases: [Phase; 5],
+    refusals: Vec<Refusal>,
 }
 
 impl Sim {
@@ -34,20 +34,39 @@ impl Sim {
             map,
             tick_ms,
             phases: Default::default(),
+            refusals: Vec::new(),
         }
+    }
+
+    pub fn keep_refusals(&mut self) {
+        self.world.keep_refusals();
+    }
+
+    pub fn take_refusals(&mut self) -> Vec<Refusal> {
+        std::mem::take(&mut self.refusals)
     }
 
     pub fn world(&self) -> &World {
         &self.world
     }
 
-    /// Runs one tick over `inputs`: admits joins and welcomes them, steps every entity, rebuilds
-    /// the grid, builds each observer's batch when `replicate` is set and sends it when it has a
-    /// connection, and hashes the world. Call from inside the thread pool the tick should use.
+    /// Runs one tick on `pool`. Batches are built only when `replicate` is set, and sent only
+    /// to connections `shared` holds.
     pub fn tick(
         &mut self,
+        pool: &ThreadPool,
         inputs: &[Stamped],
-        order: Order,
+        order: InputOrder,
+        shared: Option<&Shared>,
+        replicate: bool,
+    ) -> TickStats {
+        pool.install(|| self.run_tick(inputs, order, shared, replicate))
+    }
+
+    fn run_tick(
+        &mut self,
+        inputs: &[Stamped],
+        order: InputOrder,
         shared: Option<&Shared>,
         replicate: bool,
     ) -> TickStats {
@@ -59,36 +78,37 @@ impl Sim {
             map,
             tick_ms,
             phases,
+            refusals,
         } = self;
         let mut st = TickStats {
             tick: world.tick(),
             ..TickStats::default()
         };
         let mut clock = Instant::now();
-        let joined = phases[0].time(|| world.admit(inputs));
-        for (conn, slot) in joined {
-            let outbox = shared.and_then(|s| s.claim_outbox(conn));
+        for joined in phases[0].time(|| world.admit(inputs)) {
+            let outbox = shared.and_then(|s| s.take_outbox(joined.conn));
             if let Some(outbox) = &outbox {
                 let mut bytes = Vec::new();
                 Welcome {
                     version: VERSION,
-                    id: slot,
+                    id: joined.slot,
                     map: *map,
                     tick: world.tick(),
                     tick_ms: *tick_ms,
-                    spawn: world.bodies()[slot as usize].movement,
+                    spawn: world.bodies()[joined.slot as usize].movement,
                 }
                 .write(&mut bytes);
                 outbox.send(bytes);
             }
-            observers.push(Observer::new(slot, outbox));
+            observers.push(Observer::new(joined.slot, outbox));
         }
-        st.wall[0] = lap(&mut clock);
+        st.wall_ns[0] = lap_ns(&mut clock);
         let acts = phases[1].time(|| world.route(inputs, order));
-        let stepped = world.step(&acts, &phases[1]);
-        st.wall[1] = lap(&mut clock);
+        let mut stepped = world.step(&acts, &phases[1]);
+        refusals.append(&mut stepped.refusals);
+        st.wall_ns[1] = lap_ns(&mut clock);
         phases[2].time(|| grid.rebuild(world.bodies()));
-        st.wall[2] = lap(&mut clock);
+        st.wall_ns[2] = lap_ns(&mut clock);
         let bodies = world.bodies();
         observers.retain(|o| bodies[o.slot as usize].alive);
         let built = if replicate {
@@ -99,7 +119,7 @@ impl Sim {
                 .map_init(Scratch::default, |scratch, chunk| {
                     phase.time(|| {
                         chunk.iter_mut().fold(Built::default(), |sum, o| {
-                            sum.add(build(o, &scene, scratch))
+                            sum.add(send_batch(o, &scene, scratch))
                         })
                     })
                 })
@@ -107,11 +127,10 @@ impl Sim {
         } else {
             Built::default()
         };
-        st.wall[3] = lap(&mut clock);
-        let hash = world.hash(&phases[4]);
-        st.wall[4] = lap(&mut clock);
+        st.wall_ns[3] = lap_ns(&mut clock);
+        st.hash = world.hash(&phases[4]);
+        st.wall_ns[4] = lap_ns(&mut clock);
         st.players = world.alive() as u32;
-        st.hash = hash;
         st.claims = stepped.claims;
         st.refused = stepped.refused;
         st.stale = stepped.stale;
@@ -123,15 +142,16 @@ impl Sim {
         st.kicked = built.kicked;
         st.bytes_out = built.bytes;
         for (p, phase) in phases.iter().enumerate() {
-            (st.cpu[p], st.largest[p]) = phase.take();
+            let taken = phase.take();
+            st.cpu_ns[p] = taken.cpu_ns;
+            st.largest_task_ns[p] = taken.largest_task_ns;
         }
         world.finish();
         st
     }
 }
 
-/// The wall time since `clock`, ns, restarting it.
-fn lap(clock: &mut Instant) -> u64 {
+fn lap_ns(clock: &mut Instant) -> u64 {
     let ns = clock.elapsed().as_nanos() as u64;
     *clock = Instant::now();
     ns

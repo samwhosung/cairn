@@ -3,35 +3,49 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::mover::HEARTBEAT_MS;
 use crate::track::RUN;
 
-/// The server's refresh tiers: within this many yards, one refresh per this many ticks.
-pub const TIERS: [(f32, u32); 3] = [(25.0, 1), (50.0, 4), (f32::INFINITY, 10)];
-pub const TICK_MS: f32 = 50.0;
-/// Allowed for a claim to wait for its tick, the tick to run, and the batch to arrive, ms.
-pub const PIPE_MS: f32 = 150.0;
-/// A tier is judged by the observer's distance plus this, since both sides move between the
-/// server's measure and ours.
-pub const TIER_SLACK_YD: f32 = 10.0;
-pub const VIEW_YD: f32 = 101.0;
-/// Presence is judged only this far inside or outside the view distance: the server rechecks
-/// who is in view every 250 ms, from positions up to a heartbeat old, while both sides move.
-pub const PRESENCE_SLACK_YD: f32 = 15.0;
-/// A relayed position further than this from where its bot was at the claim's time is a lie
-/// or a corruption, yards.
-pub const EXACT_YD: f32 = 0.01;
+/// Allowed for a claim to wait for its tick, the tick to run, and its batch to arrive, ms.
+pub const CLAIM_TO_BATCH_MS: f32 = 150.0;
+pub const RELAYED_EPSILON_YD: f32 = 0.01;
 
-/// The tier a bot at `yd` yards falls in, judged loosely.
-pub fn tier(yd: f32) -> usize {
-    TIERS
-        .iter()
-        .position(|&(within, _)| yd + TIER_SLACK_YD <= within)
-        .unwrap_or(TIERS.len() - 1)
+/// What a view is held to, from the server's own replication settings.
+pub struct Limits {
+    tiers: [server::Tier; 3],
+    tick_ms: f32,
+    pub view_yd: f32,
+    /// How far inside or outside the view distance presence goes unjudged: the server rechecks
+    /// who is in view from positions a heartbeat old, while both sides move.
+    pub presence_slack_yd: f32,
+    tier_slack_yd: f32,
 }
 
-/// How far behind its bot a view may be in `tier`, yards: a run for a heartbeat, the tier's
-/// refresh period, and the pipe.
-pub fn bound_yd(tier: usize) -> f32 {
-    let period = TIERS[tier].1 as f32 * TICK_MS;
-    RUN * (HEARTBEAT_MS as f32 + period + PIPE_MS) / 1000.0
+impl Limits {
+    pub fn of_server() -> Self {
+        let view = server::View::default();
+        let tick_ms = f32::from(server::Config::default().tick_ms);
+        let both_running = 2.0 * RUN / 1000.0;
+        let heartbeat_and_pipe = HEARTBEAT_MS as f32 + CLAIM_TO_BATCH_MS;
+        let recheck_ms = view.aoi_every as f32 * tick_ms;
+        Self {
+            tiers: view.tiers,
+            tick_ms,
+            view_yd: view.radius + view.grey,
+            presence_slack_yd: both_running * (recheck_ms + heartbeat_and_pipe),
+            tier_slack_yd: both_running * heartbeat_and_pipe,
+        }
+    }
+
+    /// The tier of a bot `yd` away, taking the farther one near a border.
+    pub fn tier(&self, yd: f32) -> usize {
+        self.tiers
+            .iter()
+            .position(|t| yd + self.tier_slack_yd <= t.within)
+            .unwrap_or(self.tiers.len() - 1)
+    }
+
+    pub fn view_lag_bound_yd(&self, tier: usize) -> f32 {
+        let period = self.tiers[tier].every as f32 * self.tick_ms;
+        RUN * (HEARTBEAT_MS as f32 + period + CLAIM_TO_BATCH_MS) / 1000.0
+    }
 }
 
 /// A running maximum of a non-negative float.
@@ -48,7 +62,6 @@ impl Worst {
     }
 }
 
-/// A count and how many of those counted broke their bound, with the worst seen.
 #[derive(Default)]
 pub struct Judged {
     pub checked: AtomicU64,
@@ -66,24 +79,19 @@ impl Judged {
     }
 }
 
-/// Everything the checking bots found while the window was open.
 #[derive(Default)]
 pub struct Checks {
     pub open: AtomicBool,
-    /// Relayed positions against where their bot was at the claim's time.
-    pub exact: Judged,
-    /// A view's error the moment a refresh replaced it, by tier.
-    pub stale: [Judged; 3],
-    /// Every view's error at a sweep, by tier.
-    pub swept: [Judged; 3],
+    pub relayed_honest: Judged,
+    pub relayed_liars: Judged,
+    pub stale_by_tier: [Judged; 3],
+    pub swept_by_tier: [Judged; 3],
     pub missing: AtomicU64,
-    /// How far inside the view distance a missing bot stood, at worst, yards.
-    pub missing_depth: Worst,
+    pub missing_depth_yd: Worst,
     pub spurious: AtomicU64,
     pub unknown_moves: AtomicU64,
     pub double_appears: AtomicU64,
-    /// Frames in which a liar lied, however many claims each carried.
-    pub lies: AtomicU64,
+    pub lying_frames: AtomicU64,
     pub liar_corrections: AtomicU64,
     pub honest_corrections: AtomicU64,
 }
@@ -93,17 +101,37 @@ impl Checks {
         self.open.load(Ordering::Relaxed)
     }
 
-    pub fn missing(&self, yd: f32) {
-        self.missing.fetch_add(1, Ordering::Relaxed);
-        self.missing_depth.note(VIEW_YD - yd);
-    }
-
     pub fn count(n: &AtomicU64) {
         n.fetch_add(1, Ordering::Relaxed);
     }
 }
 
-/// Byte and message counts over every bot, and the lag of batches behind the tick clock.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Counters {
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub batches: u64,
+    pub records: u64,
+    pub claims: u64,
+    pub gaps: u64,
+    pub decode_errors: u64,
+}
+
+impl Counters {
+    pub fn since(self, before: Self) -> Self {
+        Self {
+            bytes_in: self.bytes_in - before.bytes_in,
+            bytes_out: self.bytes_out - before.bytes_out,
+            batches: self.batches - before.batches,
+            records: self.records - before.records,
+            claims: self.claims - before.claims,
+            gaps: self.gaps - before.gaps,
+            decode_errors: self.decode_errors - before.decode_errors,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct Traffic {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
@@ -114,66 +142,75 @@ pub struct Traffic {
     pub decode_errors: AtomicU64,
     pub welcomed: AtomicU64,
     pub closed: AtomicU64,
-    /// Batches by how much later than each bot's soonest batch of the window they arrived
-    /// against the tick clock, in 5 ms buckets.
-    pub lag: Box<[AtomicU64]>,
+    pub jitter: JitterHistogram,
 }
 
-pub const LAG_BUCKETS: usize = 2000;
-pub const LAG_BUCKET_MS: u32 = 5;
-
-impl Default for Traffic {
-    fn default() -> Self {
-        Self {
-            bytes_in: AtomicU64::new(0),
-            bytes_out: AtomicU64::new(0),
-            batches: AtomicU64::new(0),
-            records: AtomicU64::new(0),
-            claims: AtomicU64::new(0),
-            gaps: AtomicU64::new(0),
-            decode_errors: AtomicU64::new(0),
-            welcomed: AtomicU64::new(0),
-            closed: AtomicU64::new(0),
-            lag: (0..LAG_BUCKETS).map(|_| AtomicU64::new(0)).collect(),
+impl Traffic {
+    pub fn counters(&self) -> Counters {
+        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        Counters {
+            bytes_in: get(&self.bytes_in),
+            bytes_out: get(&self.bytes_out),
+            batches: get(&self.batches),
+            records: get(&self.records),
+            claims: get(&self.claims),
+            gaps: get(&self.gaps),
+            decode_errors: get(&self.decode_errors),
         }
     }
 }
 
-impl Traffic {
-    pub fn lag(&self, ms: u32) {
-        let b = ((ms / LAG_BUCKET_MS) as usize).min(LAG_BUCKETS - 1);
-        self.lag[b].fetch_add(1, Ordering::Relaxed);
+pub struct JitterHistogram {
+    buckets: Box<[AtomicU64]>,
+}
+
+/// Milliseconds.
+pub struct Percentiles {
+    pub p50: u32,
+    pub p99: u32,
+    pub max: u32,
+}
+
+impl Default for JitterHistogram {
+    fn default() -> Self {
+        Self {
+            buckets: (0..Self::BUCKETS).map(|_| AtomicU64::new(0)).collect(),
+        }
+    }
+}
+
+impl JitterHistogram {
+    const BUCKET_MS: u32 = 5;
+    const BUCKETS: usize = 2000;
+
+    pub fn add(&self, ms: u32) {
+        let b = ((ms / Self::BUCKET_MS) as usize).min(Self::BUCKETS - 1);
+        self.buckets[b].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Percentiles 50, 99 and 100 of the lag, ms, over the counts in `lag`.
-    pub fn lag_percentiles(lag: &[u64]) -> [u32; 3] {
-        let total: u64 = lag.iter().sum();
+    pub fn percentiles(&self) -> Percentiles {
+        let counts: Vec<u64> = self
+            .buckets
+            .iter()
+            .map(|b| b.load(Ordering::Relaxed))
+            .collect();
+        let total: u64 = counts.iter().sum();
         let at = |q: f64| {
             let want = ((total as f64) * q).ceil().max(1.0) as u64;
             let mut seen = 0;
-            lag.iter()
+            counts
+                .iter()
                 .position(|&n| {
                     seen += n;
                     seen >= want
                 })
-                .map_or(0, |b| b as u32 * LAG_BUCKET_MS)
+                .map_or(0, |b| b as u32 * Self::BUCKET_MS)
         };
-        [at(0.5), at(0.99), at(1.0)]
-    }
-
-    /// A copy of the byte and message counters, to difference two moments.
-    pub fn snapshot(&self) -> Vec<u64> {
-        [
-            &self.bytes_in,
-            &self.bytes_out,
-            &self.batches,
-            &self.records,
-            &self.claims,
-            &self.gaps,
-            &self.decode_errors,
-        ]
-        .map(|c| c.load(Ordering::Relaxed))
-        .to_vec()
+        Percentiles {
+            p50: at(0.5),
+            p99: at(0.99),
+            max: at(1.0),
+        }
     }
 }
 
@@ -183,19 +220,24 @@ mod tests {
 
     #[test]
     fn tiers_are_judged_loosely_and_bounds_grow_with_them() {
-        assert_eq!(tier(5.0), 0);
-        assert_eq!(tier(20.0), 1);
-        assert_eq!(tier(45.0), 2);
-        assert!(bound_yd(0) < bound_yd(1) && bound_yd(1) < bound_yd(2));
-        assert!((bound_yd(0) - 4.9).abs() < 1e-4);
+        let limits = Limits::of_server();
+        assert_eq!(limits.tier(5.0), 0);
+        assert_eq!(limits.tier(20.0), 1);
+        assert_eq!(limits.tier(45.0), 2);
+        let bound = |t| limits.view_lag_bound_yd(t);
+        assert!(bound(0) < bound(1) && bound(1) < bound(2));
+        assert!((bound(0) - 4.9).abs() < 1e-4);
     }
 
     #[test]
-    fn lag_percentiles_read_the_buckets() {
-        let mut lag = vec![0u64; 10];
-        lag[1] = 98;
-        lag[4] = 1;
-        lag[9] = 1;
-        assert_eq!(Traffic::lag_percentiles(&lag), [5, 20, 45]);
+    fn percentiles_read_the_buckets() {
+        let jitter = JitterHistogram::default();
+        for _ in 0..98 {
+            jitter.add(7);
+        }
+        jitter.add(21);
+        jitter.add(48);
+        let p = jitter.percentiles();
+        assert_eq!((p.p50, p.p99, p.max), (5, 20, 45));
     }
 }

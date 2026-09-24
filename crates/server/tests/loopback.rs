@@ -8,7 +8,6 @@ use protocol::{
 };
 use server::{Config, Spawn};
 
-/// What a batch said, reduced to what this test looks at.
 #[derive(Debug, PartialEq)]
 enum Got {
     Appear(u32),
@@ -76,8 +75,7 @@ impl Client {
         .collect()
     }
 
-    /// Every record of the next `ticks` batches, stopping early at the first `want`.
-    fn watch(&mut self, ticks: usize, want: impl Fn(&Got) -> bool) -> Vec<Got> {
+    fn records_until(&mut self, ticks: usize, want: impl Fn(&Got) -> bool) -> Vec<Got> {
         let mut seen = Vec::new();
         for _ in 0..ticks {
             let batch = self.batch();
@@ -113,28 +111,28 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
         .to_vec();
     let running = server::start(Config {
         spawns,
-        threads: 2,
+        tick_threads: 2,
         ..Config::default()
     })
     .expect("a server");
     let mut a = Client::join(running.addr(), "Ada");
     let mut b = Client::join(running.addr(), "Bo");
     assert_ne!(a.id, b.id);
-    let appeared = a.watch(40, |g| *g == Got::Appear(b.id));
+    let appeared = a.records_until(40, |g| *g == Got::Appear(b.id));
     assert!(appeared.contains(&Got::Appear(b.id)), "{appeared:?}");
 
     b.claim(0, 1000, [10.0, 0.0, 0.0]);
-    let seen = a.watch(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
+    let seen = a.records_until(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
     assert!(
         seen.contains(&Got::Move(b.id, [10.0, 0.0, 0.0])),
         "{seen:?}"
     );
 
     b.claim(0, 1500, [90.0, 0.0, 0.0]);
-    let own = b.watch(40, |g| matches!(g, Got::Correct(_)));
+    let own = b.records_until(40, |g| matches!(g, Got::Correct(_)));
     assert!(own.contains(&Got::Correct(1)), "{own:?}");
     b.claim(1, 1600, [10.5, 0.0, 0.0]);
-    let seen = a.watch(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
+    let seen = a.records_until(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
     assert!(
         seen.contains(&Got::Move(b.id, [10.5, 0.0, 0.0])),
         "{seen:?}"
@@ -147,7 +145,7 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
     );
 
     drop(b);
-    let seen = a.watch(40, |g| matches!(g, Got::Vanish(_)));
+    let seen = a.records_until(40, |g| matches!(g, Got::Vanish(_)));
     assert!(seen.contains(&Got::Vanish(1)), "{seen:?}");
     let summary = running.stop().expect("a clean stop");
     assert_eq!(

@@ -30,7 +30,6 @@ pub struct Jump {
     pub xy_speed: f32,
 }
 
-/// A mover at one instant, as its client reports it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Movement {
     /// The reporting client's clock, milliseconds.
@@ -49,7 +48,6 @@ pub struct Movement {
 }
 
 impl Movement {
-    /// Encoded bytes: 28, plus 4 while swimming and 16 while falling.
     pub fn encoded_len(&self) -> usize {
         let mut n = 28;
         if self.flags & flags::SWIMMING != 0 {
