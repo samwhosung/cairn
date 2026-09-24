@@ -62,9 +62,9 @@ const SCENARIOS: [Scenario; 7] = [
         },
     },
     Scenario {
-        name: "off the abbey's gallery",
+        name: "off a Stormwind canal's west quay into the water",
         at: Stand {
-            feet: [-8906.0, -189.0, 89.17],
+            feet: [-8778.0, 515.4, 97.8],
             heading_deg: 0.0,
         },
         walk: |w| hold_w(w, 150),
