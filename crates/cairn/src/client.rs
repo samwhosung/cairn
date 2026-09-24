@@ -95,3 +95,6 @@ fn character_look(look: args::Look) -> CharacterLook {
         equipment: [0; 10],
     }
 }
+
+#[cfg(test)]
+mod tests;

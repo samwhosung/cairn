@@ -1442,6 +1442,7 @@ dependencies = [
  "assert_no_alloc",
  "avian3d",
  "bevy",
+ "mpq",
  "sound",
  "world",
 ]

@@ -28,7 +28,8 @@ pub struct ChainEntry {
 
 /// The archives the client mounts, lowest priority first. A file in a later archive replaces the
 /// same path in earlier ones, and a delete marker hides it. Reads open their own file handles, so
-/// threads can read through one shared chain in parallel.
+/// threads can read through one shared chain in parallel. The default chain mounts nothing.
+#[derive(Default)]
 pub struct Chain {
     archives: Vec<Archive>,
 }

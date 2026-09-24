@@ -14,5 +14,8 @@ bevy.workspace = true
 sound = { path = "../sound" }
 world = { path = "../world" }
 
+[dev-dependencies]
+mpq = { path = "../mpq" }
+
 [lints]
 workspace = true
