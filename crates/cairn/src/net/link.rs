@@ -13,12 +13,9 @@ use protocol::{ClientMessage, Frames, Hello};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUF: usize = 64 << 10;
 
-/// What the connection hands a frame.
 pub enum Arrival {
-    /// One whole frame from the server, kind byte first.
     Frame(Vec<u8>),
-    /// The connection is over, and why.
-    Gone(String),
+    Gone { reason: String },
 }
 
 pub struct Link {
@@ -28,7 +25,8 @@ pub struct Link {
 }
 
 impl Link {
-    /// Connects to `addr` and says `hello` first; what arrives waits for [`Link::arrivals`].
+    /// Returns at once and connects on a thread of its own, `hello` first; what arrives, a failed
+    /// connect included, waits for [`Link::arrivals`].
     pub fn open(addr: SocketAddr, hello: Hello) -> Self {
         let (out, to_send) = mpsc::channel();
         let (arrived, arrivals) = mpsc::channel();
@@ -36,10 +34,11 @@ impl Link {
         let (held, gone) = (stream.clone(), arrived.clone());
         let spawned = thread::Builder::new().name("net".into()).spawn(move || {
             let reason = run(addr, &hello, &held, to_send, &arrived);
-            let _ = arrived.send(Arrival::Gone(reason));
+            let _ = arrived.send(Arrival::Gone { reason });
         });
         if let Err(e) = spawned {
-            let _ = gone.send(Arrival::Gone(format!("no thread for the connection: {e}")));
+            let reason = format!("no thread for the connection: {e}");
+            let _ = gone.send(Arrival::Gone { reason });
         }
         Self {
             out,

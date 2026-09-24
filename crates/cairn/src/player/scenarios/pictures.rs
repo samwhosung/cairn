@@ -16,13 +16,13 @@ use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::time::TimeUpdateStrategy;
 use world::collision::{CollisionPlugin, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
+use super::walker::time_update;
 use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::state::Player;
@@ -84,8 +84,8 @@ impl Painter {
         Some(painter)
     }
 
-    /// A painter that joins `server` and stands where its welcome places it, near `feet`, on the
-    /// wall clock the server ticks by. It is not yet settled.
+    /// A painter joining `server`, at `feet` until its welcome places it. It is not yet welcomed
+    /// or settled.
     pub(super) fn joined(
         server: SocketAddr,
         feet: [f32; 3],
@@ -118,11 +118,7 @@ impl Painter {
             .insert_resource(map)
             .insert_resource(tables)
             .insert_resource(TimeOfDay { minute: 12 * 60 })
-            .insert_resource(if net.is_some() {
-                TimeUpdateStrategy::Automatic
-            } else {
-                TimeUpdateStrategy::ManualDuration(STEP)
-            })
+            .insert_resource(time_update(net.is_some(), STEP))
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {

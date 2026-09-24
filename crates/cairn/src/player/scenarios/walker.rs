@@ -34,9 +34,23 @@ pub struct Frame {
 pub struct Walker {
     pub app: App,
     step: Duration,
-    /// For a walker that has joined a server: the wall-clock time of its first paced frame and
-    /// how many it has run, so the server's clock and its own keep in step.
-    paced: Option<(Instant, u32)>,
+    paced: Option<Pace>,
+}
+
+/// A joined walker's frames kept to the wall clock, so that its own clock and the server's agree.
+struct Pace {
+    first: Instant,
+    frames: u32,
+}
+
+/// A client that has joined a server keeps the wall clock the server ticks by, as a window does;
+/// one alone steps by `step`.
+pub fn time_update(joined: bool, step: Duration) -> TimeUpdateStrategy {
+    if joined {
+        TimeUpdateStrategy::Automatic
+    } else {
+        TimeUpdateStrategy::ManualDuration(step)
+    }
 }
 
 impl Walker {
@@ -65,20 +79,20 @@ impl Walker {
         Some(walker)
     }
 
-    /// [`Walker::joined`], but not yet settled or paced. Its clocks are the wall clock's, as a
-    /// window's are, for the server ticks by it.
+    /// [`Walker::joined`], but not yet settled or paced.
     pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
         let hello = crate::net::hello(name.to_owned(), &look);
         let net = Net::connect(server, hello);
         Self::build("Azeroth", [0.0; 3], 0.0, hz, None, Some(net))
     }
 
-    /// From now on each frame waits for its time on the wall clock.
     pub fn pace(&mut self) {
-        self.paced = Some((Instant::now(), 0));
+        self.paced = Some(Pace {
+            first: Instant::now(),
+            frames: 0,
+        });
     }
 
-    /// The body is let go and the collision around it is resident.
     pub fn settled(&self) -> bool {
         !self.player().settling && self.app.world().resource::<CollisionResidency>().settled()
     }
@@ -110,11 +124,7 @@ impl Walker {
             .init_asset::<StandardMaterial>()
             .add_plugins(world::LoadersPlugin)
             .insert_resource(current)
-            .insert_resource(if net.is_some() {
-                TimeUpdateStrategy::Automatic
-            } else {
-                TimeUpdateStrategy::ManualDuration(step)
-            })
+            .insert_resource(time_update(net.is_some(), step))
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
@@ -138,15 +148,14 @@ impl Walker {
             paced: None,
         };
         if joining {
-            walker.welcome();
+            walker.await_welcome();
         } else {
             walker.settle();
         }
         Some(walker)
     }
 
-    /// Updates until the server's welcome has placed the body.
-    fn welcome(&mut self) {
+    fn await_welcome(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while self.net().is_none_or(|n| n.welcome().is_none()) {
             assert!(Instant::now() < deadline, "no welcome from the server");
@@ -253,10 +262,10 @@ impl Walker {
     pub fn run(&mut self, n: usize) -> Vec<Frame> {
         (0..n)
             .map(|_| {
-                if let Some((first, frames)) = &mut self.paced {
-                    let due = *first + self.step * *frames;
+                if let Some(pace) = &mut self.paced {
+                    let due = pace.first + self.step * pace.frames;
                     std::thread::sleep(due.saturating_duration_since(Instant::now()));
-                    *frames += 1;
+                    pace.frames += 1;
                 }
                 self.app.update();
                 let p = self.player();

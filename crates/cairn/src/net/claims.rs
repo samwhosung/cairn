@@ -12,7 +12,6 @@ use world::coords::{bevy_to_wow, wow_to_bevy};
 use super::Net;
 use crate::player::{Mode, Player};
 
-/// What a joined window's claims carry from frame to frame.
 pub struct Claims {
     cadence: Cadence,
     ack: u32,
@@ -48,8 +47,6 @@ impl Claims {
     }
 }
 
-/// The player's movement this frame as a claim carries it; a body the window flies away from
-/// stands still.
 pub fn movement_of(
     player: &Player,
     flying: bool,

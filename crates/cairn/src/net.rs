@@ -1,12 +1,10 @@
-//! Playing with others: the connection to a server, the welcome that places the player, the
-//! player's claims and the server's corrections, the other players in view, and the window that
-//! goes on alone when its server goes.
+//! Playing with others through a server; the window plays on alone when its server goes.
 
 mod claims;
 mod link;
+mod others;
 mod relay;
 mod remote;
-mod units;
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -24,19 +22,17 @@ use crate::args::Join;
 use crate::player::{CameraRig, Player};
 use claims::Claims;
 use link::{Arrival, Link};
+use others::{BatchContext, Others};
+#[cfg(test)]
+pub use others::{Faults, OtherPlayer};
 #[cfg(test)]
 pub use remote::RemoteMotion;
-#[cfg(test)]
-pub use units::{Faults, Remote};
-use units::{Others, Stamp};
 
-/// Yards between the places a host sets its players, across its own heading.
-const SPAWN_SPACING: f32 = 2.5;
+const SPAWN_SPACING_YD: f32 = 2.5;
 const SPAWNS: usize = 16;
-/// How often the window tells the server which tick it has taken in.
 const SEEN_EVERY: Duration = Duration::from_millis(500);
 
-/// The window's part in a shared world: its connection, and the server when the window hosts it.
+/// Present while the window plays with others; removed when its server goes.
 #[derive(Resource)]
 pub struct Net {
     link: Link,
@@ -49,7 +45,7 @@ pub struct Net {
 }
 
 impl Net {
-    /// Joins the server at `addr` as `hello` says.
+    /// Returns at once; the welcome, or why the connection failed, arrives in later frames.
     pub fn connect(addr: SocketAddr, hello: Hello) -> Self {
         Self {
             link: Link::open(addr, hello),
@@ -62,8 +58,8 @@ impl Net {
         }
     }
 
-    /// Serves the world on `map` from this process, setting players beside `start` (WoW
-    /// coordinates) along `heading`, and joins it.
+    /// Serves `map` in-process on 127.0.0.1:`port` and joins it; players stand beside `start` (WoW
+    /// coordinates), facing `heading`.
     pub fn host(
         port: u16,
         map: u32,
@@ -86,8 +82,7 @@ impl Net {
         })
     }
 
-    /// Where the hosted server listens.
-    pub fn hosting(&self) -> Option<SocketAddr> {
+    pub fn hosted_addr(&self) -> Option<SocketAddr> {
         self.hosted.as_ref().map(server::Running::addr)
     }
 
@@ -96,13 +91,11 @@ impl Net {
         self.welcomed.as_ref()
     }
 
-    /// How often the server has put the player back.
     #[cfg(test)]
     pub fn corrections(&self) -> u32 {
         self.claims.as_ref().map_or(0, |c| c.corrections)
     }
 
-    /// Claims sent so far.
     #[cfg(test)]
     pub fn claims_sent(&self) -> u32 {
         self.claims.as_ref().map_or(0, |c| c.sent)
@@ -114,7 +107,6 @@ impl Net {
     }
 }
 
-/// The hello a window sends: its name and the look it walks in.
 pub fn hello(name: String, look: &CharacterLook) -> Hello {
     Hello {
         version: VERSION,
@@ -132,7 +124,6 @@ pub fn hello(name: String, look: &CharacterLook) -> Hello {
     }
 }
 
-/// Joins as `join` says, starting from where the window would have started alone.
 pub fn join(
     app: &mut App,
     join: Join,
@@ -149,8 +140,6 @@ pub fn join(
     Ok(())
 }
 
-/// Takes in what the server sends and moves the other players before the frame's movement runs,
-/// and claims the movement after it.
 pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
@@ -166,7 +155,7 @@ impl Plugin for NetPlugin {
         )
         .add_systems(
             Update,
-            (units::dress_remotes, units::fade_leaving).before(UnitSystems),
+            (others::dress_remotes, others::fade_leaving).before(UnitSystems),
         )
         .add_systems(PostUpdate, claims::claim.run_if(resource_exists::<Net>));
     }
@@ -190,7 +179,7 @@ fn receive(
     for arrival in net.link.arrivals() {
         let frame = match arrival {
             Arrival::Frame(frame) => frame,
-            Arrival::Gone(reason) => return alone(&mut commands, &mut net, reason),
+            Arrival::Gone { reason } => return alone(&mut commands, &mut net, reason),
         };
         match ServerMessage::read(&frame) {
             Ok(ServerMessage::Welcome(w)) if w.map != map.id => {
@@ -206,7 +195,7 @@ fn receive(
                     rig.yaw = w.spawn.facing;
                 }
                 info!("joined as {} at {:?}", w.id, w.spawn.pos);
-                if let Some(addr) = net.hosting() {
+                if let Some(addr) = net.hosted_addr() {
                     info!("hosting: others join with --connect {addr}");
                 }
                 net.claims = Some(Claims::new(&w.spawn));
@@ -215,11 +204,11 @@ fn receive(
             Ok(ServerMessage::Batch(batch)) => {
                 net.latest_tick = Some(batch.tick);
                 let tick_ms = net.welcomed.map_or(0, |w| u32::from(w.tick_ms));
-                let at = Stamp {
-                    wire_ms: batch.tick.wrapping_mul(tick_ms),
-                    me: bevy_to_wow(player.pos),
-                    now_ms: real.elapsed_secs_f64() * 1000.0,
-                    now_secs: time.elapsed_secs(),
+                let at = BatchContext {
+                    server_ms: batch.tick.wrapping_mul(tick_ms),
+                    own_pos: bevy_to_wow(player.pos),
+                    real_ms: real.elapsed_secs_f64() * 1000.0,
+                    frame_secs: time.elapsed_secs(),
                 };
                 for record in batch {
                     match record {
@@ -246,7 +235,7 @@ fn receive(
             }
         }
     }
-    let now = time.elapsed();
+    let now = real.elapsed();
     if let Some(tick) = net.latest_tick
         && now.saturating_sub(net.seen_at) >= SEEN_EVERY
     {
@@ -265,12 +254,11 @@ fn place(player: &mut Player, welcome: &Welcome) {
     player.settling = true;
 }
 
-/// The host's start, then places either side of it in turn, further out each pair.
 fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {
     let right = [ops::sin(heading), -ops::cos(heading)];
     (0..SPAWNS)
         .map(|i| {
-            let out = (i as f32 / 2.0).ceil() * SPAWN_SPACING;
+            let out = (i as f32 / 2.0).ceil() * SPAWN_SPACING_YD;
             let side = if i % 2 == 1 { out } else { -out };
             Spawn {
                 pos: [
@@ -295,11 +283,11 @@ mod tests {
         assert_eq!(spawns.len(), SPAWNS);
         assert!(west_of_start(0).abs() < 1e-4 && (spawns[0].pos[0] - 100.0).abs() < 1e-4);
         assert!(
-            (west_of_start(1) + SPAWN_SPACING).abs() < 1e-4,
+            (west_of_start(1) + SPAWN_SPACING_YD).abs() < 1e-4,
             "facing north, right is east"
         );
-        assert!((west_of_start(2) - SPAWN_SPACING).abs() < 1e-4);
-        assert!((west_of_start(3) + 2.0 * SPAWN_SPACING).abs() < 1e-4);
+        assert!((west_of_start(2) - SPAWN_SPACING_YD).abs() < 1e-4);
+        assert!((west_of_start(3) + 2.0 * SPAWN_SPACING_YD).abs() < 1e-4);
         assert!(
             spawns
                 .iter()

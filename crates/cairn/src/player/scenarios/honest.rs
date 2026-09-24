@@ -1,6 +1,3 @@
-//! The real mover walking the scenarios while it claims every step to a server that checks them:
-//! the server never has cause to put an honest client back.
-
 use bevy::input::keyboard::KeyCode;
 use server::{Config, Running, Spawn, Why};
 use world::unit::CharacterLook;
@@ -12,16 +9,21 @@ use super::{
 
 const HZ: f32 = 60.0;
 
-/// A server on one thread of its own that sets its players at `spawns` in turn.
-pub fn serve(spawns: &[([f32; 3], f32)]) -> Running {
+#[derive(Clone, Copy, Debug)]
+pub struct Stand {
+    pub feet: [f32; 3],
+    pub heading_deg: f32,
+}
+
+pub fn serve(stands: &[Stand]) -> Running {
     server::start(Config {
         tick_threads: 1,
         io_threads: 1,
-        spawns: spawns
+        spawns: stands
             .iter()
-            .map(|&(pos, heading_deg)| Spawn {
-                pos,
-                facing: heading_deg.to_radians(),
+            .map(|s| Spawn {
+                pos: s.feet,
+                facing: s.heading_deg.to_radians(),
             })
             .collect(),
         ..Config::default()
@@ -31,8 +33,7 @@ pub fn serve(spawns: &[([f32; 3], f32)]) -> Running {
 
 struct Scenario {
     name: &'static str,
-    feet: [f32; 3],
-    heading_deg: f32,
+    at: Stand,
     walk: fn(&mut Walker),
 }
 
@@ -52,30 +53,38 @@ const INN_WALL_START: [f32; 3] = {
 const SCENARIOS: [Scenario; 7] = [
     Scenario {
         name: "the abbey stairs",
-        feet: [-8908.6, -190.5, 82.5],
-        heading_deg: 270.0,
+        at: Stand {
+            feet: [-8908.6, -190.5, 82.5],
+            heading_deg: 270.0,
+        },
         walk: |w| {
             walk_path(w, &ABBEY_STAIRS, HZ, 8.0);
         },
     },
     Scenario {
         name: "off the abbey's gallery",
-        feet: [-8906.0, -189.0, 89.17],
-        heading_deg: 0.0,
+        at: Stand {
+            feet: [-8906.0, -189.0, 89.17],
+            heading_deg: 0.0,
+        },
         walk: |w| hold_w(w, 150),
     },
     Scenario {
         name: "a hundred and fifty yards down to the meadow",
-        feet: [MEADOW[0], MEADOW[1], 59.86 + 150.0],
-        heading_deg: 0.0,
+        at: Stand {
+            feet: [MEADOW[0], MEADOW[1], 59.86 + 150.0],
+            heading_deg: 0.0,
+        },
         walk: |w| {
             w.run(330);
         },
     },
     Scenario {
         name: "the canal swim",
-        feet: [CANAL_RAMP[0], CANAL_RAMP[1], 95.38],
-        heading_deg: DOWN_THE_RAMP,
+        at: Stand {
+            feet: [CANAL_RAMP[0], CANAL_RAMP[1], 95.38],
+            heading_deg: DOWN_THE_RAMP,
+        },
         walk: |w| {
             w.press(KeyCode::KeyW);
             w.run(120);
@@ -88,8 +97,10 @@ const SCENARIOS: [Scenario; 7] = [
     },
     Scenario {
         name: "Crystal Lake",
-        feet: [SHORE[0], SHORE[1], 59.87],
-        heading_deg: 180.0,
+        at: Stand {
+            feet: [SHORE[0], SHORE[1], 59.87],
+            heading_deg: 180.0,
+        },
         walk: |w| {
             w.press(KeyCode::KeyW);
             w.run(300);
@@ -99,14 +110,18 @@ const SCENARIOS: [Scenario; 7] = [
     },
     Scenario {
         name: "along the inn's wall",
-        feet: INN_WALL_START,
-        heading_deg: 218.0,
+        at: Stand {
+            feet: INN_WALL_START,
+            heading_deg: 218.0,
+        },
         walk: |w| hold_w(w, 72),
     },
     Scenario {
         name: "up a steep bank",
-        feet: [HILLSIDE[0], HILLSIDE[1], 98.26],
-        heading_deg: 311.9,
+        at: Stand {
+            feet: [HILLSIDE[0], HILLSIDE[1], 98.26],
+            heading_deg: 311.9,
+        },
         walk: |w| hold_w(w, 300),
     },
 ];
@@ -115,7 +130,7 @@ const SCENARIOS: [Scenario; 7] = [
 fn an_honest_client_walking_the_scenarios_is_never_put_back() {
     let mut refused = Vec::new();
     for walk in &SCENARIOS {
-        let server = serve(&[(walk.feet, walk.heading_deg)]);
+        let server = serve(&[walk.at]);
         let look = CharacterLook::naked(1, 0);
         let Some(mut w) = Walker::joined(server.addr(), "Walker", look, HZ) else {
             return;

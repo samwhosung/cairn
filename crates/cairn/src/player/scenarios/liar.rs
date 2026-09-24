@@ -1,6 +1,3 @@
-//! A client that claims three times its speed beside a real one: the server puts the liar back
-//! each time, and the real client never sees it anywhere an honest runner could not have been.
-
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
@@ -15,19 +12,17 @@ use world::unit::CharacterLook;
 use super::MEADOW;
 use super::pair::{BOUND_ACROSS, HZ, copy_of};
 use super::walker::Walker;
+use crate::player::state::RUN_SPEED;
 
-const RUN: f32 = 7.0;
 const LIE: f32 = 3.0;
 
-/// Runs north claiming `LIE` times the ground it covers, every `every` of its own clock, and
-/// takes each correction it is sent.
 struct Liar {
     stream: TcpStream,
     frames: Frames,
     id: u32,
     ack: u32,
-    /// Where the server last put it, and when on its clock.
-    anchor: ([f32; 3], u32),
+    anchor_pos: [f32; 3],
+    anchor_ms: u32,
     started: Instant,
     every: Duration,
     next: Duration,
@@ -54,7 +49,8 @@ impl Liar {
             frames: Frames::default(),
             id: u32::MAX,
             ack: 0,
-            anchor: ([0.0; 3], 0),
+            anchor_pos: [0.0; 3],
+            anchor_ms: 0,
             started: Instant::now(),
             every,
             next: Duration::ZERO,
@@ -88,13 +84,13 @@ impl Liar {
             match ServerMessage::read(frame).expect("a message") {
                 ServerMessage::Welcome(w) => {
                     self.id = w.id;
-                    self.anchor = (w.spawn.pos, now);
+                    (self.anchor_pos, self.anchor_ms) = (w.spawn.pos, now);
                 }
                 ServerMessage::Batch(batch) => {
                     for record in batch {
                         if let Ok(Record::Correct { seq, movement }) = record {
                             self.ack = seq;
-                            self.anchor = (movement.pos, now);
+                            (self.anchor_pos, self.anchor_ms) = (movement.pos, now);
                             self.corrections += 1;
                         }
                     }
@@ -110,8 +106,8 @@ impl Liar {
         }
         self.next = now + self.every;
         let t = self.now_ms();
-        let ([x, y, z], since) = self.anchor;
-        let run = LIE * RUN * t.saturating_sub(since) as f32 / 1000.0;
+        let [x, y, z] = self.anchor_pos;
+        let run = LIE * RUN_SPEED * t.saturating_sub(self.anchor_ms) as f32 / 1000.0;
         let mut bytes = Vec::new();
         ClientMessage::Claim(Claim {
             ack: self.ack,
@@ -129,9 +125,7 @@ impl Liar {
 
 struct Seen {
     corrections: u32,
-    /// How much further from where it started the real client saw the liar than an honest
-    /// runner could have been, at the worst.
-    beyond_honest: f32,
+    worst_past_honest_reach: f32,
 }
 
 fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
@@ -161,14 +155,14 @@ fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
         honest.run(1);
         if let Some((seen, _)) = copy_of(&mut honest, liar.id) {
             let t = begun.elapsed().as_secs_f32();
-            let honest_reach = RUN * 1.1 * t + 0.5 + BOUND_ACROSS;
+            let honest_reach = RUN_SPEED * 1.1 * t + 0.5 + BOUND_ACROSS;
             let off = (seen[0] - from[0]).hypot(seen[1] - from[1]);
             beyond = beyond.max(off - honest_reach);
         }
     }
     Some(Seen {
         corrections: liar.corrections,
-        beyond_honest: beyond,
+        worst_past_honest_reach: beyond,
     })
 }
 
@@ -182,9 +176,12 @@ fn a_client_claiming_three_times_its_speed_is_put_back_and_never_seen_to_lie() {
     for (what, s) in [("checked", &checked), ("unchecked", &unchecked)] {
         eprintln!(
             "a liar {what}: {} corrections, seen {:+.2} yd past an honest runner's reach",
-            s.corrections, s.beyond_honest
+            s.corrections, s.worst_past_honest_reach
         );
     }
-    assert!(checked.corrections > 0 && checked.beyond_honest <= 0.0);
-    assert!(unchecked.beyond_honest > 0.0, "the control saw no lie");
+    assert!(checked.corrections > 0 && checked.worst_past_honest_reach <= 0.0);
+    assert!(
+        unchecked.worst_past_honest_reach > 0.0,
+        "the control saw no lie"
+    );
 }

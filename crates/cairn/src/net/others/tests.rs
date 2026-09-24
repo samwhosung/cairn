@@ -26,8 +26,8 @@ fn a_move_mid_arc_keeps_the_relayed_launch_and_counts_its_fall_on_the_servers_cl
     let e = Entity::PLACEHOLDER;
     let leaping = state(flags::FALLING | flags::FORWARD, [9000.0, -100.0, 50.0], 200);
     let mut r = Relayed::of(e, &leaping, 1000, [9010.0, -90.0, 50.0]);
-    assert!((r.position[0] - 9000.0).abs() < 0.01 && (r.position[1] + 100.0).abs() < 0.01);
-    r.position = [9003.0, -100.0, 51.0];
+    assert!((r.wow_pos[0] - 9000.0).abs() < 0.01 && (r.wow_pos[1] + 100.0).abs() < 0.01);
+    r.wow_pos = [9003.0, -100.0, 51.0];
     let mv = r.relay_move(1500);
     assert_eq!(
         (mv.fall_time, mv.flags),
@@ -43,21 +43,21 @@ fn a_move_mid_arc_keeps_the_relayed_launch_and_counts_its_fall_on_the_servers_cl
     assert_eq!((landed.relay_move(1600).fall_time, landed.jump), (0, None));
 }
 
-fn take(app: &mut App, others: &mut Others, record: Record<'_>, wire_ms: u32, now_ms: f64) {
-    let at = Stamp {
-        wire_ms,
-        me: [100.0, 50.0, 10.0],
-        now_ms,
-        now_secs: app.world().resource::<Time>().elapsed_secs(),
+fn take(app: &mut App, others: &mut Others, record: Record<'_>, server_ms: u32, real_ms: f64) {
+    let at = BatchContext {
+        server_ms,
+        own_pos: [100.0, 50.0, 10.0],
+        real_ms,
+        frame_secs: app.world().resource::<Time>().elapsed_secs(),
     };
     others.take(&mut app.world_mut().commands(), record, &at);
     app.world_mut().flush();
 }
 
-fn remotes(app: &mut App) -> Vec<(Remote, [f32; 3], u32)> {
+fn remotes(app: &mut App) -> Vec<(OtherPlayer, [f32; 3], u32)> {
     let world = app.world_mut();
     world
-        .query::<(&Remote, &RemoteMotion)>()
+        .query::<(&OtherPlayer, &RemoteMotion)>()
         .iter(world)
         .map(|(r, m)| (r.clone(), m.wow_pos, m.flags))
         .collect()

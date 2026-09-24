@@ -77,12 +77,12 @@ fn main() -> AppExit {
 }
 
 fn join(app: &mut App, args: &args::Args, map: u32) -> Result<(), String> {
-    let (Some(join), Some(name)) = (args.join, args.name.clone()) else {
+    let Some(joining) = &args.join else {
         return Ok(());
     };
-    let hello = net::hello(name, &client::character_look(args.look));
+    let hello = net::hello(joining.name.clone(), &client::character_look(args.look));
     let start = args.pose.target.to_array();
-    net::join(app, join, hello, map, start, args.pose.heading)
+    net::join(app, joining.how, hello, map, start, args.pose.heading)
 }
 
 fn check_look_offered(tables: &CharacterTables, look: args::Look) -> Result<(), String> {

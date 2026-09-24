@@ -1,17 +1,17 @@
 use crate::{Jump, Movement, flags};
 
-/// How long a moving client goes without a claim before it claims anyway, milliseconds.
+/// How long a client with any movement flag set goes without a claim before it claims anyway,
+/// milliseconds.
 pub const HEARTBEAT_MS: u32 = 500;
 
-/// The flags under which a body moves every frame, so that its position changing is no news.
 const IN_MOTION: u32 = flags::ANY_MOVE | flags::FALLING | flags::FALLING_FAR | flags::SWIMMING;
 
 /// When a client's movement goes out as claims, frame by frame, as the 1.12 client sends it: one
-/// claim for each movement flag that changes, where the direction keys go quiet mid-air unless a
-/// standing jump's one steer changes the arc; one for a jump's launch and one for any landing;
-/// one for each frame the facing moves off the turn keys; a heartbeat once [`HEARTBEAT_MS`] pass
-/// without a claim while any flag is set; and one when a body at rest is no longer where it last
-/// claimed to be.
+/// claim for each of forward/back, strafe, turn, walk and swim that changes, where the direction
+/// keys go quiet mid-air unless a standing jump's one steer changes the arc; one for a jump's
+/// launch and one for any landing; one for each frame the facing moves off the turn keys; a
+/// heartbeat once [`HEARTBEAT_MS`] pass without a claim while any flag is set; and one when a body
+/// at rest is no longer where it last claimed to be.
 #[derive(Clone, Debug)]
 pub struct Cadence {
     flags: u32,

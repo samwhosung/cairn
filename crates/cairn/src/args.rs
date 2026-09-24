@@ -100,12 +100,15 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
-    pub join: Option<Join>,
-    /// Who the others see; `None` outside a join.
-    pub name: Option<String>,
+    pub join: Option<Joining>,
 }
 
-/// How the window joins others.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Joining {
+    pub how: Join,
+    pub name: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Join {
     Connect(SocketAddr),
@@ -233,7 +236,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, shot)?;
-    let (join, name) = join(&mut given, host, look, shot)?;
+    let join = join(&mut given, host, look, shot)?;
     Ok(Args {
         pose: pose(&given)?,
         size,
@@ -247,7 +250,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         world_age,
         look,
         join,
-        name,
     })
 }
 
@@ -264,7 +266,7 @@ fn join(
     host: Option<u16>,
     look: Look,
     shot: bool,
-) -> Result<(Option<Join>, Option<String>), String> {
+) -> Result<Option<Joining>, String> {
     let connect = given.remove("connect");
     if shot && (connect.is_some() || host.is_some()) {
         return Err("--connect and --host are for the window".into());
@@ -283,16 +285,15 @@ fn join(
             .map(Some)?,
         (None, host) => host.map(Join::Host),
     };
-    let name = match (given.remove("name"), join) {
-        (Some(_), None) => return Err("--name is for joining: --connect or --host".into()),
-        (Some(name), Some(_)) if name.trim().is_empty() => {
-            return Err("--name wants a name".into());
-        }
-        (Some(name), Some(_)) => Some(name.trim().to_owned()),
-        (None, Some(_)) => Some(look.race_title()),
-        (None, None) => None,
-    };
-    Ok((join, name))
+    match (given.remove("name"), join) {
+        (Some(_), None) => Err("--name is for joining: --connect or --host".into()),
+        (Some(name), Some(_)) if name.trim().is_empty() => Err("--name wants a name".into()),
+        (name, Some(how)) => Ok(Some(Joining {
+            how,
+            name: name.map_or_else(|| look.race_title(), |n| n.trim().to_owned()),
+        })),
+        (None, None) => Ok(None),
+    }
 }
 
 fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String> {
@@ -556,18 +557,27 @@ mod tests {
 
     #[test]
     fn a_window_joins_by_address_or_hosts_on_a_port_as_its_race_unless_named() {
-        let args = parsed("").expect("parses");
-        assert_eq!((args.join, args.name), (None, None));
-        let args = parsed("--connect 127.0.0.1:7000 --race orc").expect("parses");
+        let joining = |line: &str| parsed(line).expect("parses").join;
+        let as_ = |how, name: &str| {
+            Some(Joining {
+                how,
+                name: name.into(),
+            })
+        };
+        assert_eq!(joining(""), None);
         let addr = SocketAddr::from(([127, 0, 0, 1], 7000));
-        assert_eq!(args.join, Some(Join::Connect(addr)));
-        assert_eq!(args.name.as_deref(), Some("Orc"));
-        let args = parsed("--host --name Brother").expect("parses");
-        assert_eq!(args.join, Some(Join::Host(DEFAULT_PORT)));
-        assert_eq!(args.name.as_deref(), Some("Brother"));
-        let args = parsed("--race 7 --host 7100").expect("parses");
-        assert_eq!(args.join, Some(Join::Host(7100)));
-        assert_eq!(args.name.as_deref(), Some("Gnome"));
+        assert_eq!(
+            joining("--connect 127.0.0.1:7000 --race orc"),
+            as_(Join::Connect(addr), "Orc")
+        );
+        assert_eq!(
+            joining("--host --name Brother"),
+            as_(Join::Host(DEFAULT_PORT), "Brother")
+        );
+        assert_eq!(
+            joining("--race 7 --host 7100"),
+            as_(Join::Host(7100), "Gnome")
+        );
     }
 
     #[test]

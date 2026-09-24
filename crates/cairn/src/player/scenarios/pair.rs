@@ -1,7 +1,4 @@
-//! Two clients and a server in one process, each walking a scripted path: at every frame each
-//! one's copy of the other stays within what the wire allows of where the other really is, a
-//! copy at rest stands and faces where its player does to the wire's step, and a player who
-//! leaves goes from the other's view.
+//! Two clients and a server in one process, each judging its copy of the other every frame.
 
 use std::f32::consts::{PI, TAU};
 
@@ -9,38 +6,35 @@ use bevy::input::keyboard::KeyCode;
 use world::unit::CharacterLook;
 
 use super::MEADOW;
-use super::honest::serve;
+use super::honest::{Stand, serve};
 use super::walker::Walker;
-use crate::net::{Faults, Remote, RemoteMotion};
-use crate::player::state::GRAVITY;
+use crate::net::{Faults, OtherPlayer, RemoteMotion};
+use crate::player::state::{GRAVITY, RUN_SPEED};
 
 pub const HZ: f32 = 60.0;
 /// The wait for a tick, the batch's building and delivery, the watcher's frame and its replay
-/// buffer, s.
-const PIPE: f32 = 0.15;
-/// The near tier's refresh period, s.
-const TIER: f32 = 0.05;
-const HEARTBEAT: f32 = 0.5;
-const RUN: f32 = 7.0;
-/// Across, a copy dead-reckoned from what it last heard is off by at most the largest change of
-/// velocity it hears late, a reversal, for as long as it takes to hear it.
-pub const BOUND_ACROSS: f32 = 2.0 * RUN * (PIPE + TIER) + STEP_ACROSS;
+/// buffer.
+const CLAIM_TO_VIEW_SECS: f32 = 0.15;
+const NEAR_TIER_SECS: f32 = 0.05;
+const HEARTBEAT_SECS: f32 = protocol::HEARTBEAT_MS as f32 / 1000.0;
+const HEARD_LATE_SECS: f32 = CLAIM_TO_VIEW_SECS + NEAR_TIER_SECS;
+const REVERSAL: f32 = 2.0 * RUN_SPEED;
+pub const BOUND_ACROSS: f32 = REVERSAL * HEARD_LATE_SECS + STEP_ACROSS;
 /// Up, a fall without a jump is heard only at the next heartbeat.
 pub const BOUND_UP: f32 =
-    0.5 * GRAVITY * (HEARTBEAT + PIPE + TIER) * (HEARTBEAT + PIPE + TIER) + STEP_UP;
+    0.5 * GRAVITY * (HEARTBEAT_SECS + HEARD_LATE_SECS) * (HEARTBEAT_SECS + HEARD_LATE_SECS)
+        + STEP_UP;
 const STEP_ACROSS: f32 = 1.0 / 128.0;
 const STEP_UP: f32 = 1.0 / 32.0;
 const STEP_FACING: f32 = TAU / 256.0;
-/// Frames a player must have stood still before its copy is held to the wire's step.
-const AT_REST: u32 = 30;
+const REST_FRAMES: u32 = 30;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Act {
     Press(KeyCode),
     Release(KeyCode),
     Aim(f32),
-    /// Turns the aim this many degrees a frame, as a dragged mouse does, until told otherwise.
-    Turn(f32),
+    Turn { deg_per_frame: f32 },
     Pitch(f32),
 }
 
@@ -50,14 +44,13 @@ pub struct Script {
 }
 
 impl Script {
-    /// Plays the acts due at `frame` of `acts`, then this frame's turn.
     pub fn frame(&mut self, w: &mut Walker, acts: &[(u32, Act)], frame: u32) {
         for &(_, act) in acts.iter().filter(|(at, _)| *at == frame) {
             match act {
                 Act::Press(k) => w.press(k),
                 Act::Release(k) => w.release(k),
                 Act::Aim(deg) => w.aim(deg),
-                Act::Turn(deg) => self.turn = deg,
+                Act::Turn { deg_per_frame } => self.turn = deg_per_frame,
                 Act::Pitch(deg) => w.pitch(deg),
             }
         }
@@ -68,7 +61,6 @@ impl Script {
     }
 }
 
-/// One side's view of the other, judged every frame.
 #[derive(Debug, Default)]
 pub struct Watch {
     pub frames: u32,
@@ -88,7 +80,7 @@ pub struct Watch {
 pub fn copy_of(observer: &mut Walker, id: u32) -> Option<([f32; 3], f32)> {
     let world = observer.app.world_mut();
     world
-        .query::<(&Remote, &RemoteMotion)>()
+        .query::<(&OtherPlayer, &RemoteMotion)>()
         .iter(world)
         .find(|(r, _)| r.id == id)
         .map(|(_, m)| (m.wow_pos, m.orientation))
@@ -122,7 +114,7 @@ impl Watch {
         if across > BOUND_ACROSS || up > BOUND_UP {
             self.over += 1;
         }
-        if self.still >= AT_REST {
+        if self.still >= REST_FRAMES {
             self.rest_frames += 1;
             self.rest_across = self.rest_across.max(across);
             self.rest_up = self.rest_up.max(up);
@@ -160,30 +152,37 @@ impl Watch {
     }
 }
 
-/// A place both walk: where each stands, the script, how many frames later B starts it, and
-/// how long it all runs.
 pub struct Place {
     pub name: &'static str,
-    pub a: ([f32; 3], f32),
-    pub b: ([f32; 3], f32),
+    pub a: Stand,
+    pub b: Stand,
     pub acts: &'static [(u32, Act)],
     pub delay_b: u32,
     pub frames: u32,
 }
 
-/// Runs, turns by mouse and by key, strafes both ways, backs up, jumps running and standing,
-/// and walks, on open meadow.
 pub const MEADOW_WALK: Place = Place {
-    name: "the meadow",
-    a: ([MEADOW[0], MEADOW[1], 59.86], 0.0),
-    b: ([MEADOW[0], MEADOW[1] - 2.5, 59.86], 0.0),
+    name: "runs, turns by mouse and by key, strafes, backs up, jumps and walks on open meadow",
+    a: Stand {
+        feet: [MEADOW[0], MEADOW[1], 59.86],
+        heading_deg: 0.0,
+    },
+    b: Stand {
+        feet: [MEADOW[0], MEADOW[1] - 2.5, 59.86],
+        heading_deg: 0.0,
+    },
     acts: &[
         (0, Act::Press(KeyCode::KeyW)),
-        (90, Act::Turn(-1.0)),
-        (180, Act::Turn(0.0)),
+        (
+            90,
+            Act::Turn {
+                deg_per_frame: -1.0,
+            },
+        ),
+        (180, Act::Turn { deg_per_frame: 0.0 }),
         (240, Act::Release(KeyCode::KeyW)),
-        (270, Act::Turn(1.5)),
-        (330, Act::Turn(0.0)),
+        (270, Act::Turn { deg_per_frame: 1.5 }),
+        (330, Act::Turn { deg_per_frame: 0.0 }),
         (360, Act::Press(KeyCode::KeyA)),
         (420, Act::Release(KeyCode::KeyA)),
         (450, Act::Press(KeyCode::KeyQ)),
@@ -211,16 +210,26 @@ pub const MEADOW_WALK: Place = Place {
     frames: 1140,
 };
 
-/// Off the west quay of a Stormwind canal into the water, then a swim that turns, dives,
-/// rises, strafes and hops.
 pub const CANAL: Place = Place {
-    name: "the canal",
-    a: ([-8778.0, 515.4, 97.8], 0.0),
-    b: ([-8778.0, 518.0, 97.8], 0.0),
+    name: "off a Stormwind canal's west quay into the water, and swims, turns, dives, rises, \
+           strafes and hops",
+    a: Stand {
+        feet: [-8778.0, 515.4, 97.8],
+        heading_deg: 0.0,
+    },
+    b: Stand {
+        feet: [-8778.0, 518.0, 97.8],
+        heading_deg: 0.0,
+    },
     acts: &[
         (0, Act::Press(KeyCode::KeyW)),
-        (180, Act::Turn(-1.0)),
-        (270, Act::Turn(0.0)),
+        (
+            180,
+            Act::Turn {
+                deg_per_frame: -1.0,
+            },
+        ),
+        (270, Act::Turn { deg_per_frame: 0.0 }),
         (270, Act::Pitch(-20.0)),
         (360, Act::Pitch(20.0)),
         (450, Act::Pitch(0.0)),
@@ -240,23 +249,21 @@ pub const CANAL: Place = Place {
 pub struct Walked {
     pub a_seen_by_b: Watch,
     pub b_seen_by_a: Watch,
-    /// Frames after A left until B no longer had it as a player, and until its body was gone.
-    pub gone_after: Option<u32>,
-    pub faded_after: Option<u32>,
-    /// How often the server put A and B back.
-    pub corrections: [u32; 2],
+    pub frames_until_unlisted: Option<u32>,
+    pub frames_until_faded: Option<u32>,
+    pub corrections_a: u32,
+    pub corrections_b: u32,
     pub server: server::Summary,
 }
 
-/// A and B on one server at `place`, looking as given; B's view broken as `faults` says.
-pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<Walked> {
+pub fn walk(place: &Place, looks: [CharacterLook; 2], b_faults: Faults) -> Option<Walked> {
     let server = serve(&[place.a, place.b]);
     let [look_a, look_b] = looks;
     let mut a = Walker::welcomed(server.addr(), "A", look_a, HZ)?;
     let mut b = Walker::welcomed(server.addr(), "B", look_b, HZ)?;
     let id = |w: &Walker| w.net().and_then(|n| n.welcome()).map(|w| w.id);
     let (id_a, id_b) = (id(&a).expect("A joined"), id(&b).expect("B joined"));
-    *b.net_mut().expect("B joined").faults() = faults;
+    *b.net_mut().expect("B joined").faults() = b_faults;
     while !(a.settled() && b.settled()) {
         a.run(1);
         b.run(1);
@@ -268,9 +275,10 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<
     let mut walked = Walked {
         a_seen_by_b: Watch::default(),
         b_seen_by_a: Watch::default(),
-        gone_after: None,
-        faded_after: None,
-        corrections: [0; 2],
+        frames_until_unlisted: None,
+        frames_until_faded: None,
+        corrections_a: 0,
+        corrections_b: 0,
         server: server::Summary::default(),
     };
     for frame in 0..place.frames {
@@ -284,17 +292,17 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<
         walked.b_seen_by_a.judge(&mut a, &b, id_b, frame);
     }
     let corrected = |w: &Walker| w.net().map_or(0, crate::net::Net::corrections);
-    walked.corrections = [corrected(&a), corrected(&b)];
+    (walked.corrections_a, walked.corrections_b) = (corrected(&a), corrected(&b));
     drop(a);
     for frame in 0..(4.0 * HZ) as u32 {
         b.run(1);
-        if walked.gone_after.is_none() && copy_of(&mut b, id_a).is_none() {
-            walked.gone_after = Some(frame);
+        if walked.frames_until_unlisted.is_none() && copy_of(&mut b, id_a).is_none() {
+            walked.frames_until_unlisted = Some(frame);
         }
         let world = b.app.world_mut();
         let bodies = world.query::<&RemoteMotion>().iter(world).count();
-        if walked.faded_after.is_none() && bodies == 0 {
-            walked.faded_after = Some(frame);
+        if walked.frames_until_faded.is_none() && bodies == 0 {
+            walked.frames_until_faded = Some(frame);
         }
     }
     drop(b);
@@ -302,7 +310,6 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], faults: Faults) -> Option<
     Some(walked)
 }
 
-/// A walking `place` alone, on a server of its own: what the server spent.
 pub fn alone(place: &Place) -> Option<server::Summary> {
     let server = serve(&[place.a]);
     let mut a = Walker::joined(server.addr(), "A", CharacterLook::naked(1, 0), HZ)?;
@@ -330,15 +337,24 @@ fn two_clients_see_each_other_walk_run_turn_jump_fall_and_swim() {
         eprintln!("  {}", w.b_seen_by_a.line("A's copy of B"));
         eprintln!(
             "  A left: no longer a player after {:?} frames, its body gone after {:?}; \
-             corrections to A and B {:?}",
-            w.gone_after, w.faded_after, w.corrections
+             corrections to A {} and B {}",
+            w.frames_until_unlisted, w.frames_until_faded, w.corrections_a, w.corrections_b
         );
         for watch in [&w.a_seen_by_b, &w.b_seen_by_a] {
             assert!(watch.within_bounds(), "{}", place.name);
             assert!(watch.at_rest_to_the_step(), "{}", place.name);
         }
-        assert!(w.gone_after.is_some_and(|f| f < 30), "{}", place.name);
-        assert!(w.faded_after.is_some_and(|f| f < 180), "{}", place.name);
+        assert_eq!((w.corrections_a, w.corrections_b), (0, 0), "{}", place.name);
+        assert!(
+            w.frames_until_unlisted.is_some_and(|f| f < 30),
+            "{}",
+            place.name
+        );
+        assert!(
+            w.frames_until_faded.is_some_and(|f| f < 180),
+            "{}",
+            place.name
+        );
     }
 }
 

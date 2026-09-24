@@ -23,7 +23,6 @@ pub enum Told {
     Lie,
 }
 
-/// A scripted track walked frame by frame, its claims sent as the client's [`Cadence`] says.
 pub struct Mover {
     cadence: Cadence,
     last_ground_z: f32,

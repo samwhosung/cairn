@@ -1,67 +1,60 @@
-//! When another player's relayed move is applied: each move is given a time to fire on this
-//! window's clock, paced by the server's own stamps so the moves replay at the spacing they were
-//! made, and a buffer that absorbs how they bunched in flight is resized only while the player
-//! stands still with nothing waiting.
+//! When another player's relayed move applies, on this window's clock.
 
-/// A fire time lands at most this far before its move's arrival, ms…
+use protocol::flags;
+
 const SKEW_MIN_MS: f64 = -500.0;
-/// …and at most this far after it.
 const SKEW_MAX_MS: f64 = 1000.0;
-/// How many moves back the worst lateness is remembered.
 const LATENESS_WINDOW: usize = 32;
-/// Direction, turn and fall bits: while any is set the chain keeps the sender's pacing.
-const BUSY: u32 = 0x20ff;
 
-/// One remote player's replay timing.
 #[derive(Clone, Debug, Default)]
-pub struct RelayChain {
+pub struct ReplayTiming {
     seeded: bool,
     last_fire_ms: f64,
-    last_wire_ms: u32,
-    /// How late each recent move ran against the chain, each against the base as it stood then,
-    /// so a spike the base has absorbed is not charged twice.
-    ring: [f64; LATENESS_WINDOW],
-    ring_at: usize,
-    /// The buffer the chain holds now.
-    base_ms: f64,
+    last_server_ms: u32,
+    needed_ms: [f64; LATENESS_WINDOW],
+    needed_at: usize,
+    buffer_ms: f64,
 }
 
-impl RelayChain {
-    /// The time on this window's clock to apply a move stamped `wire_ms` that arrived at
+impl ReplayTiming {
+    /// The time on this window's clock to apply a move stamped `server_ms` that arrived at
     /// `now_ms`, given the player's flags and whether nothing of theirs waits, both from before
     /// the move applies.
-    pub fn schedule(&mut self, wire_ms: u32, now_ms: f64, flags: u32, queue_empty: bool) -> f64 {
+    pub fn schedule(&mut self, server_ms: u32, now_ms: f64, flags: u32, queue_empty: bool) -> f64 {
         if !self.seeded {
             self.seeded = true;
-            self.last_wire_ms = wire_ms;
+            self.last_server_ms = server_ms;
             self.last_fire_ms = now_ms;
         }
-        let step = wire_ms.wrapping_sub(self.last_wire_ms) as i32;
-        let wire_delta = if step > 0 {
-            self.last_wire_ms = wire_ms;
+        let step = server_ms.wrapping_sub(self.last_server_ms) as i32;
+        let server_delta = if step > 0 {
+            self.last_server_ms = server_ms;
             f64::from(step)
         } else {
             0.0
         };
         let arrival_delta = now_ms - self.last_fire_ms;
-        let mut skew = wire_delta - arrival_delta;
-        let window_max = self.record_lateness(arrival_delta - wire_delta);
-        if flags & BUSY == 0 && queue_empty {
-            skew = (skew + window_max - self.base_ms).clamp(SKEW_MIN_MS, SKEW_MAX_MS);
+        let mut skew = server_delta - arrival_delta;
+        let widest = self.widest_need(arrival_delta - server_delta);
+        if flags & flags::UNDER_WAY == 0 && queue_empty {
+            skew = (skew + widest - self.buffer_ms).clamp(SKEW_MIN_MS, SKEW_MAX_MS);
             if now_ms + skew < self.last_fire_ms {
                 skew = self.last_fire_ms - now_ms;
             }
-            self.base_ms = window_max;
+            self.buffer_ms = widest;
         }
         let fire_ms = now_ms + skew.clamp(SKEW_MIN_MS, SKEW_MAX_MS);
         self.last_fire_ms = fire_ms;
         fire_ms
     }
 
-    fn record_lateness(&mut self, lateness_ms: f64) -> f64 {
-        self.ring[self.ring_at] = self.base_ms + lateness_ms;
-        self.ring_at = (self.ring_at + 1) % LATENESS_WINDOW;
-        self.ring.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+    fn widest_need(&mut self, lateness_ms: f64) -> f64 {
+        self.needed_ms[self.needed_at] = self.buffer_ms + lateness_ms;
+        self.needed_at = (self.needed_at + 1) % LATENESS_WINDOW;
+        self.needed_ms
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 }
 
@@ -73,7 +66,7 @@ mod tests {
 
     #[test]
     fn the_first_move_fires_on_arrival_and_a_mover_replays_at_its_stamps_spacing() {
-        let mut chain = RelayChain::default();
+        let mut chain = ReplayTiming::default();
         assert!((chain.schedule(10_000, 500.0, 0, true) - 500.0).abs() < 1e-9);
         let bunched = [(10_050, 580.0), (10_100, 581.0), (10_150, 660.0)];
         let fires: Vec<f64> = bunched
@@ -85,7 +78,7 @@ mod tests {
 
     #[test]
     fn a_standing_player_buffers_the_worst_lateness_it_has_seen() {
-        let mut chain = RelayChain::default();
+        let mut chain = ReplayTiming::default();
         chain.schedule(0, 0.0, 0, true);
         chain.schedule(50, 70.0, RUN, false);
         let fire = chain.schedule(100, 100.0, 0, true);
@@ -97,7 +90,7 @@ mod tests {
 
     #[test]
     fn a_fire_time_never_strays_more_than_the_skew_allows() {
-        let mut chain = RelayChain::default();
+        let mut chain = ReplayTiming::default();
         chain.schedule(0, 0.0, RUN, false);
         let fire = chain.schedule(60_000, 100.0, RUN, false);
         assert!((fire - (100.0 + SKEW_MAX_MS)).abs() < 1e-9, "{fire}");

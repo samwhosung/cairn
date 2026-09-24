@@ -1,6 +1,3 @@
-//! Other players in view: each appears as the server introduces it and is drawn in its look as
-//! the player's own body is, moves as its relayed moves say, and fades out when it leaves.
-
 use std::collections::HashMap;
 
 use bevy::prelude::*;
@@ -15,50 +12,42 @@ use super::remote::{RelayMove, RemoteMotion, swim_body_rotation};
 use crate::player::character_body;
 use crate::player::gait::wrap_pi;
 
-/// How long a player who left takes to fade out, seconds.
 const LEAVE_SECS: f32 = 2.0;
-/// A body leaving fainter than this goes at once.
 const LEAVE_MIN_ALPHA: f32 = 0.01;
 
-/// Another player in view, as the server named it.
 #[derive(Component, Clone, Debug)]
-pub struct Remote {
+pub struct OtherPlayer {
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub id: u32,
     pub name: String,
 }
 
-/// The look another player walks in, until its body is dressed.
 #[derive(Component)]
 pub(super) struct Undressed(CharacterLook);
 
-/// A body fading out after its player left, from the alpha it was drawn at, since `started`.
 #[derive(Component)]
 pub(super) struct Leaving {
-    from: f32,
-    started: f32,
+    from_alpha: f32,
+    started_secs: f32,
 }
 
-/// What the server last relayed of one player: a move or a turn repeats only its position and
-/// facing, and the rest stands as it was.
 #[derive(Clone, Copy, Debug)]
 struct Relayed {
     entity: Entity,
-    position: [f32; 3],
+    wow_pos: [f32; 3],
     facing: f32,
     flags: u32,
     pitch: f32,
     jump: Option<Jump>,
-    /// When the arc under way was launched, on the server's clock, ms.
-    launched_ms: i64,
+    launched_server_ms: i64,
 }
 
 impl Relayed {
-    fn of(entity: Entity, state: &State, wire_ms: u32, me: [f32; 3]) -> Self {
+    fn of(entity: Entity, state: &State, server_ms: u32, own_pos: [f32; 3]) -> Self {
         let falling = state.flags & flags::FALLING != 0;
         Self {
             entity,
-            position: state.pos.around(me).yards(),
+            wow_pos: state.pos.around(own_pos).yards(),
             facing: state.facing.radians(),
             flags: state.flags,
             pitch: if state.flags & flags::SWIMMING != 0 {
@@ -67,19 +56,19 @@ impl Relayed {
                 0.0
             },
             jump: falling.then_some(state.jump),
-            launched_ms: i64::from(wire_ms) - i64::from(state.fall_time),
+            launched_server_ms: i64::from(server_ms) - i64::from(state.fall_time),
         }
     }
 
-    fn relay_move(&self, wire_ms: u32) -> RelayMove {
+    fn relay_move(&self, server_ms: u32) -> RelayMove {
         let fall_time = if self.flags & flags::FALLING != 0 {
-            (i64::from(wire_ms) - self.launched_ms).max(0) as u32
+            (i64::from(server_ms) - self.launched_server_ms).max(0) as u32
         } else {
             0
         };
         RelayMove {
-            wire_ms,
-            position: self.position,
+            server_ms,
+            wow_pos: self.wow_pos,
             orientation: self.facing,
             flags: self.flags,
             pitch: self.pitch,
@@ -89,7 +78,6 @@ impl Relayed {
     }
 }
 
-/// The players in view, by the slot the server gave each.
 #[derive(Default)]
 pub struct Others {
     by_slot: HashMap<u16, Relayed>,
@@ -99,30 +87,24 @@ pub struct Others {
     dropped: bool,
 }
 
-/// Ways a test breaks the view on purpose, to show its checks can fail.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Faults {
-    /// Every other move, turn or state is lost.
     pub drop_every_other: bool,
-    /// Every move is shown where it was made and never stepped on from there.
     pub no_dead_reckoning: bool,
 }
 
-/// What a batch's records need beyond themselves: the batch's stamp, where this window's player
-/// stands (relayed positions are unwrapped around it), and the clocks.
-pub struct Stamp {
-    pub wire_ms: u32,
-    pub me: [f32; 3],
-    /// The replay clock, ms.
-    pub now_ms: f64,
-    /// The frame clock, s.
-    pub now_secs: f32,
+/// What every record of a batch is read with; relayed positions are unwrapped around `own_pos`.
+pub struct BatchContext {
+    pub server_ms: u32,
+    pub own_pos: [f32; 3],
+    pub real_ms: f64,
+    pub frame_secs: f32,
 }
 
 impl Others {
     /// Takes in one record of a batch; a correction is not this one's.
-    pub fn take(&mut self, commands: &mut Commands<'_, '_>, record: Record<'_>, at: &Stamp) {
+    pub fn take(&mut self, commands: &mut Commands<'_, '_>, record: Record<'_>, at: &BatchContext) {
         match record {
             Record::Appear {
                 slot,
@@ -132,42 +114,42 @@ impl Others {
                 state,
             } => {
                 if let Some(old) = self.by_slot.remove(&slot) {
-                    leave(commands, old.entity, at.now_secs);
+                    leave(commands, old.entity, at.frame_secs);
                 }
                 info!("{name} comes into view");
                 let entity = commands.spawn_empty().id();
-                let relayed = Relayed::of(entity, &state, at.wire_ms, at.me);
-                let mv = relayed.relay_move(at.wire_ms);
+                let relayed = Relayed::of(entity, &state, at.server_ms, at.own_pos);
+                let mv = relayed.relay_move(at.server_ms);
                 commands.entity(entity).insert((
-                    Remote {
+                    OtherPlayer {
                         id,
                         name: name.to_owned(),
                     },
                     Undressed(look_of(&appearance)),
-                    Transform::from_translation(wow_to_bevy(mv.position))
+                    Transform::from_translation(wow_to_bevy(mv.wow_pos))
                         .with_rotation(swim_body_rotation(mv.orientation, mv.flags, mv.pitch)),
                     Visibility::default(),
                     UnitShade::default(),
                     UnitMotion::default(),
                     UnitAlpha::default(),
-                    RemoteMotion::seeded(&mv, at.now_ms),
+                    RemoteMotion::seeded(&mv, at.real_ms),
                 ));
                 self.by_slot.insert(slot, relayed);
             }
             Record::Vanish { slot } => {
                 if let Some(gone) = self.by_slot.remove(&slot) {
-                    leave(commands, gone.entity, at.now_secs);
+                    leave(commands, gone.entity, at.frame_secs);
                 }
             }
             Record::Move { slot, pos, facing } => self.relay(commands, slot, at, |r| {
-                r.position = pos.around(at.me).yards();
+                r.wow_pos = pos.around(at.own_pos).yards();
                 r.facing = facing.radians();
             }),
             Record::Turn { slot, facing } => self.relay(commands, slot, at, |r| {
                 r.facing = facing.radians();
             }),
             Record::State { slot, state } => self.relay(commands, slot, at, |r| {
-                *r = Relayed::of(r.entity, &state, at.wire_ms, at.me);
+                *r = Relayed::of(r.entity, &state, at.server_ms, at.own_pos);
             }),
             Record::Correct { .. } => {}
         }
@@ -177,7 +159,7 @@ impl Others {
         &mut self,
         commands: &mut Commands<'_, '_>,
         slot: u16,
-        at: &Stamp,
+        at: &BatchContext,
         change: impl FnOnce(&mut Relayed),
     ) {
         let Some(r) = self.by_slot.get_mut(&slot) else {
@@ -185,7 +167,7 @@ impl Others {
         };
         change(r);
         #[cfg_attr(not(test), allow(unused_mut))]
-        let (mut mv, now_ms) = (r.relay_move(at.wire_ms), at.now_ms);
+        let (mut mv, real_ms) = (r.relay_move(at.server_ms), at.real_ms);
         #[cfg(test)]
         {
             self.dropped = self.faults.drop_every_other && !self.dropped;
@@ -200,15 +182,14 @@ impl Others {
             .entity(r.entity)
             .queue(move |mut entity: EntityWorldMut<'_>| {
                 if let Some(mut rm) = entity.get_mut::<RemoteMotion>() {
-                    rm.relayed(mv, now_ms);
+                    rm.relayed(mv, real_ms);
                 }
             });
     }
 
-    /// Every player in view leaves.
-    pub fn leave_all(&mut self, commands: &mut Commands<'_, '_>, now_secs: f32) {
+    pub fn leave_all(&mut self, commands: &mut Commands<'_, '_>, frame_secs: f32) {
         for (_, gone) in self.by_slot.drain() {
-            leave(commands, gone.entity, now_secs);
+            leave(commands, gone.entity, frame_secs);
         }
     }
 }
@@ -227,21 +208,23 @@ fn look_of(a: &Appearance) -> CharacterLook {
     }
 }
 
-/// The body stops being a player at once and fades out from the alpha it was drawn at.
-fn leave(commands: &mut Commands<'_, '_>, entity: Entity, now: f32) {
+fn leave(commands: &mut Commands<'_, '_>, entity: Entity, frame_secs: f32) {
     commands
         .entity(entity)
         .queue(move |mut e: EntityWorldMut<'_>| {
-            if let Some(r) = e.get::<Remote>() {
-                info!("{} leaves view", r.name);
+            if let Some(p) = e.get::<OtherPlayer>() {
+                info!("{} leaves view", p.name);
             }
             let drawn = e.get::<UnitAlpha>().map_or(1.0, |a| a.alpha);
-            let from = e.get::<UnitAppear>().map_or(drawn, |a| a.alpha(now));
-            e.remove::<(Remote, UnitAppear)>();
-            if from < LEAVE_MIN_ALPHA {
+            let from_alpha = e.get::<UnitAppear>().map_or(drawn, |a| a.alpha(frame_secs));
+            e.remove::<(OtherPlayer, UnitAppear)>();
+            if from_alpha < LEAVE_MIN_ALPHA {
                 e.despawn();
             } else {
-                e.insert(Leaving { from, started: now });
+                e.insert(Leaving {
+                    from_alpha,
+                    started_secs: frame_secs,
+                });
             }
         });
 }
@@ -252,12 +235,12 @@ pub(super) fn fade_leaving(
     mut leaving: Query<'_, '_, (Entity, &Leaving, &mut UnitAlpha)>,
 ) {
     for (entity, l, mut alpha) in &mut leaving {
-        let t = (time.elapsed_secs() - l.started) / LEAVE_SECS;
+        let t = (time.elapsed_secs() - l.started_secs) / LEAVE_SECS;
         if t >= 1.0 {
             commands.entity(entity).despawn();
             continue;
         }
-        let s = ((1.0 - t) * l.from).clamp(0.0, 1.0);
+        let s = ((1.0 - t) * l.from_alpha).clamp(0.0, 1.0);
         alpha.alpha = (3.0 - 2.0 * s) * s * s;
     }
 }
@@ -275,11 +258,9 @@ pub(super) fn dress_remotes(
     };
     for (entity, look, mut t) in &mut undressed {
         commands.entity(entity).remove::<Undressed>();
-        if let Some((body, scale)) =
-            character_body(&tables, &look.0, &install, &mut images, &server)
-        {
-            t.scale = Vec3::splat(scale);
-            commands.entity(entity).insert(body);
+        if let Some(dressed) = character_body(&tables, &look.0, &install, &mut images, &server) {
+            t.scale = Vec3::splat(dressed.scale);
+            commands.entity(entity).insert(dressed.body);
         } else {
             warn!("no body for {:?}: another player walks unseen", look.0);
         }
