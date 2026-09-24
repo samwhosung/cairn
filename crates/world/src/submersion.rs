@@ -10,8 +10,7 @@ use crate::coords::bevy_to_wow;
 use crate::portal::CameraInteriorClaim;
 use crate::view::WorldCamera;
 
-/// Water's own accept margin over its surface; magma and slime have none.
-const SUBMERSION_EPS: f32 = 0.01;
+const WATER_SUBMERSION_MARGIN: f32 = 0.01;
 
 /// The liquid the eye is under, `Dry` when none.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,9 +25,6 @@ fn submersion_of(kind: LiquidKind) -> Submersion {
     }
 }
 
-/// How far below the eye the near plane's lowest corner sits, never above it. The probe is that
-/// corner's height, so the frame turns submerged the moment the visible rectangle's leading edge
-/// reaches the surface.
 fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> f32 {
     let half_h = (fov * 0.5).tan() * near;
     let half_w = half_h * aspect;
@@ -41,7 +37,6 @@ fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> 
     drop
 }
 
-/// Among the surfaces the eye's room admits, the deepest one it is under.
 pub(crate) fn detect_submersion(
     mut underwater: ResMut<'_, Underwater>,
     camera: Query<'_, '_, (&Transform, &Projection), With<WorldCamera>>,
@@ -57,22 +52,23 @@ pub(crate) fn detect_submersion(
         LiquidClaim::Outdoors
     };
     let eye = bevy_to_wow(cam.translation);
-    let probe_z = match projection {
+    let near_plane_bottom_z = match projection {
         Projection::Perspective(p) => {
             eye[2] + lowest_near_corner_drop(cam.rotation, p.fov, p.aspect_ratio, p.near)
         }
         _ => eye[2],
     };
     let verdict = liquids
-        .surfaces_at([eye[0], eye[1], probe_z], claim)
+        .surfaces_at([eye[0], eye[1], near_plane_bottom_z], claim)
         .into_iter()
         .filter_map(|hit| {
             let eps = if hit.kind.is_fullbright() {
                 0.0
             } else {
-                SUBMERSION_EPS
+                WATER_SUBMERSION_MARGIN
             };
-            (probe_z < hit.surface_z + eps).then_some((hit.surface_z, submersion_of(hit.kind)))
+            (near_plane_bottom_z < hit.surface_z + eps)
+                .then_some((hit.surface_z, submersion_of(hit.kind)))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map_or(Submersion::Dry, |(_, s)| s);

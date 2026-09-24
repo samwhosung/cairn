@@ -3,6 +3,7 @@ use std::num::NonZeroU16;
 use std::sync::{Arc, Weak};
 
 use bevy::asset::{LoadState, RecursiveDependencyLoadState, UntypedAssetId};
+use bevy::camera::primitives::Sphere;
 use bevy::camera::visibility::NoAutoAabb;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
@@ -13,7 +14,7 @@ use crate::Residency;
 use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
-use crate::doodad_sound::{SoundHost, arms_for_sound};
+use crate::doodad_sound::{SoundHost, idle_has_sound_keys};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
 use crate::m2::M2Model;
@@ -328,7 +329,6 @@ impl Spawner<'_, '_, '_> {
         form
     }
 
-    /// A map's own doodad: its parts, a sound clock when it sounds, its lights.
     fn placed_doodad(
         &mut self,
         m: &M2Model,
@@ -419,7 +419,6 @@ impl Spawner<'_, '_, '_> {
         ents
     }
 
-    /// A clock for a doodad whose idle sequences carry sound keys, over its drawn `parts`.
     fn sound_host(
         &mut self,
         m: &M2Model,
@@ -427,9 +426,12 @@ impl Spawner<'_, '_, '_> {
         room: Option<WmoGroupVis>,
         parts: Vec<Entity>,
     ) -> Option<Entity> {
-        let anims = m.animations.as_ref().filter(|a| arms_for_sound(a))?;
+        let anims = m.animations.as_ref().filter(|a| idle_has_sound_keys(a))?;
         let (radius, center) = m.fade_sphere(transform.scale.x);
-        let fade = (transform.transform_point(center), radius);
+        let fade = Sphere {
+            center: transform.transform_point(center).into(),
+            radius,
+        };
         let host = SoundHost::new(anims, parts, fade, room)?;
         Some(self.commands.spawn((host, anims.clone(), *transform)).id())
     }

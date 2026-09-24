@@ -16,8 +16,9 @@ pub struct AnimEvent {
     pub data: u32,
     /// The clip's `AnimationData.dbc` id.
     pub anim_id: u16,
-    /// Where the key fired, its bone's live pose composed into the model's world frame.
-    pub pos: Option<Vec3>,
+    /// Where the key fired, world space: its bone's live pose when the model has one, else its
+    /// model-space point through the model's transform.
+    pub pos: Vec3,
 }
 
 /// A footfall's sound key; the per-foot side keys are its visuals and sound nothing.
@@ -25,7 +26,6 @@ pub fn is_footstep_sound(ident: &[u8; 4]) -> bool {
     ident == b"$FSD"
 }
 
-/// The frame a key's point resolves in: the model's world frame, and its pose when it has one.
 pub(crate) struct EventFrame<'a> {
     pub(crate) world: &'a GlobalTransform,
     pub(crate) rig: Option<(&'a RigPose, &'a GlobalTransform)>,
@@ -39,8 +39,7 @@ impl EventFrame<'_> {
     }
 }
 
-/// How far into a clip its arm may have landed and still have its head keys fire.
-const FRESH_CLIP_HEAD: f32 = 0.25;
+const HEAD_KEYS_ARM_WINDOW_SECS: f32 = 0.25;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TrackSeek {
@@ -51,15 +50,19 @@ pub(crate) struct TrackSeek {
 
 pub(crate) type TrackMemory = EntityHashMap<TrackSeek>;
 
-/// The seek to scan from, or `None` on the frame a clip is armed, which fires nothing. The frame
-/// after an arm near its start opens at the head, so keys at `t = 0` fire; a clip abandoned
-/// within its arm frame fires nothing at all.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TrackScan {
+    Arming,
+    FromHead,
+    After(f32),
+}
+
 pub(crate) fn advance_track(
     last: &mut TrackMemory,
     entity: Entity,
     node: AnimationNodeIndex,
     cur: f32,
-) -> Option<f32> {
+) -> TrackScan {
     let was = last.get(&entity).copied().filter(|t| t.node == node);
     last.insert(
         entity,
@@ -69,25 +72,29 @@ pub(crate) fn advance_track(
             armed: was.is_none(),
         },
     );
-    let was = was?;
-    Some(if was.armed && was.seek <= FRESH_CLIP_HEAD {
-        -1.0
-    } else {
-        was.seek
-    })
+    match was {
+        None => TrackScan::Arming,
+        Some(was) if was.armed && was.seek <= HEAD_KEYS_ARM_WINDOW_SECS => TrackScan::FromHead,
+        Some(was) => TrackScan::After(was.seek),
+    }
 }
 
-/// Fires the keys on `(prev, cur]`; a wrap fires the old pass's tail, then the new one's head.
+/// A wrap fires the old pass's tail, then the new one's head.
 pub(crate) fn scan_events(
     clip: &AnimClip,
     entity: Entity,
-    prev: f32,
-    cur: f32,
+    scan: TrackScan,
+    through: f32,
     frame: &EventFrame<'_>,
     out: &mut MessageWriter<'_, AnimEvent>,
 ) {
+    let after = match scan {
+        TrackScan::Arming => return,
+        TrackScan::FromHead => f32::NEG_INFINITY,
+        TrackScan::After(seek) => seek,
+    };
     #[allow(clippy::float_cmp, reason = "a clip that did not move crossed nothing")]
-    if clip.events.is_empty() || cur == prev {
+    if clip.events.is_empty() || through == after {
         return;
     }
     let mut fire = |lo: f32, hi: f32| {
@@ -98,16 +105,16 @@ pub(crate) fn scan_events(
                     ident: e.ident,
                     data: e.data,
                     anim_id: clip.anim_id,
-                    pos: Some(frame.point(e)),
+                    pos: frame.point(e),
                 });
             }
         }
     };
-    if cur >= prev {
-        fire(prev, cur);
+    if through >= after {
+        fire(after, through);
     } else {
-        fire(prev, clip.duration + 1.0);
-        fire(-1.0, cur);
+        fire(after, f32::INFINITY);
+        fire(f32::NEG_INFINITY, through);
     }
 }
 
@@ -120,8 +127,8 @@ type Driven<'a> = (
     Option<&'a RigPose>,
 );
 
-/// Fires the keys a unit's base track crossed: the clip it armed last, which is the newest
-/// variation while two cross-fade.
+/// A unit's keys come from the clip it armed last, which is the newest variation while two
+/// cross-fade.
 pub(crate) fn fire_unit_events(
     units: Query<'_, '_, Driven<'_>>,
     globals: Query<'_, '_, &GlobalTransform>,
@@ -141,13 +148,12 @@ pub(crate) fn fire_unit_events(
         else {
             continue;
         };
-        if let Some(prev) = advance_track(&mut last, entity, node, cur) {
-            let frame = EventFrame {
-                world,
-                rig: pose.and_then(|p| Some((p, globals.get(p.joints_root).ok()?))),
-            };
-            scan_events(clip, entity, prev, cur, &frame, &mut out);
-        }
+        let scan = advance_track(&mut last, entity, node, cur);
+        let frame = EventFrame {
+            world,
+            rig: pose.and_then(|p| Some((p, globals.get(p.joints_root).ok()?))),
+        };
+        scan_events(clip, entity, scan, cur, &frame, &mut out);
     }
 }
 
@@ -159,13 +165,16 @@ mod tests {
     fn an_arm_fires_nothing_and_the_next_frame_opens_the_head() {
         let (mut mem, e) = (TrackMemory::default(), Entity::from_raw_u32(1).expect("id"));
         let (a, b) = (AnimationNodeIndex::new(7), AnimationNodeIndex::new(11));
-        assert_eq!(advance_track(&mut mem, e, a, 0.0), None);
-        assert_eq!(advance_track(&mut mem, e, a, 0.016), Some(-1.0));
-        assert_eq!(advance_track(&mut mem, e, a, 0.032), Some(0.016));
-        assert_eq!(advance_track(&mut mem, e, b, 0.5), None);
+        assert_eq!(advance_track(&mut mem, e, a, 0.0), TrackScan::Arming);
+        assert_eq!(advance_track(&mut mem, e, a, 0.016), TrackScan::FromHead);
+        assert_eq!(
+            advance_track(&mut mem, e, a, 0.032),
+            TrackScan::After(0.016)
+        );
+        assert_eq!(advance_track(&mut mem, e, b, 0.5), TrackScan::Arming);
         assert_eq!(
             advance_track(&mut mem, e, b, 0.52),
-            Some(0.5),
+            TrackScan::After(0.5),
             "an arm deep in its clip"
         );
         assert!(is_footstep_sound(b"$FSD") && !is_footstep_sound(b"$FL0"));

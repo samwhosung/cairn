@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use crate::adt::AdtTile;
 use crate::coords::bevy_to_wow;
 use crate::ground::{Ground, ground_under};
-use crate::interior::{POSITION_PROBE_LIFT, WmoRoom};
+use crate::interior::{FEET_PROBE_LIFT, WmoRoom};
 use crate::portal::WmoPortalInstance;
 use crate::stream::Streamer;
 use crate::wmo::WmoModel;
@@ -37,7 +37,7 @@ impl SurfaceUnderfoot<'_, '_> {
             Some(room) => {
                 let inst = self.instances.get(room.instance).ok()?;
                 let model = self.wmos.get(&inst.handle)?;
-                let probe = feet + Vec3::Y * POSITION_PROBE_LIFT;
+                let probe = feet + Vec3::Y * FEET_PROBE_LIFT;
                 let local = inst.world_from_local.inverse().transform_point3(probe);
                 material_under(model, usize::from(room.group), bevy_to_wow(local))
                     .map(Underfoot::Terrain)
@@ -51,8 +51,6 @@ impl SurfaceUnderfoot<'_, '_> {
     }
 }
 
-/// The `TerrainType` of the nearest render face below `probe` (model space) in `group`: the face's
-/// material's ground type. An exact tie keeps the later face.
 fn material_under(model: &WmoModel, group: usize, probe: [f32; 3]) -> Option<u32> {
     let fp = model.group_footprints.get(group)?.as_ref()?;
     let [px, py, pz] = probe;

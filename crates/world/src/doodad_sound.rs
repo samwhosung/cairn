@@ -14,10 +14,9 @@ use crate::view::{FARCLIP, WorldCamera};
 use crate::visibility::doodad_fade_alpha;
 
 /// The keys that make a placed doodad sound: the looping emitter, its stop, and two one-shots.
-const SOUND_EVENT_TAGS: [&[u8; 4]; 4] = [b"$DSL", b"$DSO", b"$DSE", b"$SND"];
+const SOUND_EVENT_TAGS: [&[u8; 4]; 4] = [b"$DSL", b"$DSE", b"$DSO", b"$SND"];
 
-/// Whether the idle sequence's variations carry a sound key.
-pub(crate) fn arms_for_sound(anims: &ModelAnimations) -> bool {
+pub(crate) fn idle_has_sound_keys(anims: &ModelAnimations) -> bool {
     let Some(idle) = anims.idle_clip() else {
         return false;
     };
@@ -35,40 +34,36 @@ pub(crate) fn arms_for_sound(anims: &ModelAnimations) -> bool {
 /// A sounding doodad's clock, at its placement.
 #[derive(Component)]
 pub struct SoundHost {
-    /// The placement's drawn parts; the host is in the draw set while any is shown.
-    meshes: Vec<Entity>,
-    /// A model with no mesh is in the draw set by its fade sphere, world space.
-    fade: (Vec3, f32),
+    drawn_parts: Vec<Entity>,
+    fade_sphere: Sphere,
     room: Option<WmoGroupVis>,
     clip: Option<(AnimationNodeIndex, f32)>,
     anim_id: Option<u16>,
     armed_at: f32,
-    /// When the armed window ends; born expired, so the first frame rolls the first arm.
-    window_hi: f32,
-    active: bool,
+    window_ends_at: Option<f32>,
+    drawn: bool,
 }
 
 impl SoundHost {
     pub(crate) fn new(
         anims: &ModelAnimations,
-        meshes: Vec<Entity>,
-        fade: (Vec3, f32),
+        drawn_parts: Vec<Entity>,
+        fade_sphere: Sphere,
         room: Option<WmoGroupVis>,
     ) -> Option<Self> {
         let head = anims.idle_clip()?;
         Some(Self {
-            meshes,
-            fade,
+            drawn_parts,
+            fade_sphere,
             room,
             clip: Some((head.node, head.duration)),
             anim_id: Some(head.anim_id),
             armed_at: 0.0,
-            window_hi: f32::NEG_INFINITY,
-            active: false,
+            window_ends_at: None,
+            drawn: false,
         })
     }
 
-    /// The armed clip and how far into it the shared clock stands.
     fn arm_clock(&self, now: f32) -> Option<(AnimationNodeIndex, f32)> {
         let (node, duration) = self.clip?;
         let seek = if duration > 0.0 {
@@ -80,8 +75,6 @@ impl SoundHost {
     }
 }
 
-/// When an armed window ends, a new frequency-weighted variation of the same sequence and the
-/// passes it plays: every host, drawn or not.
 pub(crate) fn reroll_sound_hosts(
     time: Res<'_, Time>,
     mut rng: ResMut<'_, AnimRng>,
@@ -92,7 +85,7 @@ pub(crate) fn reroll_sound_hosts(
         let Some(anim_id) = host.anim_id else {
             continue;
         };
-        if now < host.window_hi {
+        if host.window_ends_at.is_some_and(|t| now < t) {
             continue;
         }
         let Some(clip) = anims.pick_variation(anim_id, rng.draw()) else {
@@ -102,12 +95,11 @@ pub(crate) fn reroll_sound_hosts(
         let (node, duration) = (clip.node, clip.duration);
         let replay = rng.replay_count(clip.replay);
         host.armed_at = now;
-        host.window_hi = now + (duration * replay as f32).max(f32::EPSILON);
+        host.window_ends_at = Some(now + (duration * replay as f32).max(f32::EPSILON));
         host.clip = Some((node, duration));
     }
 }
 
-/// Whether each host is in the frame's draw set.
 pub(crate) fn gate_sound_hosts(
     mut hosts: Query<'_, '_, &mut SoundHost>,
     vis: Query<'_, '_, &Visibility>,
@@ -116,8 +108,8 @@ pub(crate) fn gate_sound_hosts(
 ) {
     let cam = camera.single().ok();
     for mut host in &mut hosts {
-        let drawn = if host.meshes.is_empty() {
-            let (center, radius) = host.fade;
+        let drawn = if host.drawn_parts.is_empty() {
+            let (center, radius) = (Vec3::from(host.fade_sphere.center), host.fade_sphere.radius);
             cam.is_some_and(|(cam, frustum)| {
                 let pos = cam.translation();
                 let (dx, dz) = (center.x - pos.x, center.z - pos.z);
@@ -127,27 +119,20 @@ pub(crate) fn gate_sound_hosts(
                     .and_then(|r| instances.get(r.instance).ok());
                 doodad_fade_alpha(radius, (dx * dx + dz * dz).sqrt()) > 0.0
                     && (center - pos).dot(*cam.forward()) - radius <= FARCLIP
-                    && frustum.intersects_sphere(
-                        &Sphere {
-                            center: center.into(),
-                            radius,
-                        },
-                        false,
-                    )
+                    && frustum.intersects_sphere(&host.fade_sphere, false)
                     && room_admits(host.room.as_ref(), instance)
             })
         } else {
-            host.meshes
+            host.drawn_parts
                 .iter()
                 .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden))
         };
-        if host.active != drawn {
-            host.active = drawn;
+        if host.drawn != drawn {
+            host.drawn = drawn;
         }
     }
 }
 
-/// Fires the keys each drawn host's armed clip crossed this frame, at their model-space points.
 pub(crate) fn fire_sound_host_events(
     time: Res<'_, Time>,
     hosts: Query<'_, '_, (Entity, &SoundHost, &ModelAnimations, &GlobalTransform)>,
@@ -156,7 +141,7 @@ pub(crate) fn fire_sound_host_events(
 ) {
     let now = time.elapsed_secs();
     for (entity, host, anims, world) in &hosts {
-        if !host.active {
+        if !host.drawn {
             last.remove(&entity);
             continue;
         }
@@ -166,10 +151,9 @@ pub(crate) fn fire_sound_host_events(
         let Some(clip) = anims.clips.iter().find(|c| c.node == node) else {
             continue;
         };
-        if let Some(prev) = advance_track(&mut last, entity, node, cur) {
-            let frame = EventFrame { world, rig: None };
-            scan_events(clip, entity, prev, cur, &frame, &mut out);
-        }
+        let scan = advance_track(&mut last, entity, node, cur);
+        let frame = EventFrame { world, rig: None };
+        scan_events(clip, entity, scan, cur, &frame, &mut out);
     }
     last.retain(|e, _| hosts.contains(*e));
 }

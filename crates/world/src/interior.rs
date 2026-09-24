@@ -7,26 +7,17 @@ use bevy::prelude::*;
 use crate::adt::AdtTile;
 use crate::coords::bevy_to_wow;
 use crate::ground::{Ground, ground_under, terrain_wow_z_under};
-use crate::portal::{WmoPortalInstance, down_ray_seeds, terrain_z_local};
+use crate::portal::{EXTERIOR, WmoPortalInstance, down_ray_seeds, terrain_z_local};
 use crate::stream::Streamer;
 use crate::unit::UnitBody;
 use crate::view::WorldCamera;
 use crate::wmo::{Bounds, Triangle, WmoGroupNav, WmoModel};
 use crate::wmo_areas::WmoAreas;
 
-/// The group flag of a building's outdoor groups.
-const EXTERIOR: u32 = 0x8;
-/// The render and sound claim casts from the chest, over the body's feet.
-const INTERIOR_PROBE_HEIGHT: f32 = 1.7;
-/// The position claims cast from just over the feet, so a floor they rest on is not lost to a
-/// rounding hair.
-pub(crate) const POSITION_PROBE_LIFT: f32 = 0.1;
-/// How far down the position claims reach.
-const ZONE_RAY_LEN: f32 = 1000.0;
-/// A body whose origin sits below its own floor finds nothing under it, so a miss casts again
-/// from this far over its feet: over the middle of any playable body.
-const ROOM_UNDER_FLOOR_TOLERANCE: f32 = 2.0;
-/// How far a body moves before its room is cast again.
+const CHEST_HEIGHT: f32 = 1.7;
+pub(crate) const FEET_PROBE_LIFT: f32 = 0.1;
+const FEET_RAY_REACH: f32 = 1000.0;
+const SUNK_ORIGIN_RECAST_RISE: f32 = 2.0;
 const UNIT_ROOM_RESAMPLE_DIST_SQ: f32 = 0.25 * 0.25;
 
 /// The player's body, when the eye is on one: its feet in Bevy space, and whether the world under
@@ -52,14 +43,10 @@ pub struct WmoRoom {
     pub group: u16,
 }
 
-/// The building group the render and the sound place the player in, from the chest down through
-/// faces and portals; `None` outdoors.
+/// The building group the sound places the player in, cast from the chest (from the camera when
+/// there is no body) down through faces and portals; `None` outdoors.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CurrentWmoInterior(pub Option<WmoInteriorKeys>);
-
-/// The same claim as the placement and group it names.
-#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PlayerWmoRoom(pub Option<WmoRoom>);
 
 /// Where the area's name comes from indoors: from the feet down through faces alone, so a
 /// doorway's portal under the eye does not make the player indoors.
@@ -86,11 +73,10 @@ impl UnitRoom {
     }
 }
 
-/// Counts the placed buildings arriving and leaving, so a standing body re-casts its room.
 #[derive(Resource, Default)]
 pub(crate) struct WmoGeneration(u32);
 
-pub(crate) fn count_buildings(
+pub(crate) fn bump_wmo_generation(
     mut generation: ResMut<'_, WmoGeneration>,
     added: Query<'_, '_, (), Added<WmoPortalInstance>>,
     mut removed: RemovedComponents<'_, '_, WmoPortalInstance>,
@@ -115,26 +101,24 @@ fn keys(model: &WmoModel, inst: &WmoPortalInstance, group: usize) -> WmoInterior
     WmoInteriorKeys {
         wmo_id: model.wmo_id,
         name_set: u32::from(inst.name_set),
-        group_area_id: model.group_nav.get(group).map_or(0, |g| g.area_table_id),
+        group_area_id: model.group_nav.get(group).map_or(0, |g| g.wmo_group_id),
     }
 }
 
-/// The render and sound claim: the first placed building whose down-ray names a group.
 pub(crate) fn track_current_interior(
     wmos: Res<'_, Assets<WmoModel>>,
     viewer: Res<'_, Viewer>,
     camera: Query<'_, '_, &GlobalTransform, With<WorldCamera>>,
-    instances: Query<'_, '_, (Entity, &WmoPortalInstance)>,
+    instances: Query<'_, '_, &WmoPortalInstance>,
     ground: (Res<'_, Streamer>, Res<'_, Assets<AdtTile>>),
     mut current: ResMut<'_, CurrentWmoInterior>,
-    mut room: ResMut<'_, PlayerWmoRoom>,
 ) {
-    let Some(eye) = eye_or_camera(&viewer, &camera, INTERIOR_PROBE_HEIGHT) else {
+    let Some(eye) = eye_or_camera(&viewer, &camera, CHEST_HEIGHT) else {
         return;
     };
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, eye);
-    let mut found = (None, None);
-    for (entity, inst) in &instances {
+    let mut found = None;
+    for inst in &instances {
         let Some(model) = wmos.get(&inst.handle).filter(|m| m.wmo_id != 0) else {
             continue;
         };
@@ -142,22 +126,13 @@ pub(crate) fn track_current_interior(
         let eye_local = bevy_to_wow(local_from_world.transform_point3(eye));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, eye, z));
         if let Some(gi) = down_ray_seeds(model, eye_local, terrain_local).in_group {
-            let group = gi as u16;
-            found = (
-                Some(keys(model, inst, gi)),
-                Some(WmoRoom {
-                    instance: entity,
-                    group,
-                }),
-            );
+            found = Some(keys(model, inst, gi));
             break;
         }
     }
-    current.set_if_neq(CurrentWmoInterior(found.0));
-    room.set_if_neq(PlayerWmoRoom(found.1));
+    current.set_if_neq(CurrentWmoInterior(found));
 }
 
-/// The area's indoor claim: faces alone, outdoor groups excluded.
 pub(crate) fn track_area_interior(
     wmos: Res<'_, Assets<WmoModel>>,
     viewer: Res<'_, Viewer>,
@@ -166,7 +141,7 @@ pub(crate) fn track_area_interior(
     ground: (Res<'_, Streamer>, Res<'_, Assets<AdtTile>>),
     mut current: ResMut<'_, CurrentAreaInterior>,
 ) {
-    let Some(probe) = eye_or_camera(&viewer, &camera, POSITION_PROBE_LIFT) else {
+    let Some(probe) = eye_or_camera(&viewer, &camera, FEET_PROBE_LIFT) else {
         return;
     };
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, probe);
@@ -178,7 +153,7 @@ pub(crate) fn track_area_interior(
         let local_from_world = inst.world_from_local.inverse();
         let local = bevy_to_wow(local_from_world.transform_point3(probe));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe, z));
-        if let Some(gi) = area_down_ray(model, local, terrain_local, EXTERIOR) {
+        if let Some(gi) = interior_group_under(model, local, terrain_local) {
             found = Some(keys(model, inst, gi));
             break;
         }
@@ -186,7 +161,6 @@ pub(crate) fn track_area_interior(
     current.set_if_neq(CurrentAreaInterior(found));
 }
 
-/// The building group's own area when the area claim names one that has it, else the chunk's.
 pub(crate) fn update_current_area(
     viewer: Res<'_, Viewer>,
     interior: Res<'_, CurrentAreaInterior>,
@@ -216,7 +190,6 @@ pub(crate) fn update_current_area(
     }
 }
 
-/// Keeps every body's [`UnitRoom`], from its own feet.
 pub(crate) fn track_unit_rooms(
     mut commands: Commands<'_, '_>,
     wmos: Res<'_, Assets<WmoModel>>,
@@ -235,7 +208,7 @@ pub(crate) fn track_unit_rooms(
         }
         let cast = |rise: f32| room_cast(&wmos, &instances, &ground, pos, rise);
         let next = UnitRoom {
-            room: cast(0.0).or_else(|| cast(ROOM_UNDER_FLOOR_TOLERANCE)),
+            room: cast(0.0).or_else(|| cast(SUNK_ORIGIN_RECAST_RISE)),
             at: pos,
             generation: generation.0,
         };
@@ -257,45 +230,44 @@ fn room_cast(
     feet: Vec3,
     rise: f32,
 ) -> Option<WmoRoom> {
-    let probe = feet + Vec3::Y * (POSITION_PROBE_LIFT + rise);
+    let probe = feet + Vec3::Y * (FEET_PROBE_LIFT + rise);
     let terrain = terrain_wow_z_under(&ground.0, &ground.1, probe);
     instances.iter().find_map(|(entity, inst)| {
         let model = wmos.get(&inst.handle).filter(|m| m.wmo_id != 0)?;
         let local_from_world = inst.world_from_local.inverse();
         let local = bevy_to_wow(local_from_world.transform_point3(probe));
         let terrain_local = terrain.map(|z| terrain_z_local(&local_from_world, probe, z));
-        area_down_ray(model, local, terrain_local, EXTERIOR).map(|gi| WmoRoom {
+        interior_group_under(model, local, terrain_local).map(|gi| WmoRoom {
             instance: entity,
             group: gi as u16,
         })
     })
 }
 
-/// The group owning the nearest collision face under `eye` (model space) within the ray, unless
-/// strictly nearer terrain takes the column or the group carries a flag of `outdoor_mask`.
-pub(crate) fn area_down_ray(
+fn interior_group_under(
     model: &WmoModel,
-    eye: [f32; 3],
+    eye_model: [f32; 3],
     terrain_z: Option<f32>,
-    outdoor_mask: u32,
 ) -> Option<usize> {
     let (group, best_z) = nearest_face_below(
         &model.group_collision_tris,
         &model.group_collision_bounds,
-        eye,
+        eye_model,
     )?;
-    if eye[2] - best_z > ZONE_RAY_LEN || terrain_z.is_some_and(|tz| tz <= eye[2] && tz > best_z) {
+    if eye_model[2] - best_z > FEET_RAY_REACH
+        || terrain_z.is_some_and(|tz| tz <= eye_model[2] && tz > best_z)
+    {
         return None;
     }
     let outdoor = model
         .group_nav
         .get(group)
-        .is_none_or(|g: &WmoGroupNav| g.flags & outdoor_mask != 0);
+        .is_none_or(|g: &WmoGroupNav| g.flags & EXTERIOR != 0);
     (!outdoor).then_some(group)
 }
 
-/// Faces are culled by their own boxes, never a group's authored box, which can float above its
-/// floor; an exact tie keeps the first face found.
+/// Groups are culled by the box of their own collision faces, never their authored box, which can
+/// float above the floor.
 fn nearest_face_below(
     tris: &[Vec<Triangle>],
     bounds: &[Option<Bounds>],

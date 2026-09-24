@@ -1,7 +1,3 @@
-//! A footfall's sound: the `$FSD` key through the surface under the foot to the body's footstep
-//! class and a kit. Wading picks the splash kit where the class has one; deeper than the wade the
-//! body swims and its steps are silent. A body without a footstep class is silent-footed.
-
 use bevy::prelude::*;
 use world::collision::{LiquidClaim, Liquids};
 use world::coords::bevy_to_wow;
@@ -23,7 +19,6 @@ pub struct SoundBody {
     pub wade_max: f32,
 }
 
-/// The claim a body's liquid is scoped by: its room's building, or the open world.
 pub(crate) fn claim_of(room: Option<&UnitRoom>) -> LiquidClaim {
     match room.map(UnitRoom::room) {
         Some(Some(_)) => LiquidClaim::Inside,
@@ -109,7 +104,7 @@ pub(crate) fn footstep_sounds(
             &config,
             listener,
             KitRef::Id(kit),
-            Some(ev.pos.unwrap_or(feet)),
+            Some(ev.pos),
             SoundCategory::Sfx,
             PlayExtras {
                 bus: Bus::FOOTSTEP,

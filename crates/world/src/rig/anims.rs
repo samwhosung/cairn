@@ -14,12 +14,12 @@ pub struct ClipEvent {
     pub time: f32,
     /// As it reads, `*b"$FSD"`.
     pub ident: [u8; 4],
-    /// A `SoundEntries` id for the sound keys, else 0.
+    /// The payload as read: a `SoundEntries` id for `$SND`, `$DSL` and `$DSO`.
     pub data: u32,
     pub bone: u16,
     /// The key's point from its bone's pivot, Bevy axes: composed with the bone's live global.
     pub offset: Vec3,
-    /// The key's point in model space, Bevy axes: where it fires when the bone never moves.
+    /// The key's point in model space, Bevy axes: where it fires on a model with no live pose.
     pub point: Vec3,
 }
 

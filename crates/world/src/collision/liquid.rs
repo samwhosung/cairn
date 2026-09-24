@@ -19,7 +19,6 @@ pub struct LiquidSurface {
     min: [f32; 2],
     max: [f32; 2],
     kind: LiquidKind,
-    /// The sound class the liquid's loop is looked up by: class `n & 3`, speed `n & 0xc`.
     sound_nibble: u8,
     cols: usize,
     positions: Vec<[f32; 3]>,
@@ -30,7 +29,7 @@ pub struct LiquidSurface {
     v: [f32; 2],
     /// `None` when the grid is degenerate in XY; queries then fall back to the box.
     inv_det: Option<f32>,
-    /// The highest wet vertex: the degenerate grid's answer only.
+    /// The highest wet vertex: the degenerate grid's answer, and a dry cell's nearest point's.
     fallback_z: f32,
 }
 
@@ -174,8 +173,8 @@ pub(super) fn liquid_collider(mesh: &LiquidMesh) -> Option<(Collider, RigidBody)
     Some((Collider::trimesh(verts, tris), RigidBody::Static))
 }
 
-/// Which surfaces answer for a subject: outdoors the terrain's, inside a building only that
-/// building's, and before a subject's room is known, both.
+/// Which surfaces answer for a subject: the terrain's outdoors and before its room is known;
+/// none inside a building, whose liquid is not indexed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LiquidClaim {
     Outdoors,
@@ -184,13 +183,12 @@ pub enum LiquidClaim {
 }
 
 impl LiquidClaim {
-    /// Every surface here is the terrain's.
     fn admits_terrain(self) -> bool {
         self != LiquidClaim::Inside
     }
 }
 
-/// The nearest wet point of one liquid sound class.
+/// The nearest point of one sound class's wet footprints, by their boxes.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct NearestLiquid {
     pub dist_sq: f32,
@@ -266,8 +264,8 @@ impl Liquids<'_, '_> {
             .min_by(|a, b| a.surface_z.total_cmp(&b.surface_z))
     }
 
-    /// The water surface over a WoW position for a subject holding `claim`, lava and slime left
-    /// out; where waters overlap, the lowest.
+    /// The water surface over a WoW position's column for a subject holding `claim`, lava and
+    /// slime left out; where waters overlap, the lowest.
     pub fn water_surface_at(&self, wow: [f32; 3], claim: LiquidClaim) -> Option<f32> {
         if !claim.admits_terrain() {
             return None;
@@ -303,7 +301,8 @@ impl Liquids<'_, '_> {
             .collect()
     }
 
-    /// The nearest wet point within `radius` of a WoW position, one per sound class `nibble & 3`.
+    /// The nearest point of each sound class's wet footprints, by their boxes, within `radius` of
+    /// a WoW position: one per class `nibble & 3`.
     pub fn nearest_per_class(&self, wow: [f32; 3], radius: f32) -> [Option<NearestLiquid>; 4] {
         let mut best: [Option<NearestLiquid>; 4] = [None; 4];
         for s in &self.surfaces {

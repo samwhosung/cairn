@@ -16,7 +16,6 @@ use crate::model::ModelSubmesh;
 use crate::source::MPQ_SOURCE;
 
 pub(crate) type Triangle = [[f32; 3]; 3];
-/// A box as `(min, max)`.
 pub type Bounds = ([f32; 3], [f32; 3]);
 
 /// A WMO building as the world draws it: every group's render batches, the portal graph that
@@ -39,7 +38,8 @@ pub struct WmoModel {
     pub group_camera_only_tris: Vec<Vec<Triangle>>,
     /// Per group: the box of its collision faces, `None` without any.
     pub group_collision_bounds: Vec<Option<Bounds>>,
-    /// Per interior group: the render faces a down-ray reads a surface's material off.
+    /// Per group: the render faces a down-ray reads a surface's material off; `None` unless the
+    /// group is interior with vertex colours.
     pub group_footprints: Vec<Option<FootprintTris>>,
     /// Per group: the box of its footprint's faces.
     pub group_footprint_bounds: Vec<Option<Bounds>>,
@@ -64,8 +64,7 @@ pub struct WmoModel {
 #[derive(Clone, Copy, Debug)]
 pub struct WmoGroupNav {
     pub flags: u32,
-    /// The group's id in `WMOAreaTable`.
-    pub area_table_id: u32,
+    pub wmo_group_id: u32,
     pub bbox_min: [f32; 3],
     pub bbox_max: [f32; 3],
     pub ref_start: u16,
@@ -188,8 +187,6 @@ fn footprint_bounds(fp: &FootprintTris) -> Option<Bounds> {
     )
 }
 
-/// Each group's bounding box from the root's group list; the header fields fill in as the group
-/// files load.
 fn group_navs(root: &WmoRoot) -> Vec<WmoGroupNav> {
     (0..root.group_count() as usize)
         .map(|gi| {
@@ -201,7 +198,7 @@ fn group_navs(root: &WmoRoot) -> Vec<WmoGroupNav> {
                 });
             WmoGroupNav {
                 flags: 0,
-                area_table_id: 0,
+                wmo_group_id: 0,
                 bbox_min,
                 bbox_max,
                 ref_start: 0,
@@ -263,7 +260,7 @@ impl AssetLoader for WmoLoader {
             if let Some(h) = wmo_group_header(&gbytes) {
                 let nav = &mut group_nav[gi];
                 nav.flags = h.flags;
-                nav.area_table_id = h.area_table_id;
+                nav.wmo_group_id = h.area_table_id;
                 nav.ref_start = h.portal_ref_start;
                 nav.ref_count = h.portal_ref_count;
                 nav.fog_indices = h.fog_indices;

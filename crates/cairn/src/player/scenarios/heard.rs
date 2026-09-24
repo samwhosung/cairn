@@ -224,7 +224,7 @@ fn record(
                 String::from_utf8_lossy(&e.ident),
                 e.data,
                 e.anim_id,
-                opt(e.pos, vec)
+                vec(e.pos)
             )
         })
         .collect();

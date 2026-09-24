@@ -123,7 +123,6 @@ impl Plugin for WorldPlugin {
         .init_resource::<room::RoomCrossfade>()
         .init_resource::<interior::Viewer>()
         .init_resource::<interior::CurrentWmoInterior>()
-        .init_resource::<interior::PlayerWmoRoom>()
         .init_resource::<interior::CurrentAreaInterior>()
         .init_resource::<interior::CurrentArea>()
         .init_resource::<interior::WmoGeneration>()
@@ -141,7 +140,7 @@ impl Plugin for WorldPlugin {
                     models::furnish,
                     portal::compute_wmo_pvs,
                     visibility::apply_model_visibility,
-                    interior::count_buildings,
+                    interior::bump_wmo_generation,
                     interior::track_current_interior,
                     interior::track_area_interior,
                     interior::update_current_area,
@@ -179,7 +178,8 @@ impl Plugin for WorldPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorldSystems;
 
-/// The animation event keys fired this frame, after the units are driven; read them after it.
+/// The units' animation event keys fired this frame, after the units are driven; read them after
+/// it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EventSystems;
 

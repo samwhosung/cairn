@@ -1,5 +1,3 @@
-//! `WMOAreaTable`: every building group's area, name and sound.
-
 use std::collections::HashMap;
 use std::io::Cursor;
 

@@ -14,7 +14,7 @@ use crate::stream::Streamer;
 use crate::view::WorldCamera;
 use crate::wmo::{Triangle, WmoGroupNav, WmoModel};
 
-const EXTERIOR: u32 = 0x8;
+pub(crate) const EXTERIOR: u32 = 0x8;
 /// An indoor group lit as outdoors.
 const EXTERIOR_LIT: u32 = 0x40;
 /// A group the client draws in a pass of its own, against the whole frustum.
@@ -39,7 +39,6 @@ const FULL_SCREEN: Rect = Rect {
 pub struct WmoPortalInstance {
     pub(crate) handle: Handle<WmoModel>,
     pub(crate) world_from_local: Affine3A,
-    /// The placement's `WMOAreaTable` name set.
     pub(crate) name_set: u16,
     pub(crate) visible: Vec<bool>,
     pub(crate) interior_fog: Vec<bool>,
@@ -62,10 +61,8 @@ impl WmoPortalInstance {
     }
 }
 
-/// The building group the camera's eye is in, from the flood's own down-ray: the first placement
-/// with portals that seeds a group of its own that is not an exterior one.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CameraInteriorClaim(pub Option<crate::interior::WmoRoom>);
+pub(crate) struct CameraInteriorClaim(pub Option<crate::interior::WmoRoom>);
 
 #[derive(Component, Clone)]
 pub struct WmoGroupVis {
