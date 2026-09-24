@@ -287,3 +287,38 @@ fn the_walker_under_the_sky_at_dawn_noon_dusk_and_night() {
         p.shoot(name);
     }
 }
+
+fn frame_costs(p: &mut Painter, frames: usize) -> String {
+    let mut costs: Vec<Duration> = (0..frames)
+        .map(|_| {
+            let t = Instant::now();
+            p.app.update();
+            t.elapsed()
+        })
+        .collect();
+    costs.sort();
+    let at = |q: f32| costs[((costs.len() - 1) as f32 * q) as usize].as_secs_f64() * 1e3;
+    let mean = costs.iter().sum::<Duration>().as_secs_f64() * 1e3 / costs.len() as f64;
+    format!(
+        "mean {mean:.3} ms, p50 {:.3}, p90 {:.3}, p99 {:.3}, max {:.3}",
+        at(0.5),
+        at(0.9),
+        at(0.99),
+        at(1.0)
+    )
+}
+
+/// What a frame of the walker's window costs in Goldshire, drawn headless: standing looking at
+/// the inn, then running east out of the village.
+#[test]
+#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_frame_cost_of_goldshire() {
+    let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    p.wait(2.0);
+    let standing = frame_costs(&mut p, 600);
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    let running = frame_costs(&mut p, 1200);
+    eprintln!("goldshire: standing {standing}; running {running}");
+}
