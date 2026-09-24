@@ -5,17 +5,21 @@ use std::time::{Duration, Instant};
 
 use bevy::input::keyboard::KeyCode;
 use bevy::prelude::*;
+use world::coords::bevy_to_wow;
 use world::unit::{BodyDressed, CharacterLook, UnitBody};
 
 use super::honest::{Stand, serve};
 use super::pair::Act;
 use super::pictures::{EAST, GOLDSHIRE, Painter, frame_costs};
 use super::walker::Walker;
-use crate::net::OtherPlayer;
+use crate::net::{OtherPlayer, RemoteMotion};
+use crate::player::state::Player;
 
 const HZ: f32 = 60.0;
 const STEP: Duration = Duration::from_nanos(16_666_667);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// The runner starts 8 yd from the painter and runs past it.
+const SUBJECT_WITHIN_YD: f32 = 12.0;
 
 const RUN_AND_JUMP: [(f32, Act); 4] = [
     (0.0, Act::Press(KeyCode::KeyW)),
@@ -93,6 +97,26 @@ fn others_dressed_and_skinned(p: &mut Painter) -> bool {
         })
 }
 
+/// How far across from the painter's body the other player's copy stands.
+fn yards_to_the_other(p: &mut Painter) -> Option<f32> {
+    let world = p.app.world_mut();
+    let me = bevy_to_wow(world.resource::<Player>().pos);
+    world
+        .query_filtered::<&RemoteMotion, With<OtherPlayer>>()
+        .iter(world)
+        .map(|m| (m.wow_pos[0] - me[0]).hypot(m.wow_pos[1] - me[1]))
+        .reduce(f32::min)
+}
+
+fn shoot_the_other(p: &mut Painter, name: &str) {
+    let across = yards_to_the_other(p);
+    assert!(
+        across.is_some_and(|yd| yd < SUBJECT_WITHIN_YD),
+        "{name}: the other player is {across:?} yd away"
+    );
+    p.shoot(name);
+}
+
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
@@ -127,12 +151,12 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         }
         p.orbit(0.0, 6.0);
         wait(&mut p, 2.5);
-        p.shoot(&format!("{name}-1-standing"));
+        shoot_the_other(&mut p, &format!("{name}-1-standing"));
         let _ = r.cue.send(());
         let go = Instant::now();
         for (at, shot) in [(0.7, "2-running"), (1.15, "3-jumping"), (2.6, "4-landed")] {
             wait(&mut p, at - go.elapsed().as_secs_f32());
-            p.shoot(&format!("{name}-{shot}"));
+            shoot_the_other(&mut p, &format!("{name}-{shot}"));
         }
         let _ = r.cue.send(());
         drop(p);

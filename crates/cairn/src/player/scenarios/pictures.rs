@@ -16,7 +16,7 @@ use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use world::collision::{CollisionPlugin, WorldCollision};
+use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
@@ -25,6 +25,7 @@ use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 use super::walker::time_update;
 use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
+use crate::player::flags::FALLING;
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerBody, PlayerPlugin};
 use crate::shot::{Pipelines, headless_plugins, watch_pipelines, write_png};
@@ -84,8 +85,8 @@ impl Painter {
         Some(painter)
     }
 
-    /// A painter joining `server`, at `feet` until its welcome places it. It is not yet welcomed
-    /// or settled.
+    /// A painter joining `server`, standing where its welcome places it, near `feet`, once its
+    /// world has arrived there.
     pub(super) fn joined(
         server: SocketAddr,
         feet: [f32; 3],
@@ -93,7 +94,22 @@ impl Painter {
         look: CharacterLook,
     ) -> Option<Self> {
         let hello = crate::net::hello("Painter".into(), &look);
-        Self::build(feet, heading_deg, look, Some(Net::connect(server, hello)))
+        let mut painter = Self::build(feet, heading_deg, look, Some(Net::connect(server, hello)))?;
+        painter.clock().pause();
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        while painter
+            .app
+            .world()
+            .get_resource::<Net>()
+            .is_none_or(|n| n.welcome().is_none())
+        {
+            assert!(Instant::now() < deadline, "no welcome from the server");
+            painter.app.update();
+            std::thread::sleep(STEP);
+        }
+        painter.settle();
+        painter.clock().unpause();
+        Some(painter)
     }
 
     fn build(
@@ -210,7 +226,10 @@ impl Painter {
             !pipelines.failed.load(Ordering::Relaxed),
             "a render pipeline failed"
         );
-        if world.resource::<Player>().settling
+        let player = world.resource::<Player>();
+        if player.settling
+            || player.move_flags & FALLING != 0
+            || !world.resource::<CollisionResidency>().settled()
             || !world.resource::<Residency>().settled()
             || !pipelines.built.load(Ordering::Relaxed)
         {
