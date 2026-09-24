@@ -1,19 +1,22 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bevy::math::{UVec2, Vec3};
 use world::TimeOfDay;
 
 use crate::fixture::Fixture;
+use crate::shot::DEFAULT_WORLD_AGE;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent
-       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] --out FILE.png
+       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
+                  --out FILE.png
          render one frame without a window, once everything in it has loaded and the
-         world has run 2.5 seconds
+         world has run S seconds (2.5 by default)
        cairn shot --display ID [--age S] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
          stand a CreatureDisplayInfo display on the ground below AT and shoot it S seconds
          (1 by default) after it appears, from the orbit around the point a yard above its
@@ -83,6 +86,7 @@ pub struct Args {
     pub glow: bool,
     pub mute: bool,
     pub display: Option<Fixture>,
+    pub world_age: Duration,
     pub look: Look,
 }
 
@@ -189,6 +193,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         return Err(format!("{} does not end in .png", path.display()));
     }
     let display = display(&mut given, shot)?;
+    let world_age = match given.remove("age") {
+        Some(_) if !shot => return Err("--age is for a shot".into()),
+        Some(age) => Duration::try_from_secs_f32(parse_number("age", &age)?)
+            .map_err(|_| format!("--age wants seconds from 0, not {age}"))?,
+        None => DEFAULT_WORLD_AGE,
+    };
     let look = look(&mut given, shot)?;
     Ok(Args {
         pose: pose(&given)?,
@@ -200,6 +210,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         glow,
         mute,
         display,
+        world_age,
         look,
     })
 }
@@ -260,11 +271,7 @@ fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String
 
 fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fixture>, String> {
     let Some(id) = given.remove("display") else {
-        return if given.contains_key("age") {
-            Err("--age is for a display shot".into())
-        } else {
-            Ok(None)
-        };
+        return Ok(None);
     };
     if !shot {
         return Err("--display is for a shot: cairn shot --display ID ...".into());
@@ -457,6 +464,14 @@ mod tests {
     }
 
     #[test]
+    fn a_shot_ages_its_world_two_and_a_half_seconds_unless_told() {
+        let age = |line: &str| parsed(line).expect("parses").world_age;
+        assert_eq!(age("shot --out a.png"), Duration::from_millis(2500));
+        assert_eq!(age("shot --age 0 --out a.png"), Duration::ZERO);
+        assert_eq!(age("shot --age 4 --out a.png"), Duration::from_secs(4));
+    }
+
+    #[test]
     fn a_display_shot_takes_its_subject_and_orbit() {
         let args = parsed("shot --display 3167 --age 2.5 --out a.png").expect("parses");
         assert_eq!(
@@ -508,7 +523,8 @@ mod tests {
             "--skin 256",
             "shot --race orc --out a.png",
             "--display 3167",
-            "shot --age 2 --out a.png",
+            "--age 2",
+            "shot --age -1 --out a.png",
             "shot --display x --out a.png",
             "shot --display 1 --age -1 --out a.png",
             "shot --display 1 --at 0,0,0 --out a.png",

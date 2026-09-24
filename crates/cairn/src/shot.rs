@@ -21,7 +21,7 @@ use crate::view::{Pose, camera};
 
 const IDENTICAL_CAPTURES: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(120);
-const WORLD_AGE: Duration = Duration::from_millis(2500);
+pub const DEFAULT_WORLD_AGE: Duration = Duration::from_millis(2500);
 
 pub fn headless_plugins() -> PluginGroupBuilder {
     DefaultPlugins
@@ -48,7 +48,7 @@ pub struct ShotPlugin {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgedBy {
-    World,
+    World { after_loading: Duration },
     Subject,
 }
 
@@ -63,6 +63,9 @@ enum WorldAge {
         steps: u32,
     },
 }
+
+#[derive(Resource)]
+struct AgeSteps(u32);
 
 #[derive(Resource)]
 struct Shot {
@@ -119,9 +122,12 @@ impl Plugin for ShotPlugin {
             .init_resource::<ReadyToShoot>()
             .insert_resource(world::CloudClock::Held)
             .add_systems(Update, capture);
-        if self.aged_by == AgedBy::World {
+        if let AgedBy::World { after_loading } = self.aged_by {
             app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))
                 .init_resource::<WorldAge>()
+                .insert_resource(AgeSteps(
+                    after_loading.div_duration_f32(FRAME_STEP).round() as u32
+                ))
                 .add_systems(Startup, |mut clock: ResMut<'_, Time<Virtual>>| {
                     clock.pause();
                 })
@@ -133,6 +139,7 @@ impl Plugin for ShotPlugin {
 fn age_world(
     residency: Res<'_, Residency>,
     pipelines: Res<'_, Pipelines>,
+    age_steps: Res<'_, AgeSteps>,
     mut age: ResMut<'_, WorldAge>,
     mut clock: ResMut<'_, Time<Virtual>>,
     mut ready: ResMut<'_, ReadyToShoot>,
@@ -140,10 +147,14 @@ fn age_world(
     if ready.0 {
         return;
     }
-    let age_steps = WORLD_AGE.div_duration_f32(FRAME_STEP).round() as u32;
+    let age_steps = age_steps.0;
     *age = match *age {
         WorldAge::Loading if residency.settled() && pipelines.built.load(Ordering::Relaxed) => {
-            clock.unpause();
+            if age_steps == 0 {
+                ready.0 = true;
+            } else {
+                clock.unpause();
+            }
             WorldAge::Running { steps: 0 }
         }
         WorldAge::Loading => WorldAge::Loading,

@@ -98,10 +98,11 @@ fn main() -> AppExit {
                     pose: args.pose,
                     size: args.size,
                     out,
-                    aged_by: if args.display.is_some() {
-                        shot::AgedBy::Subject
-                    } else {
-                        shot::AgedBy::World
+                    aged_by: match args.display {
+                        Some(_) => shot::AgedBy::Subject,
+                        None => shot::AgedBy::World {
+                            after_loading: args.world_age,
+                        },
                     },
                 },
             ));
