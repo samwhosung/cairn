@@ -34,6 +34,8 @@ const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
 
 const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 const EAST: f32 = 270.0;
+const HILLTOP_SOUTH_OF_GOLDSHIRE: [f32; 2] = [-9200.0, -420.0];
+const SUN_BEARING: f32 = 45.0;
 
 struct Painter {
     app: App,
@@ -188,6 +190,19 @@ impl Painter {
         rig.yaw += yaw_by;
     }
 
+    fn set_time(&mut self, hour: u32, minute: u32) {
+        self.app.world_mut().resource_mut::<TimeOfDay>().minute = hour * 60 + minute;
+    }
+
+    fn tilt_up(&mut self, radians: f32) {
+        let world = self.app.world_mut();
+        let mut rig = world
+            .query_filtered::<&mut CameraRig, With<WorldCamera>>()
+            .single_mut(world)
+            .expect("the follow camera");
+        rig.pitch = radians;
+    }
+
     fn run(&mut self, frames: usize) {
         for _ in 0..frames {
             self.app.update();
@@ -251,4 +266,24 @@ fn the_walker_stands_runs_and_jumps_in_goldshire() {
     p.orbit(0.0, 1.2);
     p.wait(1.0);
     p.shoot("goldshire-6-fading");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_under_the_sky_at_dawn_noon_dusk_and_night() {
+    let hill = HILLTOP_SOUTH_OF_GOLDSHIRE;
+    let Some(mut p) = Painter::new(hill, SUN_BEARING, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    for (name, hour, minute, tilt) in [
+        ("sky-1-dawn", 6, 30, 0.1),
+        ("sky-2-noon", 12, 0, 0.35),
+        ("sky-3-dusk", 20, 15, 0.1),
+        ("sky-4-night", 0, 30, 0.6),
+    ] {
+        p.set_time(hour, minute);
+        p.tilt_up(tilt);
+        p.wait(2.0);
+        p.shoot(name);
+    }
 }
