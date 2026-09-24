@@ -11,7 +11,8 @@ const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
               [--record FILE] [--players N --settle S --measure S] [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
-         are in, wait S seconds, measure for S seconds, print one summary row and stop.
+         are in, wait S seconds and measure for S seconds; once every player has left,
+         print one summary row and stop.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
          and world hash to FILE.
        server header

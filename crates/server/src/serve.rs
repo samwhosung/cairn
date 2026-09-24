@@ -50,7 +50,8 @@ impl Default for Config {
     }
 }
 
-/// Once `players` are in, wait `settle` ticks, measure `measure` ticks, then stop.
+/// Once `players` are in, wait `settle` ticks and measure `measure` ticks; then run on until
+/// every player has left.
 #[derive(Clone, Copy, Debug)]
 pub struct Window {
     pub players: u32,
@@ -87,7 +88,8 @@ impl Mark {
     }
 }
 
-/// Ticks in real time until stopped, or until the measured window is over.
+/// Ticks in real time until stopped, or once the measured window is over, until every player
+/// has left.
 pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(cfg.threads)
@@ -116,6 +118,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     let mut due = Instant::now();
     let mut ticks: Vec<TickStats> = Vec::new();
     let (mut mark, mut full_at) = (None::<Mark>, None::<usize>);
+    let mut measured = None;
     while !shared.stop.load(Ordering::Relaxed) {
         due = (due + period).max(Instant::now());
         std::thread::sleep(due.saturating_duration_since(Instant::now()));
@@ -127,6 +130,11 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         ticks.push(st);
         let n = ticks.len();
         match cfg.window {
+            Some(_) if measured.is_some() => {
+                if st.players == 0 {
+                    break;
+                }
+            }
             Some(w) => {
                 if full_at.is_none() && st.players >= w.players {
                     full_at = Some(n);
@@ -136,7 +144,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
                     mark = Some(Mark::now(n, shared));
                 }
                 if start.is_some_and(|s| n >= s + w.measure as usize) {
-                    break;
+                    measured = mark.take().map(|m| m.summary(&ticks, cfg.threads, shared));
                 }
             }
             None if mark.is_none() && st.players > 0 => mark = Some(Mark::now(n, shared)),
@@ -146,5 +154,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     if let Some(log) = log {
         log.finish()?;
     }
-    Ok(mark.map_or_else(Summary::default, |m| m.summary(&ticks, cfg.threads, shared)))
+    Ok(measured
+        .or_else(|| mark.map(|m| m.summary(&ticks, cfg.threads, shared)))
+        .unwrap_or_default())
 }
