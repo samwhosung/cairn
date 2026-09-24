@@ -1,6 +1,6 @@
 [package]
 name = "sound"
-description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, mixed by kira on the device or offline"
+description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables and the kit player, mixed by kira on the device or offline"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,6 +26,7 @@ mpq = { path = "../mpq" }
 rtrb = "0.3"
 # kira's version, for the `MediaSource` a decode stream reads through.
 symphonia = { version = "0.5", default-features = false }
+world = { path = "../world" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-rs = { version = "0.13", default-features = false, features = [

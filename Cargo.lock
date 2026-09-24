@@ -4145,6 +4145,7 @@ dependencies = [
  "objc2-core-audio-types",
  "rtrb",
  "symphonia",
+ "world",
 ]
 
 [[package]]

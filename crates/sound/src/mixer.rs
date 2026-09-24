@@ -324,6 +324,10 @@ impl Mixer {
     pub fn take_health_peak(&mut self) -> f32 {
         std::mem::take(&mut self.health.peak_load)
     }
+
+    pub(crate) fn take_output_window(&mut self) -> Window {
+        std::mem::take(&mut self.window)
+    }
 }
 
 /// The main track's chain in signal order: master, meter, limiter, tap, output gate. kira
