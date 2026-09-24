@@ -17,6 +17,11 @@ use bevy::prelude::*;
 use world::unit::{BodySkin, CharacterLook, CharacterTables};
 use world::{CurrentMap, Install};
 
+/// A debug build aborts on an allocation inside the sound output's realtime scopes.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
 fn main() -> AppExit {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.iter().any(|arg| arg == "-h" || arg == "--help") {

@@ -34,7 +34,8 @@ pub use mixer::{Mixer, MixerSettings};
 pub use output::{OFFLINE_SAMPLE_RATE, Output};
 pub use plugin::{AudioListener, ListenerCharacter, SoundOutput, SoundPlugin, SoundSystems};
 
-/// A debug build aborts on an allocation inside the output's realtime scopes.
-#[cfg(debug_assertions)]
+/// The crate's own debug tests abort on an allocation inside the output's realtime scopes; a binary
+/// that plays sound declares the same allocator.
+#[cfg(all(test, debug_assertions))]
 #[global_allocator]
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
