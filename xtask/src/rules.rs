@@ -43,9 +43,11 @@ static REFS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         ),
         (r"\bQ\d{1,3}\b", "a lab question id"),
         (
-            r"(?i)\b(?:drydock|wow-5875-re|wow-re)\b",
+            r"(?i)\b(?:drydock|cairn-ops|benilla-ops|wow-5875-re|wow-re)\b",
             "a reference to a private repo",
         ),
+        (r"/Users/|~/dev\b", "a path on a maintainer's machine"),
+        (r"\b[WS]\d{1,2}[a-z]?\b", "a lab milestone name"),
     ]
     .into_iter()
     .map(|(p, why)| (Regex::new(p).expect("valid pattern"), why))
@@ -395,6 +397,24 @@ mod tests {
             0
         );
         assert_eq!(rust_problems("let c = '\"'; // fine\n").len(), 0);
+    }
+
+    #[test]
+    fn private_names_paths_and_milestones_fail() {
+        for comment in [
+            "// cairn-ops",
+            "// /Users/me/x",
+            "// ~/dev/x",
+            "// W6's",
+            "// S1b",
+        ] {
+            assert_eq!(
+                rust_problems(&format!("let a = 1; {comment}\n")).len(),
+                1,
+                "{comment}"
+            );
+        }
+        assert_eq!(rust_problems("let a = 1; // the S curve\n").len(), 0);
     }
 
     #[test]
