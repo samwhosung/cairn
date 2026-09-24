@@ -7,7 +7,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, InputOrder, Replay, Replicate, Spawn, View, Window};
+use server::{Config, InputOrder, Replay, Replicate, Spawn, Summary, View, Window};
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -244,6 +244,7 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
         tick_threads: 1,
         window: Some(Window {
             players: 1,
+            arrival: 10_000,
             settle: 10_000,
             measure: 10_000,
             grace: 10_000,
@@ -253,45 +254,62 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
     .expect("a server");
     drop(Client::join(running.addr(), "Ada"));
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(running.wait().map(|s| s.ticks)));
-    let measured = rx
+    std::thread::spawn(move || {
+        tx.send(
+            running
+                .wait()
+                .map(|s| (s.ticks, s.players_arrived, s.players_wanted)),
+        )
+    });
+    let ended = rx
         .recv_timeout(Duration::from_secs(10))
         .expect("the server stops")
         .expect("a clean stop");
-    assert_eq!(measured, 0, "the window never opened");
+    assert_eq!(
+        ended,
+        (0, 1, 1),
+        "the window never opened, its crowd in full"
+    );
 }
 
-#[test]
-fn a_window_ends_on_time_though_a_client_neither_reads_nor_leaves() {
-    let tick_ms = 20;
-    let window = Window {
-        players: 1,
-        settle: 5,
-        measure: 10,
-        grace: 20,
-    };
+const WINDOW_TICK_MS: u16 = 20;
+
+fn window_with<T>(window: Window, come: impl FnOnce(SocketAddr) -> T) -> (Summary, T) {
     let running = server::start(Config {
         tick_threads: 1,
-        tick_ms,
+        tick_ms: WINDOW_TICK_MS,
         window: Some(window),
         ..Config::default()
     })
     .expect("a server");
     let started = Instant::now();
-    let mut stays = Client::join(running.addr(), "Ada");
+    let clients = come(running.addr());
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(running.wait().map(|s| (s.ticks, s.ticks_after, s.stayed))));
-    let ticks = window.settle + window.measure + window.grace;
-    let bound =
-        Duration::from_millis(u64::from(ticks) * u64::from(tick_ms)) * 2 + Duration::from_secs(1);
-    let ended = rx
+    std::thread::spawn(move || tx.send(running.wait().map(Box::new)));
+    let ticks = window.arrival + window.settle + window.measure + window.grace;
+    let bound = Duration::from_millis(u64::from(ticks) * u64::from(WINDOW_TICK_MS)) * 2
+        + Duration::from_secs(1);
+    let summary = rx
         .recv_timeout(bound.saturating_sub(started.elapsed()))
         .unwrap_or_else(|_| {
             panic!("the window did not end within {bound:?}: twice its {ticks} ticks, and a second")
         })
         .expect("a clean stop");
+    (*summary, clients)
+}
+
+#[test]
+fn a_window_ends_on_time_though_a_client_neither_reads_nor_leaves() {
+    let window = Window {
+        players: 1,
+        arrival: 20,
+        settle: 5,
+        measure: 10,
+        grace: 20,
+    };
+    let (summary, mut stays) = window_with(window, |addr| Client::join(addr, "Ada"));
     assert_eq!(
-        ended,
+        (summary.ticks, summary.ticks_after, summary.stayed),
         (10, 20, 1),
         "ticks measured, ticks after, players dropped"
     );
@@ -299,6 +317,40 @@ fn a_window_ends_on_time_though_a_client_neither_reads_nor_leaves() {
         stays.cut_off(),
         "the server returned and left the connection open"
     );
+}
+
+#[test]
+fn a_window_ends_on_time_though_its_crowd_never_fully_arrives() {
+    let window = Window {
+        players: 5,
+        arrival: 20,
+        settle: 5,
+        measure: 10,
+        grace: 20,
+    };
+    let (left, ()) = window_with(window, |addr| drop(Client::join(addr, "Ada")));
+    assert_eq!(
+        (
+            left.ticks,
+            left.players_arrived,
+            left.players_wanted,
+            left.stayed
+        ),
+        (0, 0, 5, 0),
+        "Ada came and left, and the window stopped waiting with nobody in"
+    );
+    let (stayed, _ada) = window_with(window, |addr| Client::join(addr, "Ada"));
+    assert_eq!(
+        (
+            stayed.ticks,
+            stayed.players_arrived,
+            stayed.players_wanted,
+            stayed.stayed
+        ),
+        (10, 1, 5, 1),
+        "Ada came and stayed, alone, until the grace ran out"
+    );
+    assert!(stayed.row("").contains("| 1 of 5 |"), "{}", stayed.row(""));
 }
 
 #[test]

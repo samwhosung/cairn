@@ -184,6 +184,10 @@ pub struct Summary {
     pub ticks_after: u32,
     /// Players still in when the grace ran out, whose connections the server dropped.
     pub stayed: u32,
+    /// Players in when the window stopped waiting for them: at least `players_wanted`, or whoever
+    /// was in when its arrival ran out; 0 if it never stopped waiting.
+    pub players_arrived: u32,
+    pub players_wanted: u32,
 }
 
 impl Summary {
@@ -235,6 +239,8 @@ impl Summary {
             process_share: process_ns as f64 / 1e9 / wall_secs.max(1e-9),
             ticks_after: 0,
             stayed: 0,
+            players_arrived: 0,
+            players_wanted: 0,
         }
     }
 
@@ -251,14 +257,19 @@ impl Summary {
     }
 
     /// One markdown row of [`Summary::header`]'s table, with the load average when it is made.
+    /// A window measured without all its players shows them as `players of players_wanted`.
     pub fn row(&self, label: &str) -> String {
+        let players = if self.players < self.players_wanted {
+            format!("{} of {}", self.players, self.players_wanted)
+        } else {
+            self.players.to_string()
+        };
         let [i50, i99, imax] = self.ideal;
         let [c50, c99, _] = self.cpu;
         let [w50, w99, _] = self.wall;
         let phases: Vec<String> = self.phase_cpu.iter().map(|p| format!("{p:.3}")).collect();
         format!(
-            "| {label} | {} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {:.1} / {:.1} | {} | {:.2} | {:.1} | {} | {} | {} | {} / {} | {:.1} | {:016x} | {} |",
-            self.players,
+            "| {label} | {players} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {:.1} / {:.1} | {} | {:.2} | {:.1} | {} | {} | {} | {} / {} | {:.1} | {:016x} | {} |",
             self.threads,
             self.ticks,
             phases.join(" / "),

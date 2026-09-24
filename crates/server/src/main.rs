@@ -11,11 +11,13 @@ use server::{
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
-              [--record FILE] [--players N --settle S --measure S --grace S] [--label TEXT]
+              [--record FILE] [--players N --arrival S --settle S --measure S --grace S]
+              [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
-         are in, wait S seconds and measure for S seconds; once every player has left, or
-         S seconds after the window (--grace, 10) with the rest dropped, print one summary
-         row and stop.
+         are in, or S seconds after the start (--arrival, 60) with whoever is, wait S
+         seconds and measure for S seconds; once every player has left, or S seconds
+         after the window (--grace, 10) with the rest dropped, print one summary row and
+         stop.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
          and world hash to FILE.
        server header
@@ -84,6 +86,7 @@ fn serve(args: &[String]) -> Result<(), String> {
     let window = match f.get("players") {
         Some(_) => Some(Window {
             players: num(&f, "players", 0)?,
+            arrival: ticks(num(&f, "arrival", 60.0)?),
             settle: ticks(num(&f, "settle", 5.0)?),
             measure: ticks(num(&f, "measure", 20.0)?),
             grace: ticks(num(&f, "grace", 10.0)?),
@@ -110,6 +113,12 @@ fn serve(args: &[String]) -> Result<(), String> {
     let running = server::start(cfg).map_err(|e| format!("starting: {e}"))?;
     eprintln!("serving on {}", running.addr());
     let summary = running.wait().map_err(|e| format!("serving: {e}"))?;
+    if summary.players_arrived < summary.players_wanted {
+        eprintln!(
+            "{} of the {} players were in when the window stopped waiting for them",
+            summary.players_arrived, summary.players_wanted
+        );
+    }
     if window.is_some_and(|w| summary.ticks == w.measure as usize) {
         let after = f64::from(summary.ticks_after) * f64::from(tick_ms) / 1000.0;
         match summary.stayed {

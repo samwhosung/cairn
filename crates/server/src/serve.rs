@@ -47,12 +47,13 @@ impl Default for Config {
     }
 }
 
-/// Once `players` are in, wait `settle` ticks and measure `measure` ticks; run on until every
-/// player has left or the `grace` has run out, and if they leave sooner, report what was measured
-/// by then.
+/// Once `players` are in, or `arrival` ticks after the server started with whoever is, wait
+/// `settle` ticks and measure `measure` ticks; run on until every player has left or the `grace`
+/// has run out, and if they leave sooner, report what was measured by then.
 #[derive(Clone, Copy, Debug)]
 pub struct Window {
     pub players: u32,
+    pub arrival: u32,
     pub settle: u32,
     pub measure: u32,
     /// Ticks the players have to leave once the window has measured; then the server drops
@@ -117,6 +118,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     let mut ticks: Vec<TickStats> = Vec::new();
     let (mut mark, mut crowd_in_at) = (None::<WindowStart>, None::<usize>);
     let (mut measured, mut measured_at, mut stayed) = (None, usize::MAX, 0);
+    let mut arrived = 0;
     while !shared.stop.load(Ordering::Relaxed) {
         due = (due + period).max(Instant::now());
         std::thread::sleep(due.saturating_duration_since(Instant::now()));
@@ -138,8 +140,9 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
             }
             Some(_) if measured.is_some() => {}
             Some(w) => {
-                if crowd_in_at.is_none() && st.players >= w.players {
+                if crowd_in_at.is_none() && (st.players >= w.players || n >= w.arrival as usize) {
                     crowd_in_at = Some(n);
+                    arrived = st.players;
                 }
                 let start = crowd_in_at.map(|f| f + w.settle as usize);
                 if mark.is_none() && start == Some(n) {
@@ -164,5 +167,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         .unwrap_or_default();
     summary.ticks_after = ticks.len().saturating_sub(measured_at) as u32;
     summary.stayed = stayed;
+    summary.players_arrived = arrived;
+    summary.players_wanted = cfg.window.map_or(0, |w| w.players);
     Ok(summary)
 }
