@@ -10,7 +10,7 @@ use bevy::input::keyboard::KeyCode;
 use bevy::math::Vec3;
 use bevy::prelude::{Transform, With};
 use world::collision::CollisionLayer;
-use world::unit::CharacterLook;
+use world::unit::{CharacterLook, StandState};
 
 use super::PlayerBody;
 use super::flags::{FALLING, FORWARD, SWIMMING};
@@ -360,8 +360,6 @@ fn a_stormwind_canal_is_swum_into_and_out_of() {
     assert!(end.flags & (SWIMMING | FALLING) == 0, "{:?}", end.wow);
 }
 
-/// A tauren and a gnome stand at the scale the server gives a new character of theirs, their
-/// display's model scale, and collide at their model's height at that scale.
 #[test]
 fn a_tauren_and_a_gnome_are_drawn_and_collide_at_their_size() {
     for (race, sex, scale, height) in [
@@ -387,7 +385,6 @@ fn a_tauren_and_a_gnome_are_drawn_and_collide_at_their_size() {
     }
 }
 
-/// X sits the body and moving stands it; a sit asked for on the run is refused.
 #[test]
 fn x_sits_the_body_down_and_walking_stands_it_up() {
     let Some(mut w) = Walker::on_ground(MEADOW, 0.0, 60.0) else {
@@ -395,23 +392,28 @@ fn x_sits_the_body_down_and_walking_stands_it_up() {
     };
     w.tap(KeyCode::KeyX);
     w.run(30);
-    assert_eq!(w.player().stand_state, 1, "seated");
+    assert_eq!(w.player().stand_state, StandState::SIT, "seated");
     w.press(KeyCode::KeyW);
     let moved = w.run(1)[0];
-    assert_eq!(w.player().stand_state, 0, "the first step stands it");
+    let standing = StandState::STAND;
+    assert_eq!(w.player().stand_state, standing, "the first step stands it");
     assert!(moved.flags & FORWARD != 0);
     w.tap(KeyCode::KeyX);
-    assert_eq!(w.player().stand_state, 0, "no sitting on the run");
+    assert_eq!(w.player().stand_state, standing, "no sitting on the run");
     w.release(KeyCode::KeyW);
     w.run(2);
     w.tap(KeyCode::KeyX);
     w.tap(KeyCode::KeyX);
-    assert_eq!(w.player().stand_state, 0, "X again stands it");
+    assert_eq!(w.player().stand_state, standing, "X again stands it");
 }
 
-/// Walks `look` from Crystal Lake's shore into the water until it swims: the height it collides
-/// at, and the water over its feet the two frames before the swim began.
-fn wade_in(look: CharacterLook) -> Option<(f32, f32, f32)> {
+struct Wade {
+    collision_height: f32,
+    last_wading_depth: f32,
+    depth_it_swims_at: f32,
+}
+
+fn wade_in(look: CharacterLook) -> Option<Wade> {
     let mut w = Walker::dressed_on_ground(SHORE, 180.0, 60.0, look)?;
     w.press(KeyCode::KeyW);
     let frames = w.run(600);
@@ -423,19 +425,26 @@ fn wade_in(look: CharacterLook) -> Option<(f32, f32, f32)> {
         let f: Frame = frames[i];
         w.water(f.wow).expect("in the water") - f.wow[2]
     };
-    let (before, at) = (depth(first - 2), depth(first - 1));
-    Some((w.player().collision_height, before, at))
+    let (last_wading_depth, depth_it_swims_at) = (depth(first - 2), depth(first - 1));
+    Some(Wade {
+        collision_height: w.player().collision_height,
+        last_wading_depth,
+        depth_it_swims_at,
+    })
 }
 
-/// Each swims once the water passes three-quarters of its own height: the tall tauren wades out
-/// past where the gnome has long been swimming.
 #[test]
 fn a_tauren_wades_out_deeper_than_a_gnome_before_it_swims() {
     let mut depths = Vec::new();
     for (race, sex) in [(6, 1), (7, 1)] {
-        let Some((h, before, at)) = wade_in(CharacterLook::naked(race, sex)) else {
+        let Some(wade) = wade_in(CharacterLook::naked(race, sex)) else {
             return;
         };
+        let (h, before, at) = (
+            wade.collision_height,
+            wade.last_wading_depth,
+            wade.depth_it_swims_at,
+        );
         let enter = swim_enter_depth(h);
         eprintln!("race {race} sex {sex}: {h:.4} yd tall swims at {at:.3} (over {enter:.3})");
         assert!(

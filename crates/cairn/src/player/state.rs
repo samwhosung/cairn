@@ -1,6 +1,7 @@
 //! The avatar's state and the movement constants the client's mover runs on.
 
 use bevy::prelude::*;
+use world::unit::StandState;
 
 // Yards, seconds and radians throughout.
 pub const RUN_SPEED: f32 = 7.0;
@@ -98,8 +99,7 @@ pub struct Player {
     /// The swim stroke's speed, yd/s: the swim or swim-back speed whatever the pitch, 0 with no
     /// stroke. Stale out of the water.
     pub swim_stroke_speed: f32,
-    /// The pose it holds standing still, a stand state.
-    pub stand_state: u8,
+    pub stand_state: StandState,
 }
 
 impl Default for Player {
@@ -131,7 +131,7 @@ impl Default for Player {
             collision_height: DEFAULT_COLLISION_HEIGHT,
             liquid_surface: None,
             swim_stroke_speed: 0.0,
-            stand_state: 0,
+            stand_state: StandState::STAND,
         }
     }
 }

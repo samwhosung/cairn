@@ -257,27 +257,24 @@ fn interior_group_under(
     eye_model: [f32; 3],
     terrain_z: Option<f32>,
 ) -> Option<usize> {
-    down_ray_claim(model, eye_model, terrain_z, EXTERIOR)
-        .filter(|c| !c.outdoor)
-        .map(|c| c.group)
+    face_below(model, eye_model, terrain_z, EXTERIOR)
+        .filter(|f| !f.outdoor_by_mask)
+        .map(|f| f.group)
 }
 
-/// The building face a ray down from a point meets first, if the building takes the column.
-pub(crate) struct DownRayClaim {
+pub(crate) struct FaceBelow {
     pub group: usize,
-    /// How far below the point it lies; buildings are placed without scale, so depths compare
-    /// across them.
+    /// Buildings are placed without scale, so depths compare across them.
     pub depth: f32,
-    /// Its group carries one of the caller's outdoor flags.
-    pub outdoor: bool,
+    pub outdoor_by_mask: bool,
 }
 
-pub(crate) fn down_ray_claim(
+pub(crate) fn face_below(
     model: &WmoModel,
     eye_model: [f32; 3],
     terrain_z: Option<f32>,
     outdoor_mask: u32,
-) -> Option<DownRayClaim> {
+) -> Option<FaceBelow> {
     let (group, best_z) = nearest_face_below(
         &model.rooms.group_collision_tris,
         &model.rooms.group_collision_bounds,
@@ -287,15 +284,15 @@ pub(crate) fn down_ray_claim(
     if depth > FEET_RAY_REACH || terrain_z.is_some_and(|tz| tz <= eye_model[2] && tz > best_z) {
         return None;
     }
-    let outdoor = model
+    let outdoor_by_mask = model
         .rooms
         .group_nav
         .get(group)
         .is_none_or(|g: &WmoGroupNav| g.flags & outdoor_mask != 0);
-    Some(DownRayClaim {
+    Some(FaceBelow {
         group,
         depth,
-        outdoor,
+        outdoor_by_mask,
     })
 }
 
@@ -348,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_is_the_nearest_face_below_under_the_callers_outdoor_flags() {
+    fn a_face_below_is_the_nearest_and_outdoor_by_the_callers_mask() {
         let mut m = WmoModel::empty();
         let tri = |z: f32| [[0.0, 0.0, z], [10.0, 0.0, z], [0.0, 10.0, z]];
         m.rooms.group_collision_tris = vec![vec![tri(0.0)], vec![tri(2.0)]];
@@ -358,13 +355,16 @@ mod tests {
         ];
         m.rooms.group_nav = vec![nav(0), nav(EXTERIOR_LIT)];
         let eye = [1.0, 1.0, 5.0];
-        let lit = down_ray_claim(&m, eye, None, EXTERIOR | EXTERIOR_LIT).expect("a face");
-        assert_eq!((lit.group, lit.depth, lit.outdoor), (1, 3.0, true));
-        let area = down_ray_claim(&m, eye, None, EXTERIOR).expect("a face");
-        assert!(!area.outdoor, "a room lit as outdoors is still a room");
-        assert!(down_ray_claim(&m, eye, Some(4.0), EXTERIOR).is_none());
+        let lit = face_below(&m, eye, None, EXTERIOR | EXTERIOR_LIT).expect("a face");
+        assert_eq!((lit.group, lit.depth, lit.outdoor_by_mask), (1, 3.0, true));
+        let area = face_below(&m, eye, None, EXTERIOR).expect("a face");
         assert!(
-            down_ray_claim(&m, eye, Some(2.0), EXTERIOR).is_some(),
+            !area.outdoor_by_mask,
+            "a room lit as outdoors is still a room"
+        );
+        assert!(face_below(&m, eye, Some(4.0), EXTERIOR).is_none());
+        assert!(
+            face_below(&m, eye, Some(2.0), EXTERIOR).is_some(),
             "a tie keeps it"
         );
     }

@@ -18,7 +18,7 @@ use super::super::motion::anim::{
 use super::super::motion::move_flags::{
     BACKWARD, FALLING, FALLING_FAR, FORWARD, SWIMMING, TURN_LEFT, WALK_MODE,
 };
-use super::super::motion::{Mode, Special, UnitMotion};
+use super::super::motion::{Bracketed, Mode, StandState, UnitMotion};
 use super::{UnitDriver, drive_units};
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 
@@ -114,11 +114,11 @@ fn moving(app: &mut App, unit: Entity, flags: u32, speed: f32, vertical_speed: f
         speed,
         vertical_speed,
         flags,
-        stand_state: 0,
+        stand_state: StandState::STAND,
     });
 }
 
-fn posed(app: &mut App, unit: Entity, stand_state: u8) {
+fn posed(app: &mut App, unit: Entity, stand_state: StandState) {
     app.world_mut().entity_mut(unit).insert(UnitMotion {
         stand_state,
         ..UnitMotion::default()
@@ -178,7 +178,7 @@ fn a_jump_starts_hangs_and_lands_running_then_stands_when_the_keys_let_go() {
         Some(JUMP_START),
         "JumpStart on the launch frame"
     );
-    assert_eq!(playing(&app, unit).2, Mode::Entering(Special::Jump));
+    assert_eq!(playing(&app, unit).2, Mode::Entering(Bracketed::Jump));
     moving(&mut app, unit, FORWARD | FALLING, 7.0, 3.0);
     frames(&mut app, 40);
     assert_eq!(
@@ -256,7 +256,7 @@ fn a_step_off_holds_its_gait_until_it_falls_far() {
     frames(&mut app, 1);
     assert_eq!(
         (playing(&app, unit).0, playing(&app, unit).2),
-        (Some(FALL), Mode::Looping(Special::Fall))
+        (Some(FALL), Mode::Looping(Bracketed::Fall))
     );
 }
 
@@ -271,7 +271,7 @@ fn a_jump_out_of_a_one_frame_step_off_still_jumps() {
     assert_eq!(playing(&app, unit).2, Mode::Gait);
     moving(&mut app, unit, FORWARD | FALLING, 7.0, 7.96);
     frames(&mut app, 1);
-    assert_eq!(playing(&app, unit).2, Mode::Entering(Special::Jump));
+    assert_eq!(playing(&app, unit).2, Mode::Entering(Bracketed::Jump));
 }
 
 #[test]
@@ -349,29 +349,31 @@ fn a_sit_goes_down_holds_and_stands_up_or_walks_straight_out() {
     ]);
     let unit = body(&mut app, &rows);
     frames(&mut app, 2);
-    posed(&mut app, unit, 1);
+    let sitting = Bracketed::Pose(StandState::SIT);
+    posed(&mut app, unit, StandState::SIT);
     frames(&mut app, 2);
     assert_eq!(
         (playing(&app, unit).0, playing(&app, unit).2),
-        (Some(SIT_GROUND_DOWN), Mode::Entering(Special::Pose(1)))
+        (Some(SIT_GROUND_DOWN), Mode::Entering(sitting))
     );
     frames(&mut app, 60);
     assert_eq!(
         (playing(&app, unit).0, playing(&app, unit).2),
-        (Some(SIT_GROUND), Mode::Looping(Special::Pose(1)))
+        (Some(SIT_GROUND), Mode::Looping(sitting))
     );
-    posed(&mut app, unit, 0);
+    posed(&mut app, unit, StandState::STAND);
     frames(&mut app, 2);
+    let standing_up = Mode::StandingUp {
+        pose: StandState::SIT,
+        clip: SIT_GROUND_UP,
+    };
     assert_eq!(
         (playing(&app, unit).0, playing(&app, unit).2),
-        (
-            Some(SIT_GROUND_UP),
-            Mode::Exiting(Special::Pose(1), SIT_GROUND_UP)
-        )
+        (Some(SIT_GROUND_UP), standing_up)
     );
     frames(&mut app, 60);
     assert_eq!(playing(&app, unit).0, Some(STAND));
-    posed(&mut app, unit, 1);
+    posed(&mut app, unit, StandState::SIT);
     frames(&mut app, 70);
     moving(&mut app, unit, FORWARD, 2.5, 0.0);
     frames(&mut app, 2);

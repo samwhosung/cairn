@@ -457,7 +457,7 @@ impl Spawner<'_, '_, '_, '_> {
                 let ref_point = prop.transform.transform_point(center);
                 let probe = fold_interior_probe(*ambient, *diffuse, ref_point, lights);
                 probes
-                    .alloc(probe)
+                    .alloc_shared(probe)
                     .map_or(DoodadLight::Sky(GroundShade::Lit), DoodadLight::Probe)
             }
         };

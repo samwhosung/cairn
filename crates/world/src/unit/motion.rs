@@ -1,7 +1,3 @@
-//! What a moving unit asks its body to play: the client's animation selector for the states a
-//! walking body takes, standing, walking, running, backing, turning, swimming, jumping and
-//! falling, and the poses it holds, sitting, sleeping and kneeling.
-
 use bevy::prelude::*;
 
 use crate::rig::AnimClip;
@@ -57,12 +53,24 @@ pub(crate) mod anim {
     pub const KNEEL_END: u16 = 116;
 }
 
-/// The stand states a body holds a pose in, the unit field's values.
-pub mod stand_state {
-    pub const STAND: u8 = 0;
-    pub const SIT: u8 = 1;
-    pub const SLEEP: u8 = 3;
-    pub const KNEEL: u8 = 8;
+/// A unit's stand state, the client's unit field: standing, or a pose it holds in place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct StandState(pub u8);
+
+impl StandState {
+    pub const STAND: Self = Self(0);
+    pub const SIT: Self = Self(1);
+    pub const SLEEP: Self = Self(3);
+    pub const KNEEL: Self = Self(8);
+
+    fn stand_up_id(self) -> u16 {
+        match self {
+            Self::SIT => SIT_GROUND_UP,
+            Self::SLEEP => SLEEP_UP,
+            Self::KNEEL => KNEEL_END,
+            _ => STAND,
+        }
+    }
 }
 
 use anim::{
@@ -82,30 +90,28 @@ pub struct UnitMotion {
     /// from a step-off.
     pub vertical_speed: f32,
     pub flags: u32,
-    /// The pose it holds while it stands still, a [`stand_state`] value.
-    pub stand_state: u8,
+    /// The pose it holds while it stands still.
+    pub stand_state: StandState,
 }
 
 pub(crate) const DEFAULT_WALK_SPEED: f32 = 2.5;
 const SPRINT_SPEED: f32 = 11.0;
 
-/// A state a body enters, holds and leaves by its own clips: a jump's arc, a far fall, and a pose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Special {
+pub(crate) enum Bracketed {
     Jump,
     Fall,
-    /// Sitting, sleeping or kneeling, by its [`stand_state`].
-    Pose(u8),
+    Pose(StandState),
 }
 
-impl Special {
+impl Bracketed {
     pub(crate) fn entry_id(self) -> u16 {
         match self {
             Self::Jump => JUMP_START,
             Self::Fall => FALL,
-            Self::Pose(stand_state::SIT) => SIT_GROUND_DOWN,
-            Self::Pose(stand_state::SLEEP) => SLEEP_DOWN,
-            Self::Pose(stand_state::KNEEL) => KNEEL_START,
+            Self::Pose(StandState::SIT) => SIT_GROUND_DOWN,
+            Self::Pose(StandState::SLEEP) => SLEEP_DOWN,
+            Self::Pose(StandState::KNEEL) => KNEEL_START,
             Self::Pose(_) => STAND,
         }
     }
@@ -114,20 +120,17 @@ impl Special {
         match self {
             Self::Jump => JUMP,
             Self::Fall => FALL,
-            Self::Pose(stand_state::SIT) => SIT_GROUND,
-            Self::Pose(stand_state::SLEEP) => SLEEP,
-            Self::Pose(stand_state::KNEEL) => KNEEL_LOOP,
+            Self::Pose(StandState::SIT) => SIT_GROUND,
+            Self::Pose(StandState::SLEEP) => SLEEP,
+            Self::Pose(StandState::KNEEL) => KNEEL_LOOP,
             Self::Pose(_) => STAND,
         }
     }
 
-    /// The clip a pose stands up by; an arc lands by [`jump_land_pick`] instead.
-    pub(crate) fn exit_id(self) -> u16 {
+    pub(crate) fn stand_up_id(self) -> Option<u16> {
         match self {
-            Self::Pose(stand_state::SIT) => SIT_GROUND_UP,
-            Self::Pose(stand_state::SLEEP) => SLEEP_UP,
-            Self::Pose(stand_state::KNEEL) => KNEEL_END,
-            Self::Jump | Self::Fall | Self::Pose(_) => STAND,
+            Self::Pose(pose) => Some(pose.stand_up_id()),
+            Self::Jump | Self::Fall => None,
         }
     }
 
@@ -153,14 +156,16 @@ pub(crate) fn jump_land_pick(flags: u32) -> Option<u16> {
 pub(crate) enum Mode {
     #[default]
     Gait,
-    Entering(Special),
-    Looping(Special),
+    Entering(Bracketed),
+    Looping(Bracketed),
     Land {
         id: u16,
         touchdown_flags: u32,
     },
-    /// A pose's stand-up clip playing out; the gait follows it.
-    Exiting(Special, u16),
+    StandingUp {
+        pose: StandState,
+        clip: u16,
+    },
 }
 
 /// The gait a unit plays, the wanted id first and the fallbacks after it.
@@ -206,24 +211,23 @@ pub(crate) fn gait_candidates(motion: &UnitMotion, walk_speed: f32) -> &'static 
     &[STAND]
 }
 
-/// A step-off holds its gait until it falls far; a pose holds only while the body stands still.
-pub(crate) fn current_special(motion: &UnitMotion, jump_arc: bool) -> Option<Special> {
+pub(crate) fn current_bracket(motion: &UnitMotion, jump_arc: bool) -> Option<Bracketed> {
     let f = motion.flags;
     if f & move_flags::FALLING != 0 {
         if f & move_flags::FALLING_FAR != 0 {
-            Some(Special::Fall)
+            Some(Bracketed::Fall)
         } else if jump_arc {
-            Some(Special::Jump)
+            Some(Bracketed::Jump)
         } else {
             None
         }
     } else if f & move_flags::ANY_MOVE == 0
         && matches!(
             motion.stand_state,
-            stand_state::SIT | stand_state::SLEEP | stand_state::KNEEL
+            StandState::SIT | StandState::SLEEP | StandState::KNEEL
         )
     {
-        Some(Special::Pose(motion.stand_state))
+        Some(Bracketed::Pose(motion.stand_state))
     } else {
         None
     }
@@ -344,17 +348,17 @@ mod tests {
     #[test]
     fn the_air_splits_into_jump_fall_and_a_held_gait() {
         let arc = moving(FORWARD | FALLING, 7.0);
-        assert_eq!(current_special(&arc, true), Some(Special::Jump));
-        assert_eq!(current_special(&arc, false), None);
+        assert_eq!(current_bracket(&arc, true), Some(Bracketed::Jump));
+        assert_eq!(current_bracket(&arc, false), None);
         let far = moving(FORWARD | FALLING | FALLING_FAR, 7.0);
-        assert_eq!(current_special(&far, true), Some(Special::Fall));
-        assert_eq!(current_special(&far, false), Some(Special::Fall));
+        assert_eq!(current_bracket(&far, true), Some(Bracketed::Fall));
+        assert_eq!(current_bracket(&far, false), Some(Bracketed::Fall));
         assert_eq!(
-            (Special::Jump.entry_id(), Special::Jump.loop_id()),
+            (Bracketed::Jump.entry_id(), Bracketed::Jump.loop_id()),
             (37, 38)
         );
         assert_eq!(
-            (Special::Fall.entry_id(), Special::Fall.loop_id()),
+            (Bracketed::Fall.entry_id(), Bracketed::Fall.loop_id()),
             (40, 40)
         );
     }
@@ -363,24 +367,27 @@ mod tests {
     fn a_pose_is_held_standing_still_and_brackets_its_loop() {
         let sat = |flags| UnitMotion {
             flags,
-            stand_state: stand_state::SIT,
+            stand_state: StandState::SIT,
             ..UnitMotion::default()
         };
-        assert_eq!(current_special(&sat(0), false), Some(Special::Pose(1)));
-        assert_eq!(
-            current_special(&sat(TURN_LEFT), false),
-            Some(Special::Pose(1))
-        );
-        assert_eq!(current_special(&sat(FORWARD), false), None);
+        let seated = Some(Bracketed::Pose(StandState::SIT));
+        assert_eq!(current_bracket(&sat(0), false), seated);
+        assert_eq!(current_bracket(&sat(TURN_LEFT), false), seated);
+        assert_eq!(current_bracket(&sat(FORWARD), false), None);
         let chair = UnitMotion {
-            stand_state: 4,
+            stand_state: StandState(4),
             ..UnitMotion::default()
         };
-        assert_eq!(current_special(&chair, false), None);
-        for (state, ids) in [(1, (96, 97, 98)), (3, (99, 100, 101)), (8, (114, 115, 116))] {
-            let p = Special::Pose(state);
-            assert_eq!((p.entry_id(), p.loop_id(), p.exit_id()), ids);
+        assert_eq!(current_bracket(&chair, false), None);
+        for (state, ids) in [
+            (StandState::SIT, (96, 97, Some(98))),
+            (StandState::SLEEP, (99, 100, Some(101))),
+            (StandState::KNEEL, (114, 115, Some(116))),
+        ] {
+            let p = Bracketed::Pose(state);
+            assert_eq!((p.entry_id(), p.loop_id(), p.stand_up_id()), ids);
         }
+        assert_eq!(Bracketed::Jump.stand_up_id(), None);
     }
 
     #[test]

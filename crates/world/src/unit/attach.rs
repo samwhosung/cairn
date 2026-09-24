@@ -3,9 +3,11 @@ use bevy::prelude::*;
 use model::CharSkinSlot;
 
 use super::MeshCache;
+use super::batch_anim::{
+    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card,
+};
 use super::body::{BodyModel, BodyPart, HoldMeshes, WornModel, batch_look, meshes_for};
-use super::fade::PartFade;
-use super::loops::{UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card};
+use super::fade::PartMaterials;
 use crate::light::LightBuffer;
 use crate::m2::M2Model;
 use crate::model_material::{ModelMaterial, ModelMaterials, Variant};
@@ -96,7 +98,7 @@ pub(crate) fn attach_worn(
                 };
                 let look = batch_look(g, texture, i, handle.id());
                 let material = cache.get(&mut materials, &look, Variant::Steady, &light.0);
-                let fade = PartFade::of(
+                let mats = PartMaterials::of(
                     &mut cache,
                     &mut materials,
                     &look,
@@ -104,15 +106,16 @@ pub(crate) fn attach_worn(
                     false,
                     &light.0,
                 );
-                let scrolls = loops.register(&mut materials, &fade, g);
-                let alpha = loops.alpha(g, None);
+                let scrolls = loops.register_scroll(&mut materials, &mats, g);
+                let alpha = loops.worn_alpha(g);
+                alpha_moves |= alpha.is_some();
                 let mesh = form.static_meshes[i].clone();
                 if let Some(info) = &sub.billboard {
                     let joint = card_joint(&mut commands, None, root, info);
                     let tag = alpha_bits(1.0);
                     let mut card =
-                        spawn_card(&mut commands, mesh, tag, fade, info, joint, sub.aabb);
-                    alpha_moves |= mark_moving(&mut card, scrolls, alpha);
+                        spawn_card(&mut commands, mesh, tag, mats, info, joint, sub.aabb);
+                    mark_moving(&mut card, scrolls, alpha);
                     cards.0.push(card.id());
                     continue;
                 }
@@ -123,12 +126,12 @@ pub(crate) fn attach_worn(
                     ChildOf(root),
                     MeshTag(alpha_bits(1.0)),
                     BodyPart,
-                    fade,
+                    mats,
                 ));
                 if let Some(aabb) = sub.aabb {
                     part.insert(aabb);
                 }
-                alpha_moves |= mark_moving(&mut part, scrolls, alpha);
+                mark_moving(&mut part, scrolls, alpha);
             }
             if alpha_moves {
                 commands.entity(entity).insert(UnitAlphaAnimated);

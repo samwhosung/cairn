@@ -1,6 +1,3 @@
-//! What of a unit's model moves besides its bones: the batches that turn to face the camera, the
-//! texture scrolls, and the alpha each batch is authored with per sequence.
-
 use std::sync::Arc;
 
 use bevy::camera::primitives::Aabb;
@@ -10,7 +7,7 @@ use bevy::prelude::*;
 use model::RenderSubmesh;
 
 use super::body::BodyPart;
-use super::fade::PartFade;
+use super::fade::PartMaterials;
 use crate::billboard::BillboardCard;
 use crate::doodad_anim::{AnimMatPart, MatAnim, MatLoop, UvAnimMaterials, register};
 use crate::mat_anim_table::MatAnimTable;
@@ -18,13 +15,20 @@ use crate::model::BillboardInfo;
 use crate::model_material::ModelMaterial;
 use crate::rig::RigPose;
 
-/// A unit's billboard batches: world roots that follow its joints, drawn as its parts are.
 #[derive(Component, Default)]
 pub(crate) struct UnitCards(pub(crate) Vec<Entity>);
 
-/// A unit with a batch whose alpha moves, redrawn every frame.
 #[derive(Component)]
 pub(crate) struct UnitAlphaAnimated;
+
+pub(crate) fn unit_parts<'a>(
+    root: Entity,
+    children: &'a Query<'_, '_, &Children>,
+    cards: Option<&'a UnitCards>,
+) -> impl Iterator<Item = Entity> + 'a {
+    let cards = cards.map_or(&[][..], |c| &c.0[..]);
+    children.iter_descendants(root).chain(cards.iter().copied())
+}
 
 #[derive(SystemParam)]
 pub(crate) struct UnitLoops<'w> {
@@ -34,54 +38,44 @@ pub(crate) struct UnitLoops<'w> {
 }
 
 impl UnitLoops<'_> {
-    /// A batch's texture scroll runs on every material it can be drawn with, shared by every unit
-    /// of the model. The client runs no tint loop on a unit's batches.
-    pub(crate) fn register(
+    /// The client runs no tint loop on a unit's batches.
+    pub(crate) fn register_scroll(
         &mut self,
         materials: &mut Assets<ModelMaterial>,
-        fade: &PartFade,
+        part_materials: &PartMaterials,
         g: &RenderSubmesh,
     ) -> bool {
         let Some(scroll) = g.uv_anim.as_ref().filter(|a| a.period > 0.0) else {
             return false;
         };
         let scroll = Arc::new(scroll.clone());
-        for id in fade.materials() {
+        for id in part_materials.every_material() {
             let anim = MatLoop::Shared(scroll.clone());
             register(&mut self.uv, &mut self.table, materials, id, anim);
         }
         true
     }
 
-    /// A batch of the unit's own body reads the sequence the unit plays; one of an item it wears
-    /// rests in the item's first sequence.
-    pub(crate) fn alpha(&self, g: &RenderSubmesh, host: Option<Entity>) -> Option<MatAnim> {
+    pub(crate) fn body_alpha(&self, g: &RenderSubmesh, unit: Entity) -> Option<MatAnim> {
         let anim = Arc::new(g.alpha_anim.clone()?);
-        let now = self.time.elapsed_secs_f64();
-        Some(match host {
-            Some(host) => MatAnim::following(anim, host, now),
-            None => MatAnim::new(anim, now),
-        })
+        Some(MatAnim::following(anim, unit, self.time.elapsed_secs_f64()))
+    }
+
+    pub(crate) fn worn_alpha(&self, g: &RenderSubmesh) -> Option<MatAnim> {
+        let anim = Arc::new(g.alpha_anim.clone()?);
+        Some(MatAnim::new(anim, self.time.elapsed_secs_f64()))
     }
 }
 
-/// Marks a part or card with what of it moves, and says whether its alpha does.
-pub(crate) fn mark_moving(
-    e: &mut EntityCommands<'_>,
-    scrolls: bool,
-    alpha: Option<MatAnim>,
-) -> bool {
+pub(crate) fn mark_moving(e: &mut EntityCommands<'_>, scrolls: bool, alpha: Option<MatAnim>) {
     if scrolls {
         e.insert(AnimMatPart);
     }
-    let animated = alpha.is_some();
     if let Some(alpha) = alpha {
         e.insert(alpha);
     }
-    animated
 }
 
-/// The joint a card rides: its bone's on a rigged body, else a point at its pivot under `owner`.
 pub(crate) fn card_joint(
     commands: &mut Commands<'_, '_>,
     pose: Option<&mut RigPose>,
@@ -100,23 +94,22 @@ pub(crate) fn card_joint(
         .id()
 }
 
-/// A card is drawn on its own, a world root the facing system places, not under the body.
 pub(crate) fn spawn_card<'a>(
     commands: &'a mut Commands<'_, '_>,
     mesh: Handle<Mesh>,
     tag: u32,
-    fade: PartFade,
+    part_materials: PartMaterials,
     info: &BillboardInfo,
     joint: Entity,
     aabb: Option<Aabb>,
 ) -> EntityCommands<'a> {
     let mut card = commands.spawn((
         Mesh3d(mesh),
-        MeshMaterial3d(fade.steady().clone()),
+        MeshMaterial3d(part_materials.steady().clone()),
         MeshTag(tag),
         BillboardCard::following_joint(info.kind, joint),
         BodyPart,
-        fade,
+        part_materials,
     ));
     if let Some(aabb) = aabb {
         card.insert(aabb);

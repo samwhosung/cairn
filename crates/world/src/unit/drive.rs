@@ -1,7 +1,3 @@
-//! The base track's driver: each frame it picks what a unit's body plays from its movement and
-//! its pose, arms it through the model's own lookup, rolls its variation and passes, cross-fades
-//! into it and keeps a locomotion clip's rate on the unit's speed.
-
 use std::time::Duration;
 
 use bevy::animation::graph::AnimationNodeIndex;
@@ -11,7 +7,7 @@ use bevy::prelude::*;
 
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
-    DEFAULT_WALK_SPEED, Mode, Special, UnitMotion, current_special, gait_candidates,
+    Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, current_bracket, gait_candidates,
     jump_land_pick, move_flags, playback_rate, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
@@ -97,7 +93,7 @@ fn roll_oneshot<'a>(
 struct Frame<'a> {
     anims: &'a ModelAnimations,
     motion: UnitMotion,
-    special: Option<Special>,
+    bracket: Option<Bracketed>,
     /// A step-off in the air: its gait keeps rolling as it left the ground.
     gait_held_aloft: bool,
     model_scale: f32,
@@ -130,48 +126,57 @@ impl UnitDriver {
         play_clip(tr, player, c, repeat, 1.0);
     }
 
-    fn enter_special(
+    fn enter_bracket(
         &mut self,
-        special: Special,
+        bracket: Bracketed,
         tr: &mut AnimationTransitions,
         player: &mut AnimationPlayer,
         anims: &ModelAnimations,
         rng: &mut AnimRng,
     ) -> Mode {
-        if special == Special::Fall {
-            self.play(tr, player, anims, special.loop_id(), true, rng);
-            Mode::Looping(special)
+        if bracket == Bracketed::Fall {
+            self.play(tr, player, anims, bracket.loop_id(), true, rng);
+            Mode::Looping(bracket)
         } else {
-            self.play(tr, player, anims, special.entry_id(), false, rng);
-            Mode::Entering(special)
+            self.play(tr, player, anims, bracket.entry_id(), false, rng);
+            Mode::Entering(bracket)
         }
     }
 
-    /// An arc's own clip stops where it is, so the landing fades in over a still pose. A pose the
-    /// body walks out of hands straight to the gait; one left standing still plays its stand-up.
-    #[allow(clippy::too_many_arguments)]
-    fn leave_special(
+    fn freeze_arc_for_landing(
         &mut self,
-        left: Special,
-        next: Option<Special>,
+        arc: Bracketed,
+        tr: &AnimationTransitions,
+        player: &mut AnimationPlayer,
+        anims: &ModelAnimations,
+    ) {
+        if let Some(node) = tr.get_main_animation()
+            && plays_airborne_clip(anims, arc, node)
+            && let Some(active) = player.animation_mut(node)
+        {
+            active.set_speed(0.0);
+            self.frozen_airborne = Some(node);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn leave_bracket(
+        &mut self,
+        left: Bracketed,
+        next: Option<Bracketed>,
         flags: u32,
         tr: &mut AnimationTransitions,
         player: &mut AnimationPlayer,
         anims: &ModelAnimations,
         rng: &mut AnimRng,
     ) -> Mode {
-        if left.airborne()
-            && let Some(node) = tr.get_main_animation()
-            && plays_airborne_clip(anims, left, node)
-            && let Some(active) = player.animation_mut(node)
-        {
-            active.set_speed(0.0);
-            self.frozen_airborne = Some(node);
+        if left.airborne() {
+            self.freeze_arc_for_landing(left, tr, player, anims);
         }
         if let Some(next) = next {
-            return self.enter_special(next, tr, player, anims, rng);
+            return self.enter_bracket(next, tr, player, anims, rng);
         }
-        if left.airborne() {
+        let (Bracketed::Pose(pose), Some(clip)) = (left, left.stand_up_id()) else {
             return match jump_land_pick(flags) {
                 Some(id) => {
                     self.play(tr, player, anims, id, false, rng);
@@ -182,13 +187,12 @@ impl UnitDriver {
                 }
                 None => Mode::Gait,
             };
-        }
+        };
         if flags & move_flags::ANY_MOVE != 0 {
             return Mode::Gait;
         }
-        let exit = left.exit_id();
-        self.play(tr, player, anims, exit, false, rng);
-        Mode::Exiting(left, exit)
+        self.play(tr, player, anims, clip, false, rng);
+        Mode::StandingUp { pose, clip }
     }
 
     fn run(
@@ -198,53 +202,53 @@ impl UnitDriver {
         player: &mut AnimationPlayer,
         rng: &mut AnimRng,
     ) {
-        let (anims, mv, special) = (f.anims, f.motion, f.special);
+        let (anims, mv, bracket) = (f.anims, f.motion, f.bracket);
         match self.mode {
             Mode::Entering(entered) => {
-                let swimmer_finishes_the_kick = entered == Special::Jump
-                    && special.is_none()
+                let swimmer_finishes_the_kick = entered == Bracketed::Jump
+                    && bracket.is_none()
                     && mv.flags & move_flags::SWIMMING != 0
                     && !oneshot_finished(player, anims, entered.entry_id());
                 if swimmer_finishes_the_kick {
                     return;
                 }
-                if special != Some(entered) {
+                if bracket != Some(entered) {
                     self.mode =
-                        self.leave_special(entered, special, mv.flags, tr, player, anims, rng);
+                        self.leave_bracket(entered, bracket, mv.flags, tr, player, anims, rng);
                 } else if oneshot_finished(player, anims, entered.entry_id()) {
                     self.play(tr, player, anims, entered.loop_id(), true, rng);
                     self.mode = Mode::Looping(entered);
                 }
             }
             Mode::Looping(held) => {
-                if special != Some(held) {
-                    self.mode = self.leave_special(held, special, mv.flags, tr, player, anims, rng);
+                if bracket != Some(held) {
+                    self.mode = self.leave_bracket(held, bracket, mv.flags, tr, player, anims, rng);
                 }
             }
             Mode::Land {
                 id,
                 touchdown_flags,
             } => {
-                if let Some(next) = special {
-                    self.mode = self.enter_special(next, tr, player, anims, rng);
+                if let Some(next) = bracket {
+                    self.mode = self.enter_bracket(next, tr, player, anims, rng);
                 } else if mv.flags != touchdown_flags || oneshot_finished(player, anims, id) {
                     self.mode = Mode::Gait;
                     self.armed_gait = None;
                 }
             }
-            Mode::Exiting(_, exit) => {
-                if let Some(next) = special {
-                    self.mode = self.enter_special(next, tr, player, anims, rng);
+            Mode::StandingUp { clip, .. } => {
+                if let Some(next) = bracket {
+                    self.mode = self.enter_bracket(next, tr, player, anims, rng);
                 } else if mv.flags & move_flags::ANY_MOVE != 0
-                    || oneshot_finished(player, anims, exit)
+                    || oneshot_finished(player, anims, clip)
                 {
                     self.mode = Mode::Gait;
                     self.armed_gait = None;
                 }
             }
             Mode::Gait => {
-                if let Some(next) = special {
-                    self.mode = self.enter_special(next, tr, player, anims, rng);
+                if let Some(next) = bracket {
+                    self.mode = self.enter_bracket(next, tr, player, anims, rng);
                     self.armed_gait = None;
                 } else if !(f.gait_held_aloft && self.armed_gait.is_some()) {
                     self.run_gait(f, tr, player, rng);
@@ -361,7 +365,7 @@ fn oneshot_finished(player: &AnimationPlayer, anims: &ModelAnimations, id: u16) 
     })
 }
 
-fn plays_airborne_clip(anims: &ModelAnimations, air: Special, node: AnimationNodeIndex) -> bool {
+fn plays_airborne_clip(anims: &ModelAnimations, air: Bracketed, node: AnimationNodeIndex) -> bool {
     let Some(cur) = anims.clips.iter().find(|c| c.node == node) else {
         return false;
     };
@@ -398,7 +402,7 @@ pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_
         let frame = Frame {
             anims,
             motion,
-            special: current_special(&motion, drv.jump_arc),
+            bracket: current_bracket(&motion, drv.jump_arc),
             gait_held_aloft: falling
                 && (motion.flags & move_flags::FALLING_FAR != 0 || motion.vertical_speed != 0.0),
             model_scale: transform.scale.x,

@@ -1,8 +1,3 @@
-//! How each part of a unit is drawn: by the sky or by its own probe, the room's fog or not, and
-//! see-through on the ramp it appears on or at the alpha its owner sets, with a depth-only twin
-//! drawn ahead of each see-through part so the body blends as one layer rather than darkening
-//! where it overlaps itself.
-
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::mesh::MeshTag;
@@ -10,14 +5,14 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 use model::ModelBlend;
 
+use super::batch_anim::{UnitAlphaAnimated, UnitCards, unit_parts};
 use super::body::BodyDressed;
-use super::light::{Law, UnitLight};
-use super::loops::{UnitAlphaAnimated, UnitCards};
+use super::light::{LitBy, UnitLight};
 use super::shade::UnitShade;
 use crate::doodad_anim::MatAnim;
 use crate::liquid::FarSide;
 use crate::model_material::{BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant};
-use crate::visibility::{translucent, with_alpha, with_interior_fog, with_payload};
+use crate::visibility::{translucent, with_alpha, with_interior_fog, with_shade_or_probe};
 
 const APPEAR_SECS: f32 = 2.0;
 
@@ -60,9 +55,8 @@ impl Default for UnitAlpha {
     }
 }
 
-/// A part's materials: lit by the sky and by a probe, each steady and see-through.
 #[derive(Component)]
-pub(crate) struct PartFade {
+pub(crate) struct PartMaterials {
     steady: Handle<ModelMaterial>,
     see_through: Handle<ModelMaterial>,
     probe_lit: Handle<ModelMaterial>,
@@ -70,7 +64,7 @@ pub(crate) struct PartFade {
     depth_prime: Option<Handle<ModelMaterial>>,
 }
 
-impl PartFade {
+impl PartMaterials {
     pub(crate) fn of(
         cache: &mut ModelMaterials,
         materials: &mut Assets<ModelMaterial>,
@@ -112,8 +106,7 @@ impl PartFade {
         &self.steady
     }
 
-    /// Every material the part can be drawn with.
-    pub(crate) fn materials(&self) -> [AssetId<ModelMaterial>; 4] {
+    pub(crate) fn every_material(&self) -> [AssetId<ModelMaterial>; 4] {
         [
             &self.steady,
             &self.see_through,
@@ -156,7 +149,7 @@ type Parts<'w, 's> = Query<
     'w,
     's,
     (
-        &'static PartFade,
+        &'static PartMaterials,
         &'static mut MeshTag,
         &'static mut MeshMaterial3d<ModelMaterial>,
         &'static mut Visibility,
@@ -165,13 +158,10 @@ type Parts<'w, 's> = Query<
 >;
 
 const OUTDOORS: UnitLight = UnitLight {
-    law: Law::Exterior,
-    fog: false,
+    lit_by: LitBy::Sky,
+    room_fogged: false,
 };
 
-/// A unit's parts are rewritten while its alpha moves, when its light changes, and when a part
-/// joins it; its cards with them. The appear ramp never hides a part: at its start it draws at the
-/// smallest alpha there is. A batch's own authored alpha multiplies in, and at zero hides it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_unit_look(
     mut commands: Commands<'_, '_>,
@@ -180,7 +170,7 @@ pub(crate) fn apply_unit_look(
     mut units: Units<'_, '_>,
     children: Query<'_, '_, &Children>,
     mut parts: Parts<'_, '_>,
-    joined: Query<'_, '_, Entity, Added<PartFade>>,
+    joined: Query<'_, '_, Entity, Added<PartMaterials>>,
     parents: Query<'_, '_, &ChildOf>,
     mut joined_units: Local<'_, EntityHashSet>,
 ) {
@@ -213,13 +203,13 @@ pub(crate) fn apply_unit_look(
         let relit = light.as_ref().is_some_and(Ref::is_changed);
         let joins = joined_units.contains(&root)
             || cards.is_some_and(|c| c.0.iter().any(|&e| joined.contains(e)));
-        if !fading && !relit && !joins && !alpha_moves {
+        let parts_stale = fading || relit || joins || alpha_moves;
+        if !parts_stale {
             continue;
         }
         let light = light.map_or(OUTDOORS, |l| *l);
-        let shade_byte = shade.map(|s| u16::from(s.byte()));
-        let cards = cards.map_or(&[][..], |c| &c.0[..]);
-        for part in children.iter_descendants(root).chain(cards.iter().copied()) {
+        let shade_byte = shade.map(|s| u16::from(s.tag_byte()));
+        for part in unit_parts(root, &children, cards) {
             if let Ok(item) = parts.get_mut(part) {
                 show_part(part, item, look, light, shade_byte, &side);
             }
@@ -228,7 +218,7 @@ pub(crate) fn apply_unit_look(
 }
 
 type PartItem<'a> = (
-    &'a PartFade,
+    &'a PartMaterials,
     Mut<'a, MeshTag>,
     Mut<'a, MeshMaterial3d<ModelMaterial>>,
     Mut<'a, Visibility>,
@@ -237,7 +227,7 @@ type PartItem<'a> = (
 
 fn show_part(
     part: Entity,
-    (fade, mut tag, mut material, mut vis, authored): PartItem<'_>,
+    (materials, mut tag, mut material, mut vis, authored): PartItem<'_>,
     look: Look,
     light: UnitLight,
     shade_byte: Option<u16>,
@@ -246,10 +236,10 @@ fn show_part(
     let probe = light.probe_lit();
     let authored = authored.map_or(1.0, |m| m.alpha);
     let (alpha, want) = match (look, probe) {
-        (Look::Steady, false) => (1.0, &fade.steady),
-        (Look::Steady, true) => (1.0, &fade.probe_lit),
-        (Look::SeeThrough(alpha), false) => (alpha, &fade.see_through),
-        (Look::SeeThrough(alpha), true) => (alpha, &fade.probe_lit_see_through),
+        (Look::Steady, false) => (1.0, &materials.steady),
+        (Look::Steady, true) => (1.0, &materials.probe_lit),
+        (Look::SeeThrough(alpha), false) => (alpha, &materials.see_through),
+        (Look::SeeThrough(alpha), true) => (alpha, &materials.probe_lit_see_through),
         (Look::Hidden, _) => {
             vis.set_if_neq(Visibility::Hidden);
             return;
@@ -261,12 +251,12 @@ fn show_part(
     }
     vis.set_if_neq(Visibility::Inherited);
     let mut bits = with_alpha(tag.0, alpha * authored);
-    bits = match (light.law, shade_byte) {
-        (Law::Probe(slot), _) => with_payload(bits, slot),
-        (_, Some(byte)) => with_payload(bits, byte),
+    bits = match (light.lit_by, shade_byte) {
+        (LitBy::OwnProbe { slot }, _) => with_shade_or_probe(bits, slot),
+        (_, Some(byte)) => with_shade_or_probe(bits, byte),
         (_, None) => bits,
     };
-    bits = with_interior_fog(bits, light.fog && light.law != Law::Exterior);
+    bits = with_interior_fog(bits, light.room_fogged && light.lit_by != LitBy::Sky);
     if tag.0 != bits {
         tag.0 = bits;
     }
@@ -286,7 +276,7 @@ pub(crate) fn sync_depth_primes(
         '_,
         (
             Entity,
-            &PartFade,
+            &PartMaterials,
             &MeshTag,
             &Mesh3d,
             Option<&PrimeTwin>,
@@ -294,7 +284,7 @@ pub(crate) fn sync_depth_primes(
         ),
         Without<PrimeOf>,
     >,
-    mut twins: Query<'_, '_, (&PrimeOf, &mut MeshTag, &mut Mesh3d), Without<PartFade>>,
+    mut twins: Query<'_, '_, (&PrimeOf, &mut MeshTag, &mut Mesh3d), Without<PartMaterials>>,
 ) {
     for (part, fade, tag, mesh, twin, unculled) in &parts {
         let Some(material) = &fade.depth_prime else {
@@ -374,7 +364,7 @@ mod tests {
         let part = app
             .world_mut()
             .spawn((
-                PartFade {
+                PartMaterials {
                     steady: material(1),
                     see_through: material(2),
                     probe_lit: material(3),

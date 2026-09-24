@@ -41,7 +41,7 @@ const ALPHA_MAX: f32 = 63.0;
 const PROBE_SHIFT: u32 = 6;
 const RIG_MASK: u32 = 0x3ff8_0000;
 const RIG_SHIFT: u32 = 19;
-const PAYLOAD_MASK: u32 = 0x1fff << PROBE_SHIFT;
+const SHADE_OR_PROBE_MASK: u32 = 0x1fff << PROBE_SHIFT;
 const INTERIOR_FOG_BIT: u32 = 0x4000_0000;
 
 /// A doodad's distance fade: opaque until `start` yards past its bounding sphere, measured across
@@ -78,9 +78,9 @@ pub(crate) fn with_rig(tag: u32, slot: Option<NonZeroU16>) -> u32 {
     (tag & !RIG_MASK) | (u32::from(slot.map_or(0, NonZeroU16::get)) << RIG_SHIFT)
 }
 
-/// `tag` with the field that holds a unit's ground shade or a probe slot set to `payload`.
-pub(crate) fn with_payload(tag: u32, payload: u16) -> u32 {
-    (tag & !PAYLOAD_MASK) | ((u32::from(payload) << PROBE_SHIFT) & PAYLOAD_MASK)
+pub(crate) fn with_shade_or_probe(tag: u32, shade_or_probe: u16) -> u32 {
+    (tag & !SHADE_OR_PROBE_MASK)
+        | ((u32::from(shade_or_probe) << PROBE_SHIFT) & SHADE_OR_PROBE_MASK)
 }
 
 pub(crate) fn translucent(tag: u32) -> bool {
@@ -322,11 +322,14 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_write_leaves_the_alpha_the_rig_and_the_fog_alone() {
+    fn a_shade_or_probe_write_leaves_the_alpha_the_rig_and_the_fog_alone() {
         let rig = 0x3ff8_0000;
-        let t = with_payload(INTERIOR_FOG_BIT | rig | alpha_bits(0.5), 6660);
+        let t = with_shade_or_probe(INTERIOR_FOG_BIT | rig | alpha_bits(0.5), 6660);
         assert_eq!((t >> PROBE_SHIFT) & 0x1fff, 6660);
-        assert_eq!(t & !PAYLOAD_MASK, INTERIOR_FOG_BIT | rig | alpha_bits(0.5));
-        assert_eq!(with_payload(t, 0) & PAYLOAD_MASK, 0);
+        assert_eq!(
+            t & !SHADE_OR_PROBE_MASK,
+            INTERIOR_FOG_BIT | rig | alpha_bits(0.5)
+        );
+        assert_eq!(with_shade_or_probe(t, 0) & SHADE_OR_PROBE_MASK, 0);
     }
 }

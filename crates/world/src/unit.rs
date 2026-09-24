@@ -2,12 +2,12 @@
 //! lit by its own shade outdoors and by the room it stands in indoors.
 
 mod attach;
+mod batch_anim;
 mod body;
 mod drive;
 mod fade;
 mod light;
 mod look;
-mod loops;
 mod motion;
 mod shade;
 mod twist;
@@ -19,12 +19,13 @@ pub use body::{BodyDressed, BodyModel, BodyPart, CharacterDress, UnitBody, WornM
 pub use drive::UnitDriver;
 pub use fade::{UnitAlpha, UnitAppear};
 pub use look::{BodySkin, CharacterLook, CharacterTables};
-pub use motion::{UnitMotion, move_flags, stand_state};
+pub use motion::{StandState, UnitMotion, move_flags};
 pub use shade::UnitShade;
 pub use twist::BodyTwist;
 
 /// A unit's per-frame work in `Update`: dress what arrived, hang what it wears, drive its
-/// animation from its movement, light it by where it stands, ramp its shade, carry its alpha.
+/// animation from its movement, light it by where it stands, draw each part at its alpha and
+/// light, and ramp its shade.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UnitSystems;
 

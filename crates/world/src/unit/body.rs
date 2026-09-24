@@ -20,8 +20,10 @@ use crate::rig::{GlobalSeqDrive, RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
 
-use super::fade::{PartFade, UnitAppear};
-use super::loops::{UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card};
+use super::batch_anim::{
+    UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card,
+};
+use super::fade::{PartMaterials, UnitAppear};
 
 /// A body to draw at this entity's transform: its model, the creature skins it fills from its
 /// display, and for a character the textures and geosets its appearance chose.
@@ -142,7 +144,7 @@ pub(crate) fn dress_bodies(
                 runtime_sheet,
             } = part_look(sub, i, body, &server, dir, hair_part, handle.id());
             let material = cache.get(&mut materials, &look, Variant::Steady, &light.0);
-            let fade = PartFade::of(
+            let mats = PartMaterials::of(
                 &mut cache,
                 &mut materials,
                 &look,
@@ -150,23 +152,24 @@ pub(crate) fn dress_bodies(
                 runtime_sheet,
                 &light.0,
             );
-            let scrolls = loops.register(&mut materials, &fade, g);
-            let alpha = loops.alpha(g, Some(entity));
+            let scrolls = loops.register_scroll(&mut materials, &mats, g);
+            let alpha = loops.body_alpha(g, entity);
+            alpha_moves |= alpha.is_some();
             if let Some(info) = &sub.billboard {
                 let joint = card_joint(&mut commands, pose.as_mut(), entity, info);
                 let tag = rig_bits(slot) | alpha_bits(1.0);
                 let mesh = form.static_meshes[i].clone();
-                let mut card = spawn_card(&mut commands, mesh, tag, fade, info, joint, sub.aabb);
-                alpha_moves |= mark_moving(&mut card, scrolls, alpha);
+                let mut card = spawn_card(&mut commands, mesh, tag, mats, info, joint, sub.aabb);
+                mark_moving(&mut card, scrolls, alpha);
                 cards.push(card.id());
                 continue;
             }
             let skinned = slot != 0 && rigged;
-            let mut part = spawn_part(&mut commands, entity, &form, i, skinned, slot, fade);
+            let mut part = spawn_part(&mut commands, entity, &form, i, skinned, slot, mats);
             if !skinned && let Some(aabb) = sub.aabb {
                 part.insert(aabb);
             }
-            alpha_moves |= mark_moving(&mut part, scrolls, alpha);
+            mark_moving(&mut part, scrolls, alpha);
             parts.push(part.id());
         }
         let worn = body
@@ -197,7 +200,7 @@ fn spawn_part<'a>(
     index: usize,
     skinned: bool,
     slot: u16,
-    fade: PartFade,
+    part_materials: PartMaterials,
 ) -> EntityCommands<'a> {
     let mesh = if skinned {
         &form.skinned_meshes[index]
@@ -206,12 +209,12 @@ fn spawn_part<'a>(
     };
     let mut part = commands.spawn((
         Mesh3d(mesh.clone()),
-        MeshMaterial3d(fade.steady().clone()),
+        MeshMaterial3d(part_materials.steady().clone()),
         Transform::default(),
         ChildOf(owner),
         MeshTag(rig_bits(slot) | alpha_bits(1.0)),
         BodyPart,
-        fade,
+        part_materials,
     ));
     if skinned {
         part.insert(NoFrustumCulling);
@@ -331,7 +334,16 @@ fn part_look(
     }
 }
 
-/// A batch whose texture scrolls has a material of its model's own, which its scroll runs on.
+fn scrolling_batch(g: &RenderSubmesh, model: AssetId<M2Model>, index: usize) -> Option<BatchId> {
+    g.uv_anim
+        .as_ref()
+        .filter(|a| a.period > 0.0)
+        .map(|_| BatchId {
+            model: model.untyped(),
+            index,
+        })
+}
+
 pub(crate) fn batch_look(
     g: &RenderSubmesh,
     texture: Option<Handle<Image>>,
@@ -354,14 +366,7 @@ pub(crate) fn batch_look(
         batch_order: Some(NonZeroU16::MIN.saturating_add(u16::try_from(index).unwrap_or(u16::MAX))),
         uv_offset_at_rest: g.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0)),
         tint_at_rest: g.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0)),
-        animated: g
-            .uv_anim
-            .as_ref()
-            .filter(|a| a.period > 0.0)
-            .map(|_| BatchId {
-                model: model.untyped(),
-                index,
-            }),
+        animated: scrolling_batch(g, model, index),
         seq_owner: None,
         wmo_class: None,
         sidn: None,

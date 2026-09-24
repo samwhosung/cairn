@@ -1,6 +1,3 @@
-//! The strafe pose: a body drawn turned off its aim twists its lower spine and its head back
-//! toward it.
-
 use std::f32::consts::FRAC_PI_4;
 
 use bevy::prelude::*;
@@ -25,14 +22,15 @@ impl BodyTwist {
             head: head.map(Channel::new),
         }
     }
+
+    fn channels_root_first(&mut self) -> [&mut Option<Channel>; 2] {
+        [&mut self.spine, &mut self.head]
+    }
 }
 
 struct Channel {
     bone: u16,
-    /// The animated rotation the twist was last composed onto.
-    base: Quat,
-    /// What was last written: a bone still holding it was not keyed by this frame's clip, so its
-    /// base is the one from before.
+    animated: Quat,
     last_out: Quat,
 }
 
@@ -40,45 +38,54 @@ impl Channel {
     fn new(bone: u16) -> Self {
         Self {
             bone,
-            base: Quat::IDENTITY,
+            animated: Quat::IDENTITY,
             last_out: Quat::IDENTITY,
+        }
+    }
+
+    fn animated_rotation(&self, cur: Quat) -> Quat {
+        let clip_left_it_unkeyed = cur == self.last_out;
+        if clip_left_it_unkeyed {
+            self.animated
+        } else {
+            cur
         }
     }
 }
 
-/// The spine takes half the gap and the head the rest, each at most 45°: a pure strafe's 90°
-/// turns the head exactly back onto the aim.
 fn twist_shares(gap: f32) -> (f32, f32) {
     let spine = (gap * 0.5).clamp(-FRAC_PI_4, FRAC_PI_4);
     let head = (gap - spine).clamp(-FRAC_PI_4, FRAC_PI_4);
     (spine, head)
 }
 
-/// Each channel yaws its bone's subtree about the model's up axis through the bone's own pivot.
-/// The head runs after the spine, so it turns from where the spine left it.
+fn yaw_about_model_up(rig: &RigPose, bone: usize, animated: Quat, angle: f32) -> Quat {
+    let mut model = animated;
+    let mut up = rig.parents.get(bone).copied().unwrap_or(-1);
+    while let Some(p) = usize::try_from(up).ok().filter(|&p| p < rig.locals.len()) {
+        model = rig.locals[p].rotation * model;
+        up = rig.parents[p];
+    }
+    (animated * Quat::from_axis_angle(model.inverse() * Vec3::Y, angle)).normalize()
+}
+
 pub(crate) fn apply_body_twist(mut units: Query<'_, '_, (&mut BodyTwist, &mut RigPose)>) {
     for (twist, rig) in &mut units {
         let (twist, rig) = (twist.into_inner(), rig.into_inner());
         let (spine, head) = twist_shares(twist.yaw_gap);
-        for (channel, angle) in [(&mut twist.spine, spine), (&mut twist.head, head)] {
+        for (channel, angle) in twist.channels_root_first().into_iter().zip([spine, head]) {
             let Some(ch) = channel else { continue };
             let bone = usize::from(ch.bone);
             let Some(cur) = rig.locals.get(bone).map(|t| t.rotation) else {
                 continue;
             };
-            let base = if cur == ch.last_out { ch.base } else { cur };
+            let animated = ch.animated_rotation(cur);
             let out = if angle == 0.0 {
-                base
+                animated
             } else {
-                let mut model = base;
-                let mut up = rig.parents.get(bone).copied().unwrap_or(-1);
-                while let Some(p) = usize::try_from(up).ok().filter(|&p| p < rig.locals.len()) {
-                    model = rig.locals[p].rotation * model;
-                    up = rig.parents[p];
-                }
-                (base * Quat::from_axis_angle(model.inverse() * Vec3::Y, angle)).normalize()
+                yaw_about_model_up(rig, bone, animated, angle)
             };
-            ch.base = base;
+            ch.animated = animated;
             ch.last_out = out;
             if out != cur {
                 rig.locals[bone].rotation = out;
@@ -113,8 +120,6 @@ mod tests {
         }
     }
 
-    /// A root, a lower spine leaning forward, and a head: the head's frame ends up yawed the
-    /// whole gap in the model, however the spine leans.
     #[test]
     fn the_head_lands_on_the_aim_through_a_leaning_spine() {
         let skeleton = ModelSkeleton {

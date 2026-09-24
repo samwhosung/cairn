@@ -80,9 +80,7 @@ pub(crate) fn floor112(c: [u8; 3]) -> [f32; 3] {
     floor_raise(c, 112)
 }
 
-/// The diffuse word a unit takes from the baked colour of the floor under it: as a doodad's, raised
-/// to 168.
-pub(crate) fn floor168(c: [u8; 3]) -> [f32; 3] {
+pub(crate) fn unit_floor_diffuse(c: [u8; 3]) -> [f32; 3] {
     floor_raise(c, 168)
 }
 
@@ -241,7 +239,6 @@ impl AssetLoader for WmoLoader {
 
 #[cfg(test)]
 impl WmoModel {
-    /// A building with nothing in it, for a test to furnish.
     pub(crate) fn empty() -> Self {
         Self {
             submeshes: Vec::new(),
@@ -289,8 +286,8 @@ mod tests {
         assert_eq!(bytes(floor112([78, 76, 134])), [78, 76, 134]);
         assert_eq!(bytes(floor112([56, 28, 14])), [112, 56, 28]);
         assert_eq!(bytes(floor112([0, 0, 0])), [0, 0, 0]);
-        assert_eq!(bytes(floor168([141, 105, 59])), [168, 125, 70]);
-        assert_eq!(bytes(floor168([200, 20, 0])), [200, 20, 0]);
+        assert_eq!(bytes(unit_floor_diffuse([141, 105, 59])), [168, 125, 70]);
+        assert_eq!(bytes(unit_floor_diffuse([200, 20, 0])), [200, 20, 0]);
     }
 
     fn prop(color: [u8; 4]) -> WmoDoodad {

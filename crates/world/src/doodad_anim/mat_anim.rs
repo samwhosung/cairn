@@ -17,11 +17,8 @@ const TINT_STEPS: f32 = 255.0;
 pub(crate) struct MatAnim {
     anim: Arc<AlphaAnim>,
     origin: f64,
-    /// The unit whose playing sequence picks the loops, on that clip's clock; without one the
-    /// loops are the first sequence's, on the clock since `origin`.
-    host: Option<Entity>,
-    /// The sequence last read off the host, kept while it plays nothing.
-    seq: Option<usize>,
+    seq_owner: Option<Entity>,
+    last_seq: Option<usize>,
     pub(crate) alpha: f32,
 }
 
@@ -31,17 +28,15 @@ impl MatAnim {
         Self {
             anim,
             origin,
-            host: None,
-            seq: None,
+            seq_owner: None,
+            last_seq: None,
             alpha,
         }
     }
 
-    /// A unit's batch: its alpha is authored per sequence, so which of them draw follows what the
-    /// unit plays.
-    pub(crate) fn following(anim: Arc<AlphaAnim>, host: Entity, origin: f64) -> Self {
+    pub(crate) fn following(anim: Arc<AlphaAnim>, seq_owner: Entity, origin: f64) -> Self {
         Self {
-            host: Some(host),
+            seq_owner: Some(seq_owner),
             ..Self::new(anim, origin)
         }
     }
@@ -49,18 +44,18 @@ impl MatAnim {
 
 pub(super) fn sample_mat_anim(
     time: Res<'_, Time>,
-    hosts: SeqOwners<'_, '_>,
+    owners: SeqOwners<'_, '_>,
     mut q: Query<'_, '_, &mut MatAnim>,
 ) {
     let now = time.elapsed_secs_f64();
     for mut m in &mut q {
         let age = now - m.origin;
-        let (seq, elapsed) = match owner_playing(&hosts, m.host) {
+        let (seq, elapsed) = match owner_playing(&owners, m.seq_owner) {
             Some(p) => {
-                m.seq = Some(p.seq);
+                m.last_seq = Some(p.seq);
                 (Some(p.seq), p.clip_time)
             }
-            None if m.host.is_some() => (m.seq, 0.0),
+            None if m.seq_owner.is_some() => (m.last_seq, 0.0),
             None => (None, age as f32),
         };
         m.alpha = m.anim.sample(seq, elapsed, age);

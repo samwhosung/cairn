@@ -156,8 +156,14 @@ pub fn control(
     let (move_fwd, move_right) = (flat(face_rot * Vec3::NEG_Z), flat(face_rot * Vec3::X));
     let dir = move_fwd * axes.fwd.signum() as f32 + move_right * axes.side.signum() as f32;
     let moving = dir != Vec3::ZERO;
-    let live_flags = player.move_flags;
-    posture::update(&mut player, keys, moving, turn_delta != 0.0, live_flags);
+    let last_live_flags = player.move_flags;
+    posture::update(
+        &mut player,
+        keys,
+        moving,
+        turn_delta != 0.0,
+        last_live_flags,
+    );
     let speed = current_speed(
         if axes.fwd < 0 {
             BACKWARD
