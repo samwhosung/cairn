@@ -16,7 +16,6 @@ struct LiquidParams {
     renderer: f32,
     frame_count: f32,
     scrolls: f32,
-    clock: f32,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> w: LiquidParams;
 
@@ -76,7 +75,7 @@ fn sun_sheen(world_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
 }
 
 fn anim_time() -> f32 {
-    return w.clock * globals.time;
+    return globals.time;
 }
 
 fn frame_layer() -> i32 {

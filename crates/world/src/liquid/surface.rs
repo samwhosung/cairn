@@ -19,7 +19,7 @@ use bevy::shader::ShaderRef;
 use terrain::{LiquidKind, LiquidMesh};
 
 use super::query::{LiquidSource, WmoPool, world_grid};
-use super::{FoamPatch, LiquidClock, frames};
+use super::{FoamPatch, frames};
 use crate::Install;
 use crate::coords::wow_to_bevy;
 use crate::light::LightBuffer;
@@ -45,7 +45,6 @@ pub struct LiquidParams {
     pub renderer: f32,
     pub frame_count: f32,
     pub scrolls: f32,
-    pub clock: f32,
 }
 
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
@@ -178,14 +177,12 @@ pub(super) fn setup_liquid(
     mut commands: Commands<'_, '_>,
     install: Res<'_, Install>,
     light: Option<Res<'_, LightBuffer>>,
-    clock: Option<Res<'_, LiquidClock>>,
     mut images: ResMut<'_, Assets<Image>>,
     mut materials: ResMut<'_, Assets<LiquidMaterial>>,
 ) {
     let Some(light) = light else {
         return;
     };
-    let running = clock.is_none_or(|c| *c == LiquidClock::Running);
     let mut assets = LiquidAssets::default();
     for set in FRAME_SETS {
         let kind = set.kind;
@@ -231,7 +228,6 @@ pub(super) fn setup_liquid(
                             renderer: renderer.shader_id(),
                             frame_count: decoded.len() as f32,
                             scrolls: flag(scroll),
-                            clock: flag(running),
                         },
                         light: light.0.clone(),
                     },

@@ -22,14 +22,6 @@ pub use spatial::{SpatialIndex, WaterIndex};
 pub(crate) use surface::{LiquidAssets, spawn_adt_liquids, spawn_wmo_liquids};
 pub use surface::{LiquidExtension, LiquidMaterial};
 
-/// Whether the liquids' frame flip and scroll run on the frame clock.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum LiquidClock {
-    #[default]
-    Running,
-    Frozen,
-}
-
 /// A water surface the wading foam can lie on; magma and slime carry none.
 #[derive(Component)]
 pub struct FoamPatch;
