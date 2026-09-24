@@ -1,4 +1,3 @@
-use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use model::CharSkinSlot;
 
@@ -6,12 +5,12 @@ use super::MeshCache;
 use super::batch_anim::{
     UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_animated, spawn_card,
 };
-use super::body::{BodyModel, BodyPart, HoldMeshes, WornModel, batch_look, meshes_for};
+use super::body::{BodyModel, HoldMeshes, WornModel, batch_look, meshes_for, spawn_part};
 use super::fade::PartMaterials;
 use crate::light::LightBuffer;
 use crate::m2::M2Model;
 use crate::model_material::{ModelMaterial, ModelMaterials, Variant};
-use crate::rig::RigPose;
+use crate::rig::{RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
 
@@ -41,6 +40,7 @@ pub(crate) fn attach_worn(
     mut materials: ResMut<'_, Assets<ModelMaterial>>,
     mut cache: ResMut<'_, ModelMaterials>,
     mut mesh_cache: ResMut<'_, MeshCache>,
+    mut palettes: ResMut<'_, RigPalettes>,
     mut loops: UnitLoops<'_>,
     mut units: Query<
         '_,
@@ -88,6 +88,8 @@ pub(crate) fn attach_worn(
                     HoldMeshes(form.clone()),
                 ))
                 .id();
+            let rig = rig_for_welded_billboards(item, root, &mut palettes);
+            let slot = rig.as_ref().map_or(0, |(_, skin)| skin.slot);
             let mut alpha_animated = false;
             for (i, sub) in item.submeshes.iter().enumerate() {
                 let g = &sub.geometry;
@@ -98,40 +100,30 @@ pub(crate) fn attach_worn(
                 };
                 let look = batch_look(g, texture, i, handle.id());
                 let material = cache.get(&mut materials, &look, Variant::Steady, &light.0);
-                let mats = PartMaterials::of(
-                    &mut cache,
-                    &mut materials,
-                    &look,
-                    material.clone(),
-                    false,
-                    &light.0,
-                );
+                let mats =
+                    PartMaterials::of(&mut cache, &mut materials, &look, material, false, &light.0);
                 let scrolls = loops.register_scroll(&mut materials, &mats, g);
                 let alpha = loops.worn_alpha(g);
                 alpha_animated |= alpha.is_some();
-                let mesh = form.static_meshes[i].clone();
                 if let Some(info) = &sub.billboard {
                     let joint = card_joint(&mut commands, None, root, info);
                     let tag = alpha_bits(1.0);
+                    let mesh = form.static_meshes[i].clone();
                     let mut card =
                         spawn_card(&mut commands, mesh, tag, mats, info, joint, sub.aabb);
                     mark_animated(&mut card, scrolls, alpha);
                     cards.0.push(card.id());
                     continue;
                 }
-                let mut part = commands.spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    Transform::default(),
-                    ChildOf(root),
-                    MeshTag(alpha_bits(1.0)),
-                    BodyPart,
-                    mats,
-                ));
-                if let Some(aabb) = sub.aabb {
+                let skinned = slot != 0;
+                let mut part = spawn_part(&mut commands, root, &form, i, skinned, slot, mats);
+                if !skinned && let Some(aabb) = sub.aabb {
                     part.insert(aabb);
                 }
                 mark_animated(&mut part, scrolls, alpha);
+            }
+            if let Some(rig) = rig {
+                commands.entity(root).insert(rig);
             }
             if alpha_animated {
                 commands.entity(entity).insert(UnitAlphaAnimated);
@@ -141,5 +133,75 @@ pub(crate) fn attach_worn(
         if pending.0.is_empty() {
             commands.entity(entity).remove::<WornPending>();
         }
+    }
+}
+
+fn rig_for_welded_billboards(
+    item: &M2Model,
+    root: Entity,
+    palettes: &mut RigPalettes,
+) -> Option<(RigPose, RigSkin)> {
+    let welded = item.submeshes.iter().any(|s| s.geometry.welded_billboard);
+    if !welded || item.skeleton.joints.is_empty() {
+        return None;
+    }
+    let skin = RigSkin::allocate(palettes, item.inverse_bindposes.clone())?;
+    Some((RigPose::new(root, &item.skeleton), skin))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use model::{BillboardKind, RenderSubmesh};
+
+    use super::*;
+    use crate::model::ModelSubmesh;
+    use crate::rig::{ModelJoint, ModelSkeleton};
+
+    fn item(welded: bool, bones: usize) -> M2Model {
+        let joint = |parent, billboard| ModelJoint {
+            parent,
+            local_translation: Vec3::ZERO,
+            billboard,
+            parent_arm: None,
+        };
+        let joints = [joint(-1, None), joint(0, Some(BillboardKind::Spherical))];
+        M2Model {
+            submeshes: vec![ModelSubmesh {
+                geometry: Arc::new(RenderSubmesh {
+                    welded_billboard: welded,
+                    ..RenderSubmesh::default()
+                }),
+                aabb: None,
+                texture: None,
+                billboard: None,
+            }],
+            bounds: None,
+            lights: Vec::new(),
+            skeleton: ModelSkeleton {
+                joints: joints[..bones].to_vec(),
+                spine_bone: None,
+                head_bone: None,
+            },
+            inverse_bindposes: vec![Mat4::IDENTITY; bones].into(),
+            attachments: Vec::new(),
+            animations: None,
+            has_emitters: false,
+            emitters: Vec::new(),
+            ribbons: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn only_an_item_welded_to_a_billboard_bone_takes_a_palette() {
+        let mut palettes = RigPalettes::default();
+        let root = Entity::PLACEHOLDER;
+        let (pose, skin) =
+            rig_for_welded_billboards(&item(true, 2), root, &mut palettes).expect("a rig");
+        assert_eq!((pose.joints_root, pose.locals.len()), (root, 2));
+        assert_ne!(skin.slot, 0);
+        assert!(rig_for_welded_billboards(&item(false, 2), root, &mut palettes).is_none());
+        assert!(rig_for_welded_billboards(&item(true, 0), root, &mut palettes).is_none());
     }
 }

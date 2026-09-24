@@ -208,7 +208,7 @@ pub(crate) fn dress_bodies(
     }
 }
 
-fn spawn_part<'a>(
+pub(super) fn spawn_part<'a>(
     commands: &'a mut Commands<'_, '_>,
     owner: Entity,
     form: &ModelMeshes,
