@@ -16,8 +16,6 @@ use crate::shot::ReadyToShoot;
 pub const FRAME_STEP: Duration = Duration::from_nanos(16_666_667);
 const SEAT_REACH: f32 = 500.0;
 
-/// A display to stand at `at`, `scale` times its model's size, and shoot from the orbit `az`,
-/// `el`, `dist` around the point a yard above its feet, `age` seconds after it appears.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Fixture {
     pub display: u32,

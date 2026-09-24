@@ -41,7 +41,6 @@ impl Walker {
         Self::build(map, feet, heading_deg, hz, None)
     }
 
-    /// [`Self::new`], its body dressed as `look`: its scale and collision height are the look's.
     pub fn dressed(
         map: &str,
         feet: [f32; 3],
@@ -102,7 +101,6 @@ impl Walker {
         Some(Self::new("Azeroth", [xy[0], xy[1], 500.0], heading_deg, hz)?.grounded(xy))
     }
 
-    /// [`Self::on_ground`], dressed as `look`.
     pub fn dressed_on_ground(
         xy: [f32; 2],
         heading_deg: f32,

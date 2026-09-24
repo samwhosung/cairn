@@ -27,7 +27,6 @@ pub fn spawn_body(mut commands: Commands<'_, '_>) {
     ));
 }
 
-/// The body is drawn at the scale the server gives a new character, its display's size.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn dress_body(
     mut commands: Commands<'_, '_>,
@@ -50,10 +49,7 @@ pub fn dress_body(
     for (entity, mut transform) in &mut bodies {
         if let Some(body) = tables.player_body(&look.0, &install.0, &mut images, &server) {
             let display = tables.create.body_display(look.0.race, look.0.sex);
-            let scale = display
-                .and_then(|d| tables.creatures.model_scale(d))
-                .filter(|s| *s > 0.0)
-                .unwrap_or(1.0);
+            let scale = new_character_scale(&tables, display);
             transform.scale = Vec3::splat(scale);
             commands.entity(entity).insert(body);
             player.collision_height = collision_height(&tables, display, scale);
@@ -77,8 +73,13 @@ pub fn pivot_on_model(
     }
 }
 
-/// The model's height at the body's `scale`, or at the display's own where that is larger: the
-/// display's scale is a floor, never a second factor.
+fn new_character_scale(tables: &CharacterTables, display: Option<u32>) -> f32 {
+    display
+        .and_then(|d| tables.creatures.model_scale(d))
+        .filter(|s| *s > 0.0)
+        .unwrap_or(1.0)
+}
+
 fn collision_height(tables: &CharacterTables, display: Option<u32>, scale: f32) -> f32 {
     let raw = display
         .and_then(|d| tables.creatures.collision_height(d))

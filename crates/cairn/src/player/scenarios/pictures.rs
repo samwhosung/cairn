@@ -51,13 +51,14 @@ const FACING_A_LAMPPOST_BELOW_THE_ABBEY: Stand = Stand {
     heading: 320.0,
 };
 const SOUTH: f32 = 180.0;
-/// The ground's baked shadow of a tree below the abbey, its edge four yards east, seen with the
-/// sun behind the camera.
 const IN_A_TREES_SHADOW_BELOW_THE_ABBEY: Stand = Stand {
     xy: [-8960.0, -133.0],
     heading: SUN_BEARING + 180.0,
 };
-const IN_THE_SUN_BESIDE_IT: [f32; 2] = [-8960.0, -137.0];
+const IN_THE_SUN_FOUR_YARDS_EAST: [f32; 2] = [
+    IN_A_TREES_SHADOW_BELOW_THE_ABBEY.xy[0],
+    IN_A_TREES_SHADOW_BELOW_THE_ABBEY.xy[1] - 4.0,
+];
 const ON_THE_SNOW_OUTSIDE_KHARANOS: Stand = Stand {
     xy: [-5650.0, -450.0],
     heading: 0.0,
@@ -339,7 +340,7 @@ fn the_doodads_move_in_goldshire_and_before_the_abbey() {
 fn the_walker_in_the_sun_in_a_trees_shadow_and_by_a_lamp_at_night() {
     let shade = IN_A_TREES_SHADOW_BELOW_THE_ABBEY;
     let human = CharacterLook::naked(1, 0);
-    let Some(mut p) = Painter::new(IN_THE_SUN_BESIDE_IT, shade.heading, human.clone()) else {
+    let Some(mut p) = Painter::new(IN_THE_SUN_FOUR_YARDS_EAST, shade.heading, human.clone()) else {
         return;
     };
     p.wait(2.0);
