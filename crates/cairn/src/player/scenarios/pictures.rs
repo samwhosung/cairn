@@ -127,12 +127,16 @@ impl Painter {
             .expect("the follow camera");
         let view = RenderTarget::Image(painter.target.clone().into());
         painter.app.world_mut().entity_mut(camera).insert(view);
-        painter.put_on_ground(xy);
-        painter.settle();
+        painter.stand_on(xy);
         Some(painter)
     }
 
-    fn put_on_ground(&mut self, xy: [f32; 2]) {
+    fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
+        self.app.world_mut().resource_mut::<Time<Virtual>>()
+    }
+
+    fn stand_on(&mut self, xy: [f32; 2]) {
+        self.clock().pause();
         let deadline = Instant::now() + LOAD_TIMEOUT;
         while self.app.world().resource::<Player>().settling {
             assert!(Instant::now() < deadline, "the collision never settled");
@@ -155,6 +159,8 @@ impl Painter {
         player.horiz_vel = Vec3::ZERO;
         player.airborne_since = None;
         player.settling = true;
+        self.settle();
+        self.clock().unpause();
     }
 
     fn settle(&mut self) {
@@ -241,7 +247,7 @@ impl Painter {
     }
 
     fn shoot(&mut self, name: &str) {
-        self.app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        self.clock().pause();
         self.run(FRAMES_TO_REACH_THE_IMAGE);
         let shot: Arc<Mutex<Option<Image>>> = Arc::default();
         let into = shot.clone();
@@ -260,10 +266,7 @@ impl Painter {
         let path = self.out.join(format!("{name}.png"));
         write_png(&image, &path).expect("the picture writes");
         eprintln!("wrote {}", path.display());
-        self.app
-            .world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .unpause();
+        self.clock().unpause();
     }
 }
 
@@ -345,8 +348,7 @@ fn the_walker_in_the_sun_in_a_trees_shadow_and_by_a_lamp_at_night() {
     };
     p.wait(2.0);
     p.shoot("light-1-sun");
-    p.put_on_ground(shade.xy);
-    p.settle();
+    p.stand_on(shade.xy);
     p.wait(2.0);
     p.shoot("light-2-shadow");
     let lamp = FACING_A_GOLDSHIRE_LAMPPOST;
