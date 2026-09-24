@@ -4,6 +4,7 @@ use bevy::camera::primitives::Aabb;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
+use crate::doodad_anim::MatAnim;
 use crate::model_material::ModelMaterial;
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::view::{FARCLIP, WorldCamera};
@@ -99,9 +100,6 @@ pub(crate) struct DoodadFade {
     pub blend: Handle<ModelMaterial>,
 }
 
-#[derive(Component, Clone, Copy)]
-pub(crate) struct MatAlpha(pub f32);
-
 type Part<'a> = (
     &'a ModelPart,
     &'a GlobalTransform,
@@ -111,7 +109,7 @@ type Part<'a> = (
     &'a mut MeshMaterial3d<ModelMaterial>,
     Option<&'a Aabb>,
     Option<&'a WmoGroupVis>,
-    Option<&'a MatAlpha>,
+    Option<&'a MatAnim>,
 );
 
 pub(crate) fn apply_model_visibility(
@@ -140,7 +138,7 @@ pub(crate) fn apply_model_visibility(
         let instance = group_vis.and_then(|gv| instances.get(gv.instance).ok());
         let portal_visible = group_vis.is_none_or(|gv| instance.is_none_or(|i| gv.drawn_by(i)));
         let room_fog = group_vis.map(|gv| instance.is_some_and(|i| gv.interior_fogged_by(i)));
-        let mat_factor = mat.map_or(1.0, |m| m.0);
+        let mat_factor = mat.map_or(1.0, |m| m.alpha);
         let desired = if in_range && fade_alpha > 0.0 && mat_factor > 0.0 && portal_visible {
             Visibility::Inherited
         } else {

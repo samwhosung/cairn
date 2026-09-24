@@ -14,7 +14,7 @@ use crate::Residency;
 use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
-use crate::doodad_anim::{DrawBounds, RigBuilder};
+use crate::doodad_anim::{DrawBounds, MaterialLoops, RigBuilder};
 use crate::doodad_sound::{SoundHost, idle_has_sound_keys};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
@@ -27,7 +27,7 @@ use crate::placements::{PlacedModel, Placement, Placements, prop_placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::{PropLobeLight, PropProbeSlot, PropProbes, fold_interior_probe};
 use crate::stream::Streamer;
-use crate::visibility::{DoodadFade, MatAlpha, ModelPart, alpha_bits, probe_bits};
+use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::{DoodadBase, WmoModel};
 
 enum ModelHandle {
@@ -119,7 +119,7 @@ pub(crate) fn furnish(
     mut probes: ResMut<'_, PropProbes>,
     mut furnished: ResMut<'_, Furnished>,
     mut residency: ResMut<'_, Residency>,
-    time: Res<'_, Time>,
+    mut loops: MaterialLoops<'_>,
 ) {
     let Some(light) = light else {
         return;
@@ -166,7 +166,7 @@ pub(crate) fn furnish(
     if !ready || residency.models {
         return;
     }
-    let now = time.elapsed_secs();
+    let now = loops.now();
     let mut spawner = Spawner {
         commands: &mut commands,
         meshes: &mut meshes,
@@ -175,6 +175,7 @@ pub(crate) fn furnish(
         cache: &mut cache,
         materials: &mut materials,
         light: &light.0,
+        loops: &mut loops,
         now,
     };
     for f in by_id.values_mut().filter(|f| !f.spawned) {
@@ -282,7 +283,7 @@ fn resolve_props(
         .collect()
 }
 
-struct Spawner<'a, 'w, 's> {
+struct Spawner<'a, 'w, 's, 'l> {
     commands: &'a mut Commands<'w, 's>,
     meshes: &'a mut Assets<Mesh>,
     forms: &'a mut HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
@@ -290,6 +291,7 @@ struct Spawner<'a, 'w, 's> {
     cache: &'a mut ModelMaterials,
     materials: &'a mut Assets<ModelMaterial>,
     light: &'a Buffer,
+    loops: &'a mut MaterialLoops<'l>,
     now: f32,
 }
 
@@ -318,7 +320,7 @@ fn cached_form(
     form
 }
 
-impl Spawner<'_, '_, '_> {
+impl Spawner<'_, '_, '_, '_> {
     fn furnishing(
         &mut self,
         f: &mut Furnishing,
@@ -613,7 +615,11 @@ impl Spawner<'_, '_, '_> {
         for (i, (sub, mesh)) in submeshes.iter().zip(form).enumerate() {
             let g = &sub.geometry;
             let steady_interior_prop = probe.is_some() && sub.billboard.is_none();
-            let look = batch_look(sub, i, placed, shade, probe.is_some());
+            let seq_owner = rig
+                .as_deref()
+                .filter(|_| g.uv_seq.is_some() || g.rgb_seq.is_some())
+                .map(RigBuilder::root);
+            let look = batch_look(sub, i, placed, shade, probe.is_some(), seq_owner);
             let cutout = self
                 .cache
                 .get(self.materials, &look, Variant::Steady, self.light);
@@ -627,6 +633,8 @@ impl Spawner<'_, '_, '_> {
                 self.cache
                     .get(self.materials, &look, Variant::FadeTwin, self.light)
             };
+            self.loops
+                .register(self.materials, cutout.id(), blended.id(), g, seq_owner);
             let tag = MeshTag(match probe {
                 Some(slot) => probe_bits(slot),
                 None => alpha_bits(1.0),
@@ -663,9 +671,7 @@ impl Spawner<'_, '_, '_> {
                 }
                 placed.local_center
             };
-            if let Some(anim) = &g.alpha_anim {
-                e.insert(MatAlpha(anim.sample(None, 0.0, 0.0)));
-            }
+            self.loops.loops_for(g, seq_owner).insert(&mut e);
             if !steady_interior_prop {
                 e.insert(DoodadFade {
                     radius: placed.radius,
@@ -686,6 +692,7 @@ fn batch_look(
     placed: &Placed<'_>,
     shade: GroundShade,
     probe_lit: bool,
+    seq_owner: Option<Entity>,
 ) -> BatchLook {
     let g = &sub.geometry;
     BatchLook {
@@ -708,6 +715,7 @@ fn batch_look(
             model: placed.model,
             index: i,
         }),
+        seq_owner,
         wmo_class: g.wmo_batch,
         sidn: g.sidn,
         window: g.window,

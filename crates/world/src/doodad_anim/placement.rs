@@ -2,13 +2,97 @@ use std::sync::Arc;
 
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use model::{KeyAnim, RenderSubmesh, SeqLoops};
 
 use super::lazy::{LazyRig, SkinnedTwin};
-use super::{DoodadAnimHost, DrawBounds, Gate, HostBuilder, SeenBy, spawn_anim_host};
+use super::mat_anim::{AnimMatPart, MatLoop, TintAnimMaterials, UvAnimMaterials, register};
+use super::{DoodadAnimHost, DrawBounds, Gate, HostBuilder, MatAnim, SeenBy, spawn_anim_host};
 use crate::billboard::BillboardCard;
 use crate::m2::M2Model;
+use crate::mat_anim_table::MatAnimTable;
 use crate::model::BillboardInfo;
+use crate::model_material::ModelMaterial;
+
+#[derive(SystemParam)]
+pub(crate) struct MaterialLoops<'w> {
+    time: Res<'w, Time>,
+    uv: ResMut<'w, UvAnimMaterials>,
+    tint: ResMut<'w, TintAnimMaterials>,
+    table: ResMut<'w, MatAnimTable>,
+}
+
+fn mat_loop<V: Clone>(
+    shared: Option<&KeyAnim<V>>,
+    per_seq: Option<&SeqLoops<V>>,
+    seq_owner: Option<Entity>,
+) -> Option<MatLoop<V>> {
+    match (per_seq, seq_owner) {
+        (Some(seqs), Some(seq_owner)) => Some(MatLoop::PerSeq {
+            seqs: Arc::new(seqs.clone()),
+            seq_owner,
+        }),
+        _ => shared
+            .filter(|a| a.period > 0.0)
+            .map(|a| MatLoop::Shared(Arc::new(a.clone()))),
+    }
+}
+
+impl MaterialLoops<'_> {
+    pub(crate) fn now(&self) -> f32 {
+        self.time.elapsed_secs()
+    }
+
+    pub(crate) fn register(
+        &mut self,
+        materials: &mut Assets<ModelMaterial>,
+        cutout: AssetId<ModelMaterial>,
+        fade_twin: AssetId<ModelMaterial>,
+        g: &RenderSubmesh,
+        seq_owner: Option<Entity>,
+    ) {
+        let uv = mat_loop(g.uv_anim.as_ref(), g.uv_seq.as_ref(), seq_owner);
+        let tint = mat_loop(g.rgb_anim.as_ref(), g.rgb_seq.as_ref(), seq_owner);
+        for id in [cutout, fade_twin] {
+            if let Some(anim) = uv.clone() {
+                register(&mut self.uv, &mut self.table, materials, id, anim);
+            }
+            if let Some(anim) = tint.clone() {
+                register(&mut self.tint, &mut self.table, materials, id, anim);
+            }
+        }
+    }
+
+    pub(crate) fn loops_for(&self, g: &RenderSubmesh, seq_owner: Option<Entity>) -> PartLoops {
+        let moves = |p: Option<f32>| p.is_some_and(|p| p > 0.0);
+        PartLoops {
+            animated_material: moves(g.uv_anim.as_ref().map(|a| a.period))
+                || moves(g.rgb_anim.as_ref().map(|a| a.period))
+                || seq_owner.is_some(),
+            alpha: g
+                .alpha_anim
+                .as_ref()
+                .map(|a| MatAnim::new(Arc::new(a.clone()), self.time.elapsed_secs_f64())),
+        }
+    }
+}
+
+pub(crate) struct PartLoops {
+    animated_material: bool,
+    alpha: Option<MatAnim>,
+}
+
+impl PartLoops {
+    pub(crate) fn insert(self, e: &mut EntityCommands<'_>) {
+        if self.animated_material {
+            e.insert(AnimMatPart);
+        }
+        if let Some(alpha) = self.alpha {
+            e.insert(alpha);
+        }
+    }
+}
 
 pub(crate) struct RigBuilder {
     host: HostBuilder,
@@ -44,6 +128,10 @@ impl RigBuilder {
             batches: Vec::new(),
             lazy_parts: Vec::new(),
         })
+    }
+
+    pub(crate) fn root(&self) -> Entity {
+        self.host.root
     }
 
     pub(crate) fn card(

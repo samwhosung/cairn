@@ -179,6 +179,7 @@ fn sky_look(g: &RenderSubmesh, texture: Option<Handle<Image>>, order: u16) -> Ba
         uv_offset_at_rest: [0.0, 0.0],
         tint_at_rest: [1.0; 3],
         animated: None,
+        seq_owner: None,
         wmo_class: None,
         sidn: None,
         window: false,

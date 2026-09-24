@@ -1,4 +1,5 @@
 mod lazy;
+mod mat_anim;
 mod placement;
 
 use bevy::animation::graph::{AnimationGraphHandle, AnimationNodeIndex};
@@ -7,7 +8,9 @@ use bevy::camera::primitives::{Frustum, Sphere};
 use bevy::prelude::*;
 
 use lazy::LazyRig;
-pub(crate) use placement::RigBuilder;
+pub(crate) use mat_anim::MatAnim;
+use mat_anim::{TintAnimMaterials, UvAnimMaterials};
+pub(crate) use placement::{MaterialLoops, RigBuilder};
 
 use crate::m2::M2Model;
 use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
@@ -16,7 +19,7 @@ use crate::rig::{
     RigPose, RigSkin,
 };
 use crate::view::{FARCLIP, WorldCamera};
-use crate::visibility::{ModelPart, doodad_fade_alpha};
+use crate::visibility::{ModelPart, apply_model_visibility, doodad_fade_alpha};
 
 pub(crate) enum DoodadAnimTier<'a> {
     Static,
@@ -319,13 +322,22 @@ pub(crate) struct DoodadAnimPlugin;
 
 impl Plugin for DoodadAnimPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            PostUpdate,
-            (reroll_doodad_variation, gate_doodad_anim)
-                .chain()
-                .before(AnimationSystems),
-        )
-        .add_systems(Update, lazy::reap_parked_rigs);
+        app.init_resource::<UvAnimMaterials>()
+            .init_resource::<TintAnimMaterials>()
+            .add_systems(
+                PostUpdate,
+                (reroll_doodad_variation, gate_doodad_anim)
+                    .chain()
+                    .before(AnimationSystems),
+            )
+            .add_systems(
+                Update,
+                (
+                    lazy::reap_parked_rigs,
+                    mat_anim::sample_mat_anim.before(apply_model_visibility),
+                    mat_anim::tick_anim_materials.after(apply_model_visibility),
+                ),
+            );
     }
 }
 

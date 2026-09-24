@@ -21,6 +21,7 @@ mod layers;
 mod light;
 mod m2;
 mod map;
+mod mat_anim_table;
 mod model;
 mod model_material;
 mod models;
@@ -173,6 +174,7 @@ impl Plugin for WorldPlugin {
                     .chain(),
             ),
         );
+        mat_anim_table::plugin(app);
     }
 }
 
