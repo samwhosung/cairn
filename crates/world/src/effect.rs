@@ -1,6 +1,3 @@
-//! Effect quads rebuilt each frame: textured, vertex coloured, unlit, alpha blended or added,
-//! drawn in the transparent pass at a fixed place in its sort.
-
 use bevy::asset::embedded_asset;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{
@@ -9,23 +6,18 @@ use bevy::pbr::{
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Buffer, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    AsBindGroup, Buffer, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 
 pub type EffectMaterial = ExtendedMaterial<StandardMaterial, EffectExtension>;
 
-/// How an effect draws.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct EffectLook {
-    /// Adds to what is behind it rather than blending over it.
     pub additive: bool,
-    /// Fogs with the scene.
     pub fogged: bool,
-    /// Its vertices are relative to the camera.
     pub camera_relative: bool,
-    /// Its place in the transparent sort, added to its distance.
-    pub sort: f32,
+    pub sort_offset: f32,
     /// Its rasterizer depth bias, toward the eye.
     pub raster_bias: i32,
 }
@@ -43,6 +35,15 @@ impl From<&EffectExtension> for EffectKey {
     }
 }
 
+/// `effect.wgsl`'s `EffectParams`, member for member.
+#[derive(Clone, Copy, Default, Debug, ShaderType)]
+pub struct EffectParams {
+    pub fogged: f32,
+    pub additive: f32,
+    pub camera_relative: f32,
+    pub _pad: f32,
+}
+
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
 #[bind_group_data(EffectKey)]
 pub struct EffectExtension {
@@ -50,7 +51,7 @@ pub struct EffectExtension {
     #[sampler(101)]
     pub texture: Handle<Image>,
     #[uniform(102)]
-    pub params: Vec4,
+    pub params: EffectParams,
     #[storage(90, read_only, buffer, visibility(vertex, fragment))]
     pub light: Buffer,
     raster_bias: i32,
@@ -105,17 +106,17 @@ pub(crate) fn effect_material(
             },
             cull_mode: None,
             double_sided: true,
-            depth_bias: look.sort,
+            depth_bias: look.sort_offset,
             ..StandardMaterial::default()
         },
         extension: EffectExtension {
             texture,
-            params: Vec4::new(
-                flag(look.fogged),
-                flag(look.additive),
-                flag(look.camera_relative),
-                0.0,
-            ),
+            params: EffectParams {
+                fogged: flag(look.fogged),
+                additive: flag(look.additive),
+                camera_relative: flag(look.camera_relative),
+                _pad: 0.0,
+            },
             light: light.clone(),
             raster_bias: look.raster_bias,
         },

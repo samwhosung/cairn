@@ -50,12 +50,7 @@ const FACING_A_LAMPPOST_BELOW_THE_ABBEY: Stand = Stand {
     xy: [-8952.0, -113.0],
     heading: 320.0,
 };
-/// Crystal Lake's north shore, from which south wades in and swims.
-const CRYSTAL_LAKE_SHORE: [f32; 2] = [-9414.0, -316.0];
 const SOUTH: f32 = 180.0;
-/// The top of a ramp down into Stormwind's canals, and its heading.
-const CANAL_RAMP: [f32; 2] = [-8761.44, 527.36];
-const DOWN_THE_RAMP: f32 = 212.6;
 
 struct Painter {
     app: App,
@@ -377,7 +372,7 @@ fn rig_census(p: &mut Painter) -> String {
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_walker_wades_and_swims_into_crystal_lake() {
-    let Some(mut p) = Painter::new(CRYSTAL_LAKE_SHORE, SOUTH, CharacterLook::naked(1, 0)) else {
+    let Some(mut p) = Painter::new(super::SHORE, SOUTH, CharacterLook::naked(1, 0)) else {
         return;
     };
     p.wait(2.0);
@@ -402,7 +397,8 @@ fn the_walker_wades_and_swims_into_crystal_lake() {
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_walker_swims_into_a_stormwind_canal() {
-    let Some(mut p) = Painter::new(CANAL_RAMP, DOWN_THE_RAMP, CharacterLook::naked(1, 0)) else {
+    let look = CharacterLook::naked(1, 0);
+    let Some(mut p) = Painter::new(super::CANAL_RAMP, super::DOWN_THE_RAMP, look) else {
         return;
     };
     p.wait(2.0);

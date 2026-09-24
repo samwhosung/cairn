@@ -1,6 +1,3 @@
-//! A liquid's animated frames as one texture array, each frame's own mip levels laid in as the
-//! file stores them.
-
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::render_resource::{
@@ -9,8 +6,6 @@ use bevy::render::render_resource::{
 use blp::DecodedBlp;
 use mpq::Chain;
 
-/// Frames `1..=count` of `XTextures\<dir>\<stem>.<n>.blp`, stopping at the first that is missing,
-/// not square, or another size than the first.
 pub(crate) fn read_frames(chain: &Chain, dir: &str, stem: &str, count: u32) -> Vec<DecodedBlp> {
     let mut frames: Vec<DecodedBlp> = Vec::new();
     for i in 1..=count {
@@ -28,9 +23,8 @@ pub(crate) fn read_frames(chain: &Chain, dir: &str, stem: &str, count: u32) -> V
     frames
 }
 
-/// The frames as one repeating, trilinear `2d_array`, a full chain down to 1×1. A level a frame
-/// does not store repeats its nearest stored one, texel for texel. `flatten` evens out each
-/// level's mean across the frames, so distant water does not pulse once a loop.
+/// The client's frames differ in mean brightness, so `flatten` evens each level's mean across
+/// them lest distant water pulse once a loop.
 pub(crate) fn frame_array(frames: &[DecodedBlp], flatten: bool) -> Option<Image> {
     let size = frames.first()?.width;
     let levels = size.max(1).ilog2() + 1;
@@ -41,8 +35,7 @@ pub(crate) fn frame_array(frames: &[DecodedBlp], flatten: bool) -> Option<Image>
         let mut per_level = Vec::with_capacity(levels as usize);
         for level in 0..levels {
             let lw = (size >> level).max(1);
-            let src = ((size / lw).max(1).trailing_zeros() as usize).min(stored - 1);
-            let mip = &blp.mips[src];
+            let mip = &blp.mips[nearest_stored_level(size, lw, stored)];
             let start = data.len();
             extend_nearest(&mut data, &mip.rgba, mip.width, mip.height, lw, lw);
             per_level.push((start, data.len() - start));
@@ -79,8 +72,10 @@ pub(crate) fn frame_array(frames: &[DecodedBlp], flatten: bool) -> Option<Image>
     Some(image)
 }
 
-/// Appends `src`, `sw × sh` RGBA8, resized to `dw × dh` by picking the texel under each output
-/// texel's centre, never averaging.
+fn nearest_stored_level(size: u32, level_width: u32, stored: usize) -> usize {
+    ((size / level_width).max(1).trailing_zeros() as usize).min(stored - 1)
+}
+
 fn extend_nearest(out: &mut Vec<u8>, src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) {
     if sw == dw && sh == dh {
         out.extend_from_slice(src);
@@ -103,8 +98,6 @@ fn extend_nearest(out: &mut Vec<u8>, src: &[u8], sw: u32, sh: u32, dw: u32, dh: 
     }
 }
 
-/// Moves each frame's per-channel sum at every level onto the loop's mean, one byte step at a
-/// time on a scattered walk, so no texel moves by more than the correction needs.
 fn flatten_frame_dc(data: &mut [u8], spans: &[Vec<(usize, usize)>], levels: usize) {
     for level in 0..levels {
         let mut sums = [0i64; 4];
@@ -141,9 +134,15 @@ fn flatten_frame_dc(data: &mut [u8], spans: &[Vec<(usize, usize)>], levels: usiz
     }
 }
 
+const SCATTER_STRIDE: usize = 7;
+
 fn shift_channel(level: &mut [u8], c: usize, mut delta: i64) {
     let n = level.len() / 4;
-    let stride = if n.is_multiple_of(7) { 1 } else { 7 };
+    let stride = if n.is_multiple_of(SCATTER_STRIDE) {
+        1
+    } else {
+        SCATTER_STRIDE
+    };
     let mut progress = true;
     while delta != 0 && progress {
         progress = false;

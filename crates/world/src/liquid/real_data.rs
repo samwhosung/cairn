@@ -1,7 +1,3 @@
-//! The liquid query against the client's own files, at the places where a rule once answered with
-//! the wrong surface. The surfaces are built the way the world builds them and asked what the
-//! world asks. Every test skips without `WOW_DATA`.
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -11,7 +7,7 @@ use mpq::Chain;
 use terrain::LiquidKind;
 
 use super::query::{
-    LiquidClaim, LiquidGrid, LiquidSource, WmoPool, liquid_at, submersion_claim_at, wet_footprint,
+    LiquidClaim, LiquidGrid, LiquidSource, WmoPool, liquid_at, submersion_claim_at, world_grid,
 };
 use super::surface::scrolls;
 use crate::coords::{bevy_to_wow, placement_rotation, wow_to_bevy};
@@ -26,7 +22,6 @@ fn chain_or_skip() -> Option<Chain> {
     Some(Chain::open(&data).expect("open the chain"))
 }
 
-/// A building's rooms from its root and group files, as the world loads them.
 fn rooms(chain: &Chain, root_path: &str) -> Option<WmoRooms> {
     let bytes = chain.read(root_path).ok()?;
     let root = model::parse_wmo_root(&bytes).ok()?;
@@ -48,18 +43,13 @@ struct Placement {
     nav: Vec<WmoGroupNav>,
 }
 
-/// Every liquid surface of the tiles around a point: the terrain's, and each placed building's
-/// owned by a stand-in for the entity the world spawns for the placement.
 struct LiquidScene {
     surfaces: Vec<LiquidGrid>,
     placements: Vec<Placement>,
 }
 
 impl LiquidScene {
-    /// The first placement one of whose group boxes holds `wow`, and the claim of standing in
-    /// that group. Coarser than the world's down-ray, which also races the faces and the ground,
-    /// and enough to say which building a point is in.
-    fn claim_at(&self, wow: [f32; 3]) -> Option<(LiquidClaim, &str)> {
+    fn claim_by_group_box(&self, wow: [f32; 3]) -> Option<(LiquidClaim, &str)> {
         self.placements.iter().find_map(|p| {
             let local = bevy_to_wow(
                 p.transform
@@ -78,18 +68,24 @@ impl LiquidScene {
         })
     }
 
-    /// The surface the query answers for `claim`, and the highest wet vertex of every surface
-    /// over the column: the rule the grid replaced.
-    fn verdict(&self, wow: [f32; 3], claim: LiquidClaim) -> Option<(f32, f32)> {
+    fn verdict(&self, wow: [f32; 3], claim: LiquidClaim) -> Option<Verdict> {
         let hit = liquid_at(self.surfaces.iter(), wow, claim)?;
-        let highest = self
+        let highest_wet_z = self
             .surfaces
             .iter()
             .filter(|g| g.surface_z_at(wow[0], wow[1]).is_some())
             .map(LiquidGrid::highest_wet_z)
             .fold(f32::MIN, f32::max);
-        Some((hit.surface_z, highest))
+        Some(Verdict {
+            surface: hit.surface_z,
+            highest_wet_z,
+        })
     }
+}
+
+struct Verdict {
+    surface: f32,
+    highest_wet_z: f32,
 }
 
 fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
@@ -99,8 +95,7 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
         surfaces: Vec::new(),
         placements: Vec::new(),
     };
-    let mut placed = HashSet::new();
-    // A building as big as Blackrock is placed from every tile it overlaps.
+    let mut seen_unique_ids = HashSet::new();
     for (dx, dy) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (dx, dy))) {
         let (Some(x), Some(y)) = (tx.checked_add_signed(dx), ty.checked_add_signed(dy)) else {
             continue;
@@ -109,11 +104,11 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
             continue;
         };
         for lq in tile.chunks.iter().flat_map(|c| &c.liquids) {
-            let grid = wet_footprint(lq, &Transform::IDENTITY, LiquidSource::AdtChunk);
+            let grid = world_grid(lq, &Transform::IDENTITY, LiquidSource::AdtChunk);
             scene.surfaces.push(grid);
         }
         for w in &tile.wmos {
-            if !placed.insert(w.unique_id) {
+            if !seen_unique_ids.insert(w.unique_id) {
                 continue;
             }
             let Some(rooms) = rooms(&chain, &w.model) else {
@@ -129,7 +124,7 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
             for (gi, lq) in rooms.group_liquids.iter().enumerate() {
                 let Some(lq) = lq else { continue };
                 let pool = WmoPool::of(&rooms, gi, instance, &transform);
-                let grid = wet_footprint(lq, &transform, LiquidSource::WmoGroup(pool));
+                let grid = world_grid(lq, &transform, LiquidSource::WmoGroup(pool));
                 scene.surfaces.push(grid);
             }
             scene.placements.push(Placement {
@@ -144,8 +139,8 @@ fn liquid_scene(map: &str, wow: [f32; 3]) -> Option<LiquidScene> {
 }
 
 /// Blackrock Mountain's lava under its stairs (`blackrock.wmo` group 38, a 55 × 82 magma grid
-/// falling from 175.00 to 167.29 under a turned placement): the highest wet vertex stood 2.4
-/// yards over the feet, past the swim line, with the lava yards below.
+/// falling from 175.00 to 167.29 under a turned placement): the highest wet vertex is 2.4 yards
+/// over the feet, past the swim line, with the lava yards below.
 #[test]
 fn blackrock_lava_is_below_the_feet_not_above_it() {
     let feet = [-7531.21_f32, -1123.64, 172.58];
@@ -153,26 +148,32 @@ fn blackrock_lava_is_below_the_feet_not_above_it() {
         return;
     };
     let claim = scene
-        .claim_at(feet)
+        .claim_by_group_box(feet)
         .map_or(LiquidClaim::Unknown, |(claim, _)| claim);
-    let (surface, highest) = scene.verdict(feet, claim).expect("the lava answers");
-    assert!((highest - 175.00).abs() < 0.05, "{highest}");
+    let Verdict {
+        surface,
+        highest_wet_z,
+    } = scene.verdict(feet, claim).expect("the lava answers");
+    assert!((highest_wet_z - 175.00).abs() < 0.05, "{highest_wet_z}");
     assert!((surface - 168.45).abs() < 0.05, "{surface}");
     assert!(surface < feet[2], "{surface} under the feet");
 }
 
 /// Felfire Hill's river, one chunk falling from 99.56 to 95.78: on its bank the water is at the
-/// soles, where the highest wet vertex put it 1.56 yards over them.
+/// soles, and the highest wet vertex 1.56 yards over them.
 #[test]
 fn felfire_hill_river_does_not_swim_on_the_bank() {
     let feet = [1983.97_f32, -2875.84, 98.00];
     let Some(scene) = liquid_scene("Kalimdor", feet) else {
         return;
     };
-    let (surface, highest) = scene
+    let Verdict {
+        surface,
+        highest_wet_z,
+    } = scene
         .verdict(feet, LiquidClaim::Outdoors)
         .expect("the river answers");
-    assert!((highest - 99.56).abs() < 0.05, "{highest}");
+    assert!((highest_wet_z - 99.56).abs() < 0.05, "{highest_wet_z}");
     assert!(surface < feet[2] && feet[2] - surface < 1.0, "{surface}");
 }
 
@@ -196,7 +197,7 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
         liquid_at(scene.surfaces.iter(), feet, LiquidClaim::Unknown).is_none(),
         "the pool's floor alone keeps it off a subject 186 yards under it"
     );
-    let (claim, model) = scene.claim_at(feet).expect("in a building");
+    let (claim, model) = scene.claim_by_group_box(feet).expect("in a building");
     assert!(model.contains("uldaman"), "{model}");
     assert!(liquid_at(scene.surfaces.iter(), feet, claim).is_none());
 }
@@ -220,7 +221,7 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
         !overhead.is_empty() && overhead.iter().all(|z| (z - 51.98).abs() < 0.05),
         "{overhead:?}"
     );
-    let (claim, model) = scene.claim_at(eye).expect("in a building");
+    let (claim, model) = scene.claim_by_group_box(eye).expect("in a building");
     assert!(model.contains("undercity"), "{model}");
     let submersion = |at: [f32; 3]| {
         submersion_claim_at(scene.surfaces.iter(), at, claim).map_or(Submersion::Dry, |(s, _)| s)
@@ -232,8 +233,6 @@ fn undercitys_upper_channels_do_not_submerge_the_rooms_below() {
     assert!((hit.surface_z + 64.48).abs() < 0.05, "{}", hit.surface_z);
 }
 
-/// The Rogues' Quarter is cut into the rock 95 yards under Tirisfal's lake, and no pool of
-/// Undercity's covers it.
 #[test]
 fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     let feet = [1414.08_f32, 53.00, -62.26];
@@ -243,15 +242,13 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     let lake = liquid_at(scene.surfaces.iter(), feet, LiquidClaim::Unknown)
         .expect("the lake covers the column");
     assert!((lake.surface_z - 32.93).abs() < 0.05, "{}", lake.surface_z);
-    let (claim, model) = scene.claim_at(feet).expect("in a building");
+    let (claim, model) = scene.claim_by_group_box(feet).expect("in a building");
     assert!(model.contains("undercity"), "{model}");
     assert!(liquid_at(scene.surfaces.iter(), feet, claim).is_none());
 }
 
-/// The Felfire channel falls about a tenth of a yard per yard over 60 yards: the steepest run the
-/// swim latch's hysteresis must hold along.
 #[test]
-fn the_felfire_channel_falls_about_a_tenth_of_a_yard_per_yard() {
+fn the_swim_latch_holds_along_a_channel_falling_a_tenth_of_a_yard_per_yard() {
     let (downstream, upstream) = ([1953.97_f32, -2866.84, 0.0], [2013.97_f32, -2866.84, 0.0]);
     let Some(scene) = liquid_scene("Kalimdor", downstream) else {
         return;
@@ -265,7 +262,6 @@ fn the_felfire_channel_falls_about_a_tenth_of_a_yard_per_yard() {
     assert!((slope - 0.099).abs() < 0.005, "{slope}");
 }
 
-/// A building's pools by their type nibble and kind.
 fn pool_census(rooms: &WmoRooms) -> HashMap<(u8, LiquidKind), usize> {
     let mut census = HashMap::new();
     for lq in rooms.group_liquids.iter().flatten() {
@@ -309,8 +305,6 @@ fn only_the_nibble_six_and_seven_pools_scroll_in_the_shipped_data() {
     assert_eq!(scrolling(&undercity), 0);
 }
 
-/// A pool fogs as indoors when its group is interior. Undercity's pools are all interior but
-/// group 7; every one of Stormwind's canals and fountains is open to the sky.
 #[test]
 fn a_wmo_pools_fog_block_follows_its_groups_interior_class() {
     let Some(chain) = chain_or_skip() else {

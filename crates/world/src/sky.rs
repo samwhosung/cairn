@@ -81,7 +81,6 @@ impl Plugin for SkyPlugin {
     }
 }
 
-/// Under a liquid the client draws no sky at all; the clear colour, the submerged fog, shows.
 fn hide_when_submerged(
     underwater: Res<'_, Underwater>,
     mut dome: Query<'_, '_, &mut Visibility, With<Dome>>,

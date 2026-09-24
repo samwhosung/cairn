@@ -42,9 +42,7 @@ pub struct WmoPortalInstance {
     pub(crate) name_set: u16,
     pub(crate) visible: Vec<bool>,
     pub(crate) interior_fog: Vec<bool>,
-    /// Per group: the flood has reached it since the building arrived. A group's liquid draws
-    /// from then on, whatever the flood says; a building with no portals never floods.
-    pub(crate) liquid_visited: Vec<bool>,
+    pub(crate) ever_flooded: Vec<bool>,
 }
 
 impl WmoPortalInstance {
@@ -60,7 +58,7 @@ impl WmoPortalInstance {
             name_set,
             visible: vec![true; groups],
             interior_fog: vec![false; groups],
-            liquid_visited: vec![false; groups],
+            ever_flooded: vec![false; groups],
         }
     }
 }
@@ -144,12 +142,12 @@ pub(crate) fn compute_wmo_pvs(
         if inst.interior_fog != pvs.interior_fog {
             inst.interior_fog = pvs.interior_fog;
         }
-        if inst.liquid_visited.len() != groups {
-            inst.liquid_visited = vec![false; groups];
+        if inst.ever_flooded.len() != groups {
+            inst.ever_flooded = vec![false; groups];
         }
         for g in 0..groups {
-            if inst.visible[g] && !inst.liquid_visited[g] {
-                inst.liquid_visited[g] = true;
+            if inst.visible[g] && !inst.ever_flooded[g] {
+                inst.ever_flooded[g] = true;
             }
         }
         if !found.indoors && pvs.seeds.indoors(&rooms.group_nav) {

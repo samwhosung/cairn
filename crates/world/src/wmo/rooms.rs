@@ -51,9 +51,18 @@ impl WmoRooms {
     pub fn has_portals(&self) -> bool {
         !self.portal_refs.is_empty() && !self.portal_infos.is_empty()
     }
+
+    pub(crate) fn owns_its_pools(&self) -> bool {
+        self.has_portals() || self.wmo_id != 0
+    }
 }
 
-/// Builds [`WmoRooms`] one group file at a time.
+impl WmoGroupNav {
+    pub fn has_box(&self) -> bool {
+        self.bbox_min[0] <= self.bbox_max[0]
+    }
+}
+
 pub(crate) struct RoomsBuilder(WmoRooms);
 
 impl RoomsBuilder {

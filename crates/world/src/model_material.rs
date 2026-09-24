@@ -16,6 +16,7 @@ use bevy::shader::ShaderRef;
 use model::{FogPolicy, ModelBlend, WmoBatchClass};
 
 use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
+use crate::sky_order::FAR_SIDE_SORT_RUNG;
 
 pub type ModelMaterial = ExtendedMaterial<StandardMaterial, ModelExtension>;
 
@@ -42,9 +43,8 @@ const FAR_SIDE: u16 = 1 << 11;
 const ENV_MAP: u16 = 1 << 12;
 const SKY_DEPTH: u16 = 1 << 13;
 
-/// The far side of the water draws before the water pass: a batch there drops this far under its
-/// own place in the sort, less a fraction so every batch-order step keeps one pipeline.
-const FAR_SIDE_BIAS: f32 = -4.0e4;
+/// Bevy keys the pipeline on the bias's whole part: pulling by less than one keeps every
+/// batch-order step on one pipeline.
 const FAR_KEY_PULL: f32 = 0.99;
 
 #[allow(clippy::struct_excessive_bools)]
@@ -99,6 +99,12 @@ pub struct ModelExtension {
     pub light: Buffer,
 }
 
+impl ModelExtension {
+    pub(crate) fn is_wmo(&self) -> bool {
+        self.model_flags.x > 0.5
+    }
+}
+
 impl MaterialExtension for ModelExtension {
     fn vertex_shader() -> ShaderRef {
         "embedded://world/model.wgsl".into()
@@ -141,6 +147,7 @@ impl MaterialExtension for ModelExtension {
             if key.no_depth_test {
                 ds.depth_compare = CompareFunction::Always;
             }
+            // The far band is a sort key only.
             if key.far_side {
                 ds.bias.constant = 0;
             }
@@ -420,11 +427,9 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
     }
 }
 
-/// A transparent batch's twin for the far side of the water: the same look, drawn in the far
-/// band. The band is a sort key only; the rasterizer keeps its bias at zero.
 pub(crate) fn far_twin_of(near: &ModelMaterial) -> ModelMaterial {
     let mut far = near.clone();
-    far.base.depth_bias += FAR_SIDE_BIAS - FAR_KEY_PULL;
+    far.base.depth_bias += FAR_SIDE_SORT_RUNG - FAR_KEY_PULL;
     far.extension.clutter_fade.z = f32::from(far.extension.clutter_fade.z as u16 | FAR_SIDE);
     far
 }

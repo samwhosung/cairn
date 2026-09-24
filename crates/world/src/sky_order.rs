@@ -10,6 +10,10 @@ pub(crate) const WHITE_MOON_SORT_RUNG: f32 = -8.1e5;
 pub(crate) const SECOND_MOON_SORT_RUNG: f32 = -8.0e5;
 pub(crate) const CLOUDS_SORT_RUNG: f32 = -6.0e5;
 pub(crate) const SKYBOX_SORT_RUNG: f32 = -6.0e4;
+pub(crate) const FAR_SIDE_SORT_RUNG: f32 = -4.0e4;
+pub(crate) const WATER_SORT_RUNG: f32 = -2.0e4;
+pub(crate) const FOAM_SORT_RUNG: f32 = -1.0e4;
+pub(crate) const DRIFT_SORT_RUNG: f32 = 1.4e4;
 pub(crate) const GLARE_SORT_RUNG: f32 = 2.0e4;
 
 /// Bevy also puts a material's depth bias in its pipeline key, truncated to an integer: a painted
@@ -41,7 +45,11 @@ const _: () = {
         SECOND_MOON_SORT_RUNG,
         CLOUDS_SORT_RUNG,
         SKYBOX_SORT_RUNG,
+        FAR_SIDE_SORT_RUNG,
+        WATER_SORT_RUNG,
+        FOAM_SORT_RUNG,
         world,
+        DRIFT_SORT_RUNG,
         GLARE_SORT_RUNG,
     ];
     let mut i = 1;

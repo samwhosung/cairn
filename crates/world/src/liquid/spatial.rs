@@ -1,12 +1,9 @@
-//! Which liquid surfaces are over an XY, without walking them all: a grid hash of one chunk's
-//! pitch, each cell listing every surface whose wet box overlaps it.
-
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use super::query::LiquidGrid;
 
-const CELL: f32 = 100.0 / 3.0;
+const CELL: f32 = terrain::CHUNK_SIZE;
 
 fn cell_of(x: f32, y: f32) -> [i32; 2] {
     [(x / CELL).floor() as i32, (y / CELL).floor() as i32]
@@ -21,10 +18,11 @@ impl SpatialIndex {
     pub fn rebuild<'a>(&mut self, grids: impl Iterator<Item = (Entity, &'a LiquidGrid)>) {
         self.cells.clear();
         for (entity, grid) in grids {
-            let Some([lo, hi]) = grid.xy_bounds() else {
+            let Some(bounds) = grid.xy_bounds() else {
                 continue;
             };
-            let ([x0, y0], [x1, y1]) = (cell_of(lo[0], lo[1]), cell_of(hi[0], hi[1]));
+            let [x0, y0] = cell_of(bounds.min.x, bounds.min.y);
+            let [x1, y1] = cell_of(bounds.max.x, bounds.max.y);
             for cx in x0..=x1 {
                 for cy in y0..=y1 {
                     self.cells.entry([cx, cy]).or_default().push(entity);

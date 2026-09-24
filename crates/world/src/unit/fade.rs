@@ -106,7 +106,7 @@ pub(crate) fn apply_unit_alpha(
             if tag.0 != bits {
                 tag.0 = bits;
             }
-            let want = side.resolve(part, want);
+            let want = side.sided(part, want);
             if material.0 != *want {
                 material.0 = want.clone();
             }

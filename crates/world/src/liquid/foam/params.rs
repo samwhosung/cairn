@@ -1,18 +1,16 @@
-//! The wade foam's arithmetic: what one emission looks like, how a record grows and fades, and
-//! how its texture lies on the water.
+use std::ops::Range;
 
 use super::super::drift::rand01;
 
-/// Seconds between ring pulses, drawn uniformly.
-pub(super) const RING_INTERVAL: (f32, f32) = (0.4, 0.45);
+pub(super) const RING_INTERVAL_SECS: Range<f32> = 0.4..0.45;
+const WAKE_SPACING_YARDS: f32 = 0.625;
+const FADE_IN_SHARE: f32 = 0.4;
 
-/// Seconds until the next wake at `speed` yards a second: one wake per ~0.625 yards travelled.
 pub(super) fn wake_cooldown(speed: f32, rng: &mut u32) -> f32 {
     let k = 0.9 + 0.2 * rand01(rng);
-    k * 0.625 / speed.clamp(0.1, 20.0)
+    k * WAKE_SPACING_YARDS / speed.clamp(0.1, 20.0)
 }
 
-/// What a wading body is doing this frame.
 #[derive(Clone, Copy)]
 pub(super) enum WadeState {
     Translating { speed: f32, heading: f32 },
@@ -20,8 +18,6 @@ pub(super) enum WadeState {
     Standing,
 }
 
-/// One emission: its first size, growth in yards a second, life in seconds, peak alpha, and
-/// whether it is a ring rather than a wake.
 pub(super) struct FoamParams {
     pub(super) size0: f32,
     pub(super) growth: f32,
@@ -30,18 +26,15 @@ pub(super) struct FoamParams {
     pub(super) ring: bool,
 }
 
-/// `gate` is the deepest a body still foams at, `depth` the water over its feet. `None` out of
-/// the water or past the gate. Standing makes a smaller, slower, fainter ring; past half the gate
-/// everything but the growth fades toward half.
 pub(super) fn foam_params(
     state: WadeState,
     oneshot: bool,
     scale: f32,
-    gate: f32,
+    max_depth: f32,
     depth: f32,
     rng: &mut u32,
 ) -> Option<FoamParams> {
-    if depth <= 0.0 || depth >= gate {
+    if depth <= 0.0 || depth >= max_depth {
         return None;
     }
     let mut uni = |a: f32, b: f32| a + (b - a) * rand01(rng);
@@ -61,9 +54,9 @@ pub(super) fn foam_params(
         }
         _ => {}
     }
-    let half = gate * 0.5;
+    let half = max_depth * 0.5;
     if depth > half {
-        let k = 0.5 + 0.5 * (gate - depth) / half;
+        let k = 0.5 + 0.5 * (max_depth - depth) / half;
         alpha *= k;
         lifetime *= k;
         size0 *= k;
@@ -77,28 +70,23 @@ pub(super) fn foam_params(
     })
 }
 
-/// A record's size at `now`: it grows linearly from its first size.
 pub(super) fn record_size(size0: f32, growth: f32, born: f32, now: f32) -> f32 {
     size0 + growth * (now - born)
 }
 
-/// A record's alpha at `now`: up to its peak over the first 0.4 of its life, down to nothing
-/// over the rest.
 pub(super) fn record_alpha(peak: f32, lifetime: f32, born: f32, now: f32) -> f32 {
     let age = (now - born) / lifetime;
-    if age <= 0.4 {
-        peak * (age / 0.4).max(0.0)
+    if age <= FADE_IN_SHARE {
+        peak * (age / FADE_IN_SHARE).max(0.0)
     } else {
-        peak * (1.0 - (age - 0.4) / 0.6).max(0.0)
+        peak * (1.0 - (age - FADE_IN_SHARE) / (1.0 - FADE_IN_SHARE)).max(0.0)
     }
 }
 
-/// The texture coordinate at WoW XY `p` of a record centred at `center`, `size` in each
-/// direction: across the heading in `u`, against it in `v`, so the wake's apex leads.
-pub(super) fn foam_uv(center: [f32; 2], heading: f32, size: f32, p: [f32; 2]) -> [f32; 2] {
+pub(super) fn foam_uv(center: [f32; 2], heading: f32, half_extent: f32, p: [f32; 2]) -> [f32; 2] {
     let (dx, dy) = (p[0] - center[0], p[1] - center[1]);
     let (s, c) = heading.sin_cos();
-    let inv = 1.0 / (2.0 * size);
+    let inv = 1.0 / (2.0 * half_extent);
     [
         (-s * dx + c * dy) * inv + 0.5,
         (-c * dx - s * dy) * inv + 0.5,

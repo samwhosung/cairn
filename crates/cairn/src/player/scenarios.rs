@@ -309,17 +309,16 @@ fn deep_water_is_swum_into_and_out_of() {
     assert!(depth[frames.len() - 1].is_none() && end.flags & (SWIMMING | FALLING) == 0);
 }
 
-/// The top of a stone ramp beside a pier on Stormwind's canals; south-west runs down it into
-/// the building's own water, which no terrain liquid covers.
+/// The top of a stone ramp beside a pier on Stormwind's canals, which runs down into the
+/// building's own water; no terrain liquid covers it.
 const CANAL_RAMP: [f32; 2] = [-8761.44, 527.36];
-/// The canal's surface, WoW Z.
-const CANAL_SURFACE: f32 = 95.474;
+const DOWN_THE_RAMP: f32 = 212.6;
+const CANAL_SURFACE_Z: f32 = 95.474;
 
-/// Down the ramp for two seconds, then back to its top, steering at it. The swimmer grazes the
-/// ramp, so neither its depth nor its speed is the open water's.
+/// The swimmer grazes the ramp, so neither its depth nor its speed is the open water's.
 #[test]
 fn a_stormwind_canal_is_swum_into_and_out_of() {
-    let Some(mut w) = Walker::on_ground(CANAL_RAMP, 212.6, 60.0) else {
+    let Some(mut w) = Walker::on_ground(CANAL_RAMP, DOWN_THE_RAMP, 60.0) else {
         return;
     };
     let start = w.wow();
@@ -351,7 +350,7 @@ fn a_stormwind_canal_is_swum_into_and_out_of() {
     assert!(depth(first - 1) > enter && depth(first - 2) <= enter);
     assert!(depth(last) < exit && depth(last - 1) >= exit);
     assert!(
-        (first..=last).all(|i| surface[i].is_some_and(|z| (z - CANAL_SURFACE).abs() < 1e-3)),
+        (first..=last).all(|i| surface[i].is_some_and(|z| (z - CANAL_SURFACE_Z).abs() < 1e-3)),
         "the building's water"
     );
     let end = frames[frames.len() - 1];

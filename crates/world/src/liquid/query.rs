@@ -1,6 +1,5 @@
-//! Where the liquid is, and whose it is. A liquid is a grid, not a plane: a point is wet when its
-//! cell is, and the surface there is the bilinear of the cell's four corners, as the client samples
-//! it. Inside a building only that building's own liquid answers, outdoors only the terrain's.
+//! A liquid is a grid, not a plane: a point is wet when its cell is, and the surface there is the
+//! bilinear of the cell's four corners, as the client samples it.
 
 use bevy::prelude::*;
 use light::Submersion;
@@ -21,35 +20,31 @@ const SUBMERSION_EPS: f32 = 0.01;
 /// Z. Nothing below a pool's room is in its liquid.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct WmoPool {
-    /// `None` for a building no subject can be inside of.
     pub(crate) owner: Option<WmoRoom>,
     pub(crate) floor: f32,
 }
 
 impl WmoPool {
-    /// Group `group`'s pool in a building placed by `transform`. The building's room owns it when
-    /// the building has portals or an area id; otherwise no subject is ever inside it.
     pub(crate) fn of(
         rooms: &WmoRooms,
         group: usize,
         instance: Entity,
         transform: &Transform,
     ) -> Self {
-        let owned = rooms.has_portals() || rooms.wmo_id != 0;
         let room = WmoRoom {
             instance,
             group: group as u16,
         };
-        Self::new(owned.then_some(room), transform, rooms.group_nav.get(group))
+        let owner = rooms.owns_its_pools().then_some(room);
+        Self::new(owner, transform, rooms.group_nav.get(group))
     }
 
-    /// The floor is the group box's lowest corner under the placement; with no box, none.
     pub(crate) fn new(
         owner: Option<WmoRoom>,
         transform: &Transform,
         nav: Option<&WmoGroupNav>,
     ) -> Self {
-        let Some(g) = nav.filter(|g| g.bbox_min[0] <= g.bbox_max[0]) else {
+        let Some(g) = nav.filter(|g| g.has_box()) else {
             return Self {
                 owner,
                 floor: f32::NEG_INFINITY,
@@ -99,6 +94,14 @@ impl LiquidClaim {
             flooded: nav.get(usize::from(room.group)).and_then(|g| g.flooded),
         }
     }
+}
+
+/// A wet cell's corners in world WoW space.
+pub(crate) struct CellCorners {
+    pub(crate) tl: [f32; 3],
+    pub(crate) tr: [f32; 3],
+    pub(crate) bl: [f32; 3],
+    pub(crate) br: [f32; 3],
 }
 
 /// One liquid surface in world WoW space, with its wet cells and the lattice's basis.
@@ -203,7 +206,6 @@ impl LiquidGrid {
         Some([cx, cy, self.surface_z_at(cx, cy).unwrap_or(self.fallback_z)])
     }
 
-    /// The highest wet vertex, which a surface once answered from anywhere over its box.
     #[cfg(test)]
     pub(super) fn highest_wet_z(&self) -> f32 {
         self.fallback_z
@@ -229,24 +231,27 @@ impl LiquidGrid {
         hi[0] >= self.min[0] && lo[0] <= self.max[0] && hi[1] >= self.min[1] && lo[1] <= self.max[1]
     }
 
-    /// Calls `f` with every wet cell's four corners, `[tl, tr, bl, br]`, in world WoW space.
-    pub(crate) fn for_each_wet_cell(&self, mut f: impl FnMut([[f32; 3]; 4])) {
+    pub(crate) fn for_each_wet_cell(&self, mut f: impl FnMut(CellCorners)) {
         let Some(cells_x) = self.cols.checked_sub(1) else {
             return;
         };
         for cell in (0..self.wet.len()).filter(|&c| self.wet[c]) {
             let (i, j) = (cell % cells_x, cell / cells_x);
             let p = |di: usize, dj: usize| self.positions[(j + dj) * self.cols + i + di];
-            f([p(0, 0), p(1, 0), p(0, 1), p(1, 1)]);
+            f(CellCorners {
+                tl: p(0, 0),
+                tr: p(1, 0),
+                bl: p(0, 1),
+                br: p(1, 1),
+            });
         }
     }
 
-    /// `[[min_x, min_y], [max_x, max_y]]` of the wet cells; `None` when none is.
-    pub(crate) fn xy_bounds(&self) -> Option<[[f32; 2]; 2]> {
-        (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then_some([self.min, self.max])
+    pub(crate) fn xy_bounds(&self) -> Option<Rect> {
+        (self.min[0] <= self.max[0] && self.min[1] <= self.max[1])
+            .then(|| Rect::new(self.min[0], self.min[1], self.max[0], self.max[1]))
     }
 
-    /// Whether this surface answers for a subject holding `claim` whose WoW height is `z`.
     fn answers(&self, claim: LiquidClaim, z: f32) -> bool {
         match (claim, self.source) {
             (_, LiquidSource::WmoGroup(pool)) if z < pool.floor => false,
@@ -286,7 +291,7 @@ impl LiquidGrid {
 }
 
 /// A liquid surface's grid in world WoW space, `transform` carrying its mesh into the world.
-pub fn wet_footprint(mesh: &LiquidMesh, transform: &Transform, source: LiquidSource) -> LiquidGrid {
+pub fn world_grid(mesh: &LiquidMesh, transform: &Transform, source: LiquidSource) -> LiquidGrid {
     let positions = mesh
         .positions
         .iter()
@@ -339,7 +344,7 @@ pub fn liquid_at<'a>(
         .min_by(|a, b| a.surface_z.total_cmp(&b.surface_z))
 }
 
-/// [`liquid_at`] over water alone: magma and slime are swum in but splash nothing.
+/// [`liquid_at`] over water alone.
 pub fn water_surface_at<'a>(
     grids: impl Iterator<Item = &'a LiquidGrid>,
     wow: [f32; 3],

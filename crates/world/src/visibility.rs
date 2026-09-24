@@ -116,8 +116,6 @@ type Part<'a> = (
 
 type Pool<'a> = (&'a WmoGroupVis, &'a mut Visibility, &'a mut MeshTag);
 
-/// A building's pool draws once the flood has reached its group, from then on; it fogs with its
-/// room while the room is on the interior fog chain.
 fn apply_pool_visibility(
     instances: &Query<'_, '_, &WmoPortalInstance>,
     pools: &mut Query<'_, '_, Pool<'_>, (With<LiquidGrid>, Without<ModelPart>)>,
@@ -127,7 +125,7 @@ fn apply_pool_visibility(
         let visited = inst.is_none_or(|inst| {
             room.groups
                 .iter()
-                .any(|&g| inst.liquid_visited.get(g as usize).copied().unwrap_or(true))
+                .any(|&g| inst.ever_flooded.get(g as usize).copied().unwrap_or(true))
         });
         let want = if visited {
             Visibility::Inherited
@@ -193,7 +191,7 @@ pub(crate) fn apply_model_visibility(
             tag.0 = bits;
         }
         if let Some(f) = fade {
-            let want = side.resolve(
+            let want = side.sided(
                 entity,
                 if fade_alpha < 1.0 {
                     &f.blend

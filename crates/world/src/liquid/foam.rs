@@ -1,8 +1,3 @@
-//! The foam a body makes wading: a wake behind it while it moves, rings while it stands or turns,
-//! and one ring as it steps in or out. Each emission is a record in a small pool, its patch cut
-//! once from the wet cells under its final size; it grows by stretching its texture over that
-//! patch and fades in and out over its short life.
-
 mod params;
 
 use bevy::asset::RenderAssetUsages;
@@ -14,27 +9,25 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use super::drift::rand01;
-use super::query::LiquidGrid;
+use super::query::{CellCorners, LiquidGrid};
 use super::{FoamPatch, WaterIndex};
 use crate::Install;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::effect::{EffectLook, EffectMaterial, effect_material};
 use crate::interior::Viewer;
 use crate::light::LightBuffer;
+use crate::sky_order::FOAM_SORT_RUNG;
 use params::{
-    RING_INTERVAL, WadeState, foam_params, foam_uv, record_alpha, record_size, wake_cooldown,
+    RING_INTERVAL_SECS, WadeState, foam_params, foam_uv, record_alpha, record_size, wake_cooldown,
 };
 
 const RING_TEXTURE: &str = "XTextures\\splash\\splash.blp";
 const WAKE_TEXTURE: &str = "XTextures\\splash\\wake.blp";
-/// The avatar's share of the client's foam pool; the oldest record is overwritten.
+/// The avatar's share of the client's foam pool.
 const POOL_SIZE: usize = 32;
-/// The one-off ring fires as the water over the feet crosses this fraction of the body's height.
 const ONESHOT_DEPTH_FRAC: f32 = 0.4;
-/// A body foams in water no deeper than this many of its heights, and never under a yard.
 const GATE_DEPTH_FRAC: f32 = 2.0;
-/// After every liquid surface, before the rest of the transparent pass.
-const FOAM_SORT: f32 = -1.0e4;
+const MIN_GATE_DEPTH: f32 = 1.0;
 /// A few steps of depth toward the eye, against a driver rounding the two coplanar draws apart.
 const FOAM_RASTER: i32 = 8;
 
@@ -50,19 +43,19 @@ struct FoamRecord {
     peak: f32,
     born: f32,
     ring: bool,
-    /// The patch's triangles, Bevy space.
-    verts: Vec<Vec3>,
-    /// The surface it was emitted over; the record is not drawn once that streams out.
-    host: Entity,
+    patch: Patch,
 }
 
-/// The wader's emitter: it starts afresh whenever the body or every surface goes away.
+/// A record's triangles, in Bevy space, and the surface it lies on.
+struct Patch {
+    triangles: Vec<Vec3>,
+    surface: Entity,
+}
+
 struct Emitter {
     last_feet: Option<Vec3>,
-    /// When the next emission may come.
-    ready: f32,
-    /// Deeper than the one-off ring's line.
-    wading: bool,
+    next_emission_at: f32,
+    over_ring_line: bool,
     rng: u32,
 }
 
@@ -70,8 +63,8 @@ impl Default for Emitter {
     fn default() -> Self {
         Self {
             last_feet: None,
-            ready: 0.0,
-            wading: false,
+            next_emission_at: 0.0,
+            over_ring_line: false,
             rng: 0x5EED_F0A5,
         }
     }
@@ -94,15 +87,13 @@ impl Default for WaterFoam {
     }
 }
 
-/// The ring and wake draws: one mesh each, rebuilt every frame from the live records.
 #[derive(Resource)]
 struct FoamDraws {
     ring: (Entity, Handle<Mesh>),
     wake: (Entity, Handle<Mesh>),
 }
 
-/// The stencil's first level as stored, clamped: its alpha is the shape, its dark colour the
-/// strength.
+/// A foam stencil's alpha is the shape, its dark colour the strength.
 fn stencil(install: &Install, path: &str) -> Option<Image> {
     let blp = blp::decode(&install.0.read(path).ok()?).ok()?;
     let level = blp.mips.into_iter().next()?;
@@ -149,7 +140,7 @@ fn setup_foam(
         additive: true,
         fogged: false,
         camera_relative: false,
-        sort: FOAM_SORT,
+        sort_offset: FOAM_SORT_RUNG,
         raster_bias: FOAM_RASTER,
     };
     let mut draw = |image: Image| {
@@ -174,28 +165,25 @@ fn setup_foam(
     commands.insert_resource(draws);
 }
 
-/// Every wet cell of the surfaces near a record's final box that overlaps it, as the liquid's
-/// own two triangles, on the surface, and the first surface under the centre; `None` when the
-/// centre is over no surface.
 fn build_patch(
     center: [f32; 2],
     final_size: f32,
     grids: &[(Entity, &LiquidGrid)],
-) -> Option<(Vec<Vec3>, Entity)> {
+) -> Option<Patch> {
     let (lo, hi) = (
         [center[0] - final_size, center[1] - final_size],
         [center[0] + final_size, center[1] + final_size],
     );
-    let mut verts = Vec::new();
-    let mut host = None;
+    let mut triangles = Vec::new();
+    let mut surface = None;
     for &(entity, grid) in grids {
         if !grid.overlaps(lo, hi) {
             continue;
         }
-        if host.is_none() && grid.contains(center[0], center[1]) {
-            host = Some(entity);
+        if surface.is_none() && grid.contains(center[0], center[1]) {
+            surface = Some(entity);
         }
-        grid.for_each_wet_cell(|[tl, tr, bl, br]| {
+        grid.for_each_wet_cell(|CellCorners { tl, tr, bl, br }| {
             let xs = [tl[0], tr[0], bl[0], br[0]];
             let ys = [tl[1], tr[1], bl[1], br[1]];
             let (x0, x1) = (
@@ -210,12 +198,12 @@ fn build_patch(
                 return;
             }
             for v in [tl, bl, br, tl, br, tr] {
-                verts.push(wow_to_bevy(v));
+                triangles.push(wow_to_bevy(v));
             }
         });
     }
-    let host = host?;
-    (!verts.is_empty()).then_some((verts, host))
+    let surface = surface?;
+    (!triangles.is_empty()).then_some(Patch { triangles, surface })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -265,18 +253,18 @@ fn emit_foam(
         .iter()
         .find_map(|&e| grids.get(e).ok()?.surface_z_at(wow[0], wow[1]))
     else {
-        emitter.wading = false;
+        emitter.over_ring_line = false;
         return;
     };
     let h = wader.height;
     let depth = surface - wow[2];
-    let wading_now = depth > ONESHOT_DEPTH_FRAC * h;
-    let oneshot = wading_now != emitter.wading;
-    emitter.wading = wading_now;
-    if !oneshot && now < emitter.ready {
+    let over_now = depth > ONESHOT_DEPTH_FRAC * h;
+    let oneshot = over_now != emitter.over_ring_line;
+    emitter.over_ring_line = over_now;
+    if !oneshot && now < emitter.next_emission_at {
         return;
     }
-    let gate = (GATE_DEPTH_FRAC * h).max(1.0);
+    let gate = (GATE_DEPTH_FRAC * h).max(MIN_GATE_DEPTH);
     let Some(p) = foam_params(state, oneshot, WADER_SCALE, gate, depth, &mut emitter.rng) else {
         return;
     };
@@ -295,7 +283,7 @@ fn emit_foam(
         .into_iter()
         .filter_map(|e| Some((e, grids.get(e).ok()?)))
         .collect();
-    if let Some((verts, host)) = build_patch(center, final_size, &near) {
+    if let Some(patch) = build_patch(center, final_size, &near) {
         let slot = *cursor;
         *cursor = (slot + 1) % POOL_SIZE;
         pool[slot] = Some(FoamRecord {
@@ -307,15 +295,14 @@ fn emit_foam(
             peak: p.peak,
             born: now,
             ring: p.ring,
-            verts,
-            host,
+            patch,
         });
     }
     let mut uni = |a: f32, b: f32| a + (b - a) * rand01(&mut emitter.rng);
-    emitter.ready = if oneshot {
+    emitter.next_emission_at = if oneshot {
         now
     } else if p.ring {
-        now + uni(RING_INTERVAL.0, RING_INTERVAL.1)
+        now + uni(RING_INTERVAL_SECS.start, RING_INTERVAL_SECS.end)
     } else {
         let speed = match state {
             WadeState::Translating { speed, .. } => speed,
@@ -338,12 +325,11 @@ fn patch_mesh(positions: Vec<[f32; 3]>, uvs: Vec<[f32; 2]>, colors: Vec<[f32; 4]
     mesh
 }
 
-/// Live records drawn white at their alpha, their texture stretched to their size now. Each
-/// draw sorts at the centre of its vertices.
+/// Each draw sorts at the centre of its vertices.
 fn draw_foam(
     time: Res<'_, Time>,
     draws: Option<Res<'_, FoamDraws>>,
-    hosts: Query<'_, '_, (), With<LiquidGrid>>,
+    surfaces: Query<'_, '_, (), With<LiquidGrid>>,
     mut foam: ResMut<'_, WaterFoam>,
     mut meshes: ResMut<'_, Assets<Mesh>>,
     mut placed: Query<'_, '_, (&mut Visibility, &mut Aabb)>,
@@ -360,10 +346,10 @@ fn draw_foam(
     for (ring, (entity, mesh)) in [(true, &draws.ring), (false, &draws.wake)] {
         let (mut positions, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new());
         let live = foam.pool.iter().flatten();
-        for rec in live.filter(|r| r.ring == ring && hosts.contains(r.host)) {
+        for rec in live.filter(|r| r.ring == ring && surfaces.contains(r.patch.surface)) {
             let size = record_size(rec.size0, rec.growth, rec.born, now);
             let alpha = record_alpha(rec.peak, rec.lifetime, rec.born, now);
-            for v in &rec.verts {
+            for v in &rec.patch.triangles {
                 let wow = bevy_to_wow(*v);
                 positions.push(v.to_array());
                 uvs.push(foam_uv(rec.center, rec.heading, size, [wow[0], wow[1]]));
@@ -427,10 +413,12 @@ mod tests {
     fn a_patch_is_the_wet_cells_it_overlaps_on_the_surface() {
         let g = grid(vec![true, false, false, false]);
         let near = [(Entity::PLACEHOLDER, &g)];
-        let (verts, host) = build_patch([2.0, 2.0], 1.5, &near).expect("over water");
-        assert_eq!((verts.len(), host), (6, Entity::PLACEHOLDER));
+        let patch = build_patch([2.0, 2.0], 1.5, &near).expect("over water");
+        assert_eq!(patch.triangles.len(), 6);
+        assert_eq!(patch.surface, Entity::PLACEHOLDER);
         assert!(
-            verts
+            patch
+                .triangles
                 .iter()
                 .all(|v| (bevy_to_wow(*v)[2] - 5.0).abs() < 1e-4)
         );

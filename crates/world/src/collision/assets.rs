@@ -25,16 +25,15 @@ pub struct TileCollision {
     pub(super) liquids: Vec<LiquidMesh>,
     pub(super) doodads: Vec<Doodad>,
     pub(super) wmos: Vec<WmoInstance>,
-    /// The ground's height field, for the room down-ray's race against it.
-    pub(super) chunks: Vec<ChunkMesh>,
+    pub(super) ground: Vec<ChunkMesh>,
 }
 
 /// An M2's collision hull in model space; `None` when the model has none.
 #[derive(Asset, TypePath)]
 pub struct M2Hull(pub Option<CollisionMesh>);
 
-/// A WMO's walking faces and camera faces over all its groups, in model space, the doodads its
-/// sets place, and its rooms and their liquid.
+/// A WMO's walking faces and camera faces over all its groups, in model space, and the doodads
+/// its sets place.
 #[derive(Asset, TypePath)]
 pub struct WmoHull {
     pub(super) walk: Option<CollisionMesh>,
@@ -83,7 +82,7 @@ impl AssetLoader for TileCollisionLoader {
             liquids,
             doodads: tile.doodads,
             wmos: tile.wmos,
-            chunks: tile.chunks,
+            ground: tile.chunks,
         })
     }
 

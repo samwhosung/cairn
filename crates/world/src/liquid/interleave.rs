@@ -1,7 +1,3 @@
-//! The water between the two halves of the transparent models: a model's transparent batches on
-//! the eye's far side of the water plane draw before the water, so it tints them; the near side
-//! draws after. Seen from under the surface, the sides swap.
-
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
@@ -11,7 +7,8 @@ use crate::coords::bevy_to_wow;
 use crate::model_material::{ModelMaterial, far_twin_of};
 use crate::visibility::DoodadFade;
 
-/// Which transparent batches draw on the far side of the water, and their far twins.
+/// Bevy sorts each transparent draw at one distance, so the side of the water a batch draws on is
+/// its material's place in the sort: the far side takes a twin a rung below the water.
 #[derive(Resource, Default)]
 pub(crate) struct FarSide {
     to_far: HashMap<AssetId<ModelMaterial>, Handle<ModelMaterial>>,
@@ -20,9 +17,7 @@ pub(crate) struct FarSide {
 }
 
 impl FarSide {
-    /// The handle a material's owner sets: its pick, or that pick's far twin when the entity
-    /// draws on the far side.
-    pub(crate) fn resolve<'a>(
+    pub(crate) fn sided<'a>(
         &'a self,
         entity: Entity,
         want: &'a Handle<ModelMaterial>,
@@ -49,8 +44,6 @@ impl FarSide {
     }
 }
 
-/// How high a point stands over the liquid surface nearest it in height, of those over its
-/// column; `None` over dry ground.
 fn height_over_water(
     index: &WaterIndex,
     grids: &Query<'_, '_, &LiquidGrid>,
@@ -67,15 +60,14 @@ fn height_over_water(
         .min_by(|a, b| a.abs().total_cmp(&b.abs()))
 }
 
-/// A dry eye's far side is under the water; a submerged eye's is over it, or where there is none.
 fn far_side(
     index: &WaterIndex,
     grids: &Query<'_, '_, &LiquidGrid>,
     at: Vec3,
-    submerged: bool,
+    eye_submerged: bool,
 ) -> bool {
-    let above = height_over_water(index, grids, at).is_none_or(|d| d >= 0.0);
-    above == submerged
+    let point_submerged = height_over_water(index, grids, at).is_some_and(|d| d < 0.0);
+    point_submerged != eye_submerged
 }
 
 type Part<'a> = (
@@ -85,16 +77,10 @@ type Part<'a> = (
     Option<&'a DoodadFade>,
 );
 
-/// Only a model's own transparent batches take a side; a building's draw with its building.
 fn takes_a_side(material: Option<&ModelMaterial>) -> bool {
-    material.is_some_and(|m| {
-        matches!(m.base.alpha_mode, AlphaMode::Blend) && m.extension.model_flags.x <= 0.5
-    })
+    material.is_some_and(|m| matches!(m.base.alpha_mode, AlphaMode::Blend) && !m.extension.is_wmo())
 }
 
-/// Every batch stands where its own transform puts it, which for a model's batches is the model.
-/// A doodad's handle belongs to its fade, which composes the side itself; the rest are swapped
-/// here.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn classify_water_side(
     index: Res<'_, WaterIndex>,
@@ -141,6 +127,7 @@ pub(crate) fn classify_water_side(
             .get(&material.0.id())
             .cloned()
             .unwrap_or_else(|| material.0.clone());
+        let fade_owns_handle = fade.is_some();
         let decides = fade.map_or(&near, |f| &f.blend);
         let far = takes_a_side(materials.get(decides))
             && far_side(&index, &grids, at.translation(), submerged);
@@ -151,7 +138,7 @@ pub(crate) fn classify_water_side(
             side.far.remove(&entity);
             None
         };
-        if fade.is_none() {
+        if !fade_owns_handle {
             let want = twin.unwrap_or(near);
             if material.0 != want {
                 material.0 = want;

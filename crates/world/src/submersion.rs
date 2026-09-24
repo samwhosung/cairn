@@ -14,7 +14,6 @@ use crate::wmo::WmoModel;
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Underwater(pub Submersion);
 
-/// The submerged eye's distances, beside [`Underwater`].
 #[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
 pub struct SubmergedEye {
     /// Yards from the probe up to the surface over it; 0 when dry.
@@ -39,7 +38,6 @@ fn lowest_near_corner_drop(rotation: Quat, fov: f32, aspect: f32, near: f32) -> 
     drop
 }
 
-/// The eye's claim: the room the portal flood seeds it in, or the open world.
 fn camera_claim(
     claim: &CameraInteriorClaim,
     instances: &Query<'_, '_, &WmoPortalInstance>,
@@ -56,8 +54,6 @@ fn camera_claim(
     LiquidClaim::inside(room, nav)
 }
 
-/// The eye is tested at the lowest corner of the near rectangle, or at the eye when that is
-/// lower, against every liquid surface its claim admits.
 pub(crate) fn detect_submersion(
     camera: Query<'_, '_, (&Transform, &Projection), With<WorldCamera>>,
     grids: Query<'_, '_, &LiquidGrid>,

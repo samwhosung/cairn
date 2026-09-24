@@ -1,4 +1,3 @@
-// Effect quads: texture times vertex colour in gamma space, unlit, fogged as the draw asks.
 // Additive draws premultiply by alpha and write zero alpha, so the blend adds them.
 
 #import bevy_pbr::{
@@ -12,15 +11,21 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var effect_sampler: sampler;
 
 struct EffectParams {
-    // x fogs with the scene; y adds; z positions are relative to the camera.
-    params: vec4<f32>,
+    fogged: f32,
+    additive: f32,
+    camera_relative: f32,
+    _pad: f32,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> e: EffectParams;
 
 struct WowLight {
     _light: array<vec4<f32>, 4>,
-    fog_color: vec4<f32>,     // w > 0.5 enables fog
-    fog_params: vec4<f32>,    // x fog start, y fog end, w the far-clip wall (0 disables it)
+    fog_color: vec3<f32>,
+    fog_on: f32,
+    fog_start: f32,
+    fog_end: f32,
+    _fog_unused: f32,
+    far_wall: f32,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
 
@@ -34,8 +39,7 @@ struct EffectVsOut {
 @vertex
 fn vertex(in: Vertex) -> EffectVsOut {
     var out: EffectVsOut;
-    if (e.params.z > 0.5) {
-        // Only the view's rotation applies: the camera's own position is already taken out.
+    if (e.camera_relative > 0.5) {
         let view_pos = mat3x3<f32>(
             view.view_from_world[0].xyz,
             view.view_from_world[1].xyz,
@@ -63,17 +67,17 @@ fn vertex(in: Vertex) -> EffectVsOut {
 
 @fragment
 fn fragment(in: EffectVsOut) -> @location(0) vec4<f32> {
-    if (wow_light.fog_params.w > 0.0 && in.view_z > wow_light.fog_params.w) {
+    if (wow_light.far_wall > 0.0 && in.view_z > wow_light.far_wall) {
         discard;
     }
     let c = textureSampleBias(effect_texture, effect_sampler, in.uv, view.mip_bias) * in.color;
     var rgb = c.rgb;
-    if (wow_light.fog_color.w > 0.5 && e.params.x > 0.5) {
-        let denom = max(wow_light.fog_params.y - wow_light.fog_params.x, 0.001);
-        let factor = clamp((wow_light.fog_params.y - in.view_z) / denom, 0.0, 1.0);
-        rgb = mix(wow_light.fog_color.xyz, rgb, factor);
+    if (wow_light.fog_on > 0.5 && e.fogged > 0.5) {
+        let denom = max(wow_light.fog_end - wow_light.fog_start, 0.001);
+        let factor = clamp((wow_light.fog_end - in.view_z) / denom, 0.0, 1.0);
+        rgb = mix(wow_light.fog_color, rgb, factor);
     }
-    if (e.params.y > 0.5) {
+    if (e.additive > 0.5) {
         return vec4<f32>(rgb * c.a, 0.0);
     }
     return vec4<f32>(rgb, c.a);

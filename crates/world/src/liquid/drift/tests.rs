@@ -15,16 +15,16 @@ fn in_box(v: Vec3) -> bool {
 #[test]
 fn a_scatter_fills_the_box_and_the_edge_spread() {
     for (mode, base) in [
-        (DriftMode::Water, SCALE_WATER),
-        (DriftMode::Magma, SCALE_MAGMA),
+        (DriftMode::Water, EDGE_WATER),
+        (DriftMode::Magma, EDGE_MAGMA),
     ] {
         let c = cloud(mode);
         assert_eq!(c.motes.len(), COUNT);
         for m in &c.motes {
-            assert!(in_box(m.pos), "{:?}", m.pos);
+            assert!(in_box(m.from_camera), "{:?}", m.from_camera);
             assert!((base * 0.5..base * 1.5).contains(&m.edge), "{}", m.edge);
         }
-        let mean: Vec3 = c.motes.iter().map(|m| m.pos).sum::<Vec3>() / COUNT as f32;
+        let mean: Vec3 = c.motes.iter().map(|m| m.from_camera).sum::<Vec3>() / COUNT as f32;
         assert!(mean.length() < 1.0, "{mean:?}");
     }
 }
@@ -36,7 +36,7 @@ fn the_wrap_keeps_every_mote_in_the_box() {
     for _ in 0..500 {
         eye += Vec3::new(0.4, 0.05, -0.3);
         c.advect(DriftMode::Water, eye, 1.0 / 60.0);
-        assert!(c.motes.iter().all(|m| in_box(m.pos)));
+        assert!(c.motes.iter().all(|m| in_box(m.from_camera)));
     }
 }
 
@@ -45,14 +45,18 @@ fn the_field_stands_still_in_the_world_but_for_the_gust() {
     let mut c = cloud(DriftMode::Water);
     c.gust_amp = 0.0;
     c.gust_freq = 0.0;
-    let before: Vec<Vec3> = c.motes.iter().map(|m| m.pos).collect();
+    let before: Vec<Vec3> = c.motes.iter().map(|m| m.from_camera).collect();
     let eye = Vec3::new(3.0, -1.0, 2.0);
     c.advect(DriftMode::Water, eye, 1.0 / 60.0);
     let mut checked = 0;
     for (m, was) in c.motes.iter().zip(&before) {
         let expect = *was - eye;
         if in_box(expect) {
-            assert!((m.pos - expect).length() < 1e-3, "{:?} {expect:?}", m.pos);
+            assert!(
+                (m.from_camera - expect).length() < 1e-3,
+                "{:?} {expect:?}",
+                m.from_camera
+            );
             checked += 1;
         }
     }
@@ -63,18 +67,18 @@ fn the_field_stands_still_in_the_world_but_for_the_gust() {
 fn a_jump_past_the_box_scatters_the_field() {
     let mut c = cloud(DriftMode::Water);
     c.gust_amp = 0.0;
-    let before: Vec<Vec3> = c.motes.iter().map(|m| m.pos).collect();
+    let before: Vec<Vec3> = c.motes.iter().map(|m| m.from_camera).collect();
     c.advect(
         DriftMode::Water,
-        Vec3::new(0.0, 0.0, TELEPORT + 1.0),
+        Vec3::new(0.0, 0.0, SCATTER_STEP + 1.0),
         1.0 / 60.0,
     );
-    assert!(c.motes.iter().all(|m| in_box(m.pos)));
+    assert!(c.motes.iter().all(|m| in_box(m.from_camera)));
     let moved = c
         .motes
         .iter()
         .zip(&before)
-        .filter(|(m, b)| (m.pos - **b).length() > 1e-3)
+        .filter(|(m, b)| (m.from_camera - **b).length() > 1e-3)
         .count();
     assert!(moved > COUNT * 9 / 10, "{moved}");
 }
@@ -134,7 +138,7 @@ fn magma_sinks_at_a_speed() {
     let mut c = DriftCloud::default();
     let a = c.gust(DriftMode::Magma, 1.0 / 30.0) * 30.0;
     let b = c.gust(DriftMode::Magma, 1.0 / 120.0) * 120.0;
-    assert!((a.y - MAGMA_SINK).abs() < 1e-5 && (b.y - MAGMA_SINK).abs() < 1e-5);
+    assert!((a.y - MAGMA_SINK_SPEED).abs() < 1e-5 && (b.y - MAGMA_SINK_SPEED).abs() < 1e-5);
     assert!(a.x.abs() < f32::EPSILON && a.z.abs() < f32::EPSILON);
 }
 
@@ -152,17 +156,22 @@ fn every_atlas_cell_is_its_own_tile() {
 fn the_cone_never_drops_a_mote_on_screen() {
     let fov = crate::view::FOV_Y;
     for aspect in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
-        let (tx, ty) = cull_limits(fov, aspect);
-        assert!(tx >= (fov * 0.5).tan() * aspect && ty >= (fov * 0.5).tan());
+        let cone = cull_limits(fov, aspect);
+        assert!(cone.right_tan >= (fov * 0.5).tan() * aspect && cone.up_tan >= (fov * 0.5).tan());
     }
-    assert_eq!(cull_limits(fov, 16.0 / 9.0), (1.0, 1.0));
+    let wide = cull_limits(fov, 16.0 / 9.0);
+    assert_eq!((wide.right_tan, wide.up_tan), (1.0, 1.0));
 }
 
 #[test]
 fn a_field_draws_whole_quads_within_the_cap() {
     let c = cloud(DriftMode::Water);
     let cam = Transform::default();
-    let mesh = quads(&c, DriftMode::Water, &cam, (1.0, 1.0));
+    let cone = ViewCone {
+        right_tan: 1.0,
+        up_tan: 1.0,
+    };
+    let mesh = quads(&c, DriftMode::Water, &cam, cone);
     let n = mesh.count_vertices();
     assert!(n > 0 && n.is_multiple_of(4) && n / 4 <= SUBMIT_CAP, "{n}");
 }

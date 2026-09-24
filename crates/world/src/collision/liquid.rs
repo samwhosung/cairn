@@ -1,7 +1,3 @@
-//! Where the liquid is for the body and the camera boom: every streamed liquid surface's grid,
-//! the building a body stands in, and the waterline the boom may hit. Inside a building only its
-//! own liquid answers, so a canal does not claim the tunnel under it.
-
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::ecs::system::SystemParam;
 use bevy::math::Affine3A;
@@ -17,14 +13,11 @@ use crate::liquid::{
 };
 use crate::portal::{down_ray_seeds, terrain_z_local};
 
-/// How far over the feet the down-ray that finds a body's room starts, yards.
-const ROOM_PROBE_HEIGHT: f32 = 1.7;
+const ROOM_RAY_OVER_FEET: f32 = 1.7;
 
-/// One liquid surface the body swims in and the camera boom meets.
 #[derive(Component)]
-pub struct LiquidSurface(pub(crate) LiquidGrid);
+pub struct SwimSurface(pub(crate) LiquidGrid);
 
-/// A placed building's rooms: whoever stands in one of them reads that building's liquid.
 #[derive(Component)]
 pub(super) struct PlacedRooms {
     pub(super) hull: Handle<WmoHull>,
@@ -32,13 +25,13 @@ pub(super) struct PlacedRooms {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct WaterIndex(SpatialIndex);
+pub(crate) struct SwimIndex(SpatialIndex);
 
 pub(super) fn maintain_water_index(
-    mut index: ResMut<'_, WaterIndex>,
-    added: Query<'_, '_, (), Added<LiquidSurface>>,
-    mut removed: RemovedComponents<'_, '_, LiquidSurface>,
-    surfaces: Query<'_, '_, (Entity, &LiquidSurface)>,
+    mut index: ResMut<'_, SwimIndex>,
+    added: Query<'_, '_, (), Added<SwimSurface>>,
+    mut removed: RemovedComponents<'_, '_, SwimSurface>,
+    surfaces: Query<'_, '_, (Entity, &SwimSurface)>,
 ) {
     if removed.read().next().is_none() && added.is_empty() {
         return;
@@ -46,9 +39,7 @@ pub(super) fn maintain_water_index(
     index.0.rebuild(surfaces.iter().map(|(e, s)| (e, &s.0)));
 }
 
-/// The waterline the camera may hit: the surface's wet triangles, carried into the world by
-/// `transform`. `None` when none is wet.
-pub(super) fn liquid_collider(
+pub(super) fn waterline_collider(
     mesh: &LiquidMesh,
     transform: &Transform,
 ) -> Option<(Collider, RigidBody)> {
@@ -82,8 +73,8 @@ pub struct NearestLiquid {
 /// The liquid under a point, from the streamed surfaces.
 #[derive(SystemParam)]
 pub struct Liquids<'w, 's> {
-    index: Res<'w, WaterIndex>,
-    surfaces: Query<'w, 's, &'static LiquidSurface>,
+    index: Res<'w, SwimIndex>,
+    surfaces: Query<'w, 's, &'static SwimSurface>,
     rooms: Query<'w, 's, (Entity, &'static PlacedRooms)>,
     hulls: Res<'w, Assets<WmoHull>>,
     tiles: Res<'w, Assets<TileCollision>>,
@@ -121,7 +112,7 @@ impl Liquids<'_, '_> {
     /// a WoW position: one per class `nibble & 3`.
     pub fn nearest_per_class(&self, wow: [f32; 3], radius: f32) -> [Option<NearestLiquid>; 4] {
         let mut best: [Option<NearestLiquid>; 4] = [None; 4];
-        for LiquidSurface(grid) in &self.surfaces {
+        for SwimSurface(grid) in &self.surfaces {
             let Some(point) = grid.nearest_point(wow[0], wow[1]) else {
                 continue;
             };
@@ -141,10 +132,8 @@ impl Liquids<'_, '_> {
         best
     }
 
-    /// The first building whose room down-ray, cast from a little over the feet, finds an
-    /// indoor group under them; the open world when none does.
     fn claim_at(&self, feet: [f32; 3]) -> LiquidClaim {
-        let probe = wow_to_bevy(feet) + Vec3::Y * ROOM_PROBE_HEIGHT;
+        let probe = wow_to_bevy(feet) + Vec3::Y * ROOM_RAY_OVER_FEET;
         let terrain = self.streamer.terrain_z_under(&self.tiles, probe);
         for (instance, placed) in &self.rooms {
             let Some(hull) = self.hulls.get(&placed.hull) else {

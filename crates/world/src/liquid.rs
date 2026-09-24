@@ -16,14 +16,13 @@ use bevy::prelude::*;
 pub(crate) use interleave::FarSide;
 pub use query::{
     LiquidClaim, LiquidGrid, LiquidHit, LiquidSource, WmoPool, liquid_at, submersion_claim_at,
-    surfaces_at, water_surface_at, wet_footprint,
+    surfaces_at, water_surface_at, world_grid,
 };
 pub use spatial::{SpatialIndex, WaterIndex};
 pub(crate) use surface::{LiquidAssets, spawn_adt_liquids, spawn_wmo_liquids};
 pub use surface::{LiquidExtension, LiquidMaterial};
 
-/// Whether the liquids' frame flip and scroll run on the frame clock. A shot holds them at their
-/// first frame, so every run of it draws the same one.
+/// Whether the liquids' frame flip and scroll run on the frame clock.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum LiquidClock {
     #[default]

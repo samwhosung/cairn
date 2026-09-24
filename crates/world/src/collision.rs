@@ -33,7 +33,7 @@ pub use colliders::{
     ATTACH_BUDGET, AttachBudget, PendingCollider, build_collider_task, impassable_wall_data,
     placement_collider_data, terrain_collider_data,
 };
-pub use liquid::{LiquidSurface, Liquids, NearestLiquid};
+pub use liquid::{Liquids, NearestLiquid, SwimSurface};
 pub use stream::CollisionResidency;
 
 /// The two audiences and the liquid surfaces. Terrain and doodads carry no explicit layer, so
@@ -87,7 +87,7 @@ impl Plugin for CollisionPlugin {
             .register_asset_loader(assets::WmoHullLoader)
             .init_resource::<stream::CollisionStreamer>()
             .init_resource::<CollisionResidency>()
-            .init_resource::<liquid::WaterIndex>()
+            .init_resource::<liquid::SwimIndex>()
             .add_systems(
                 Update,
                 (

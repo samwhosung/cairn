@@ -58,9 +58,7 @@ impl Window {
 
 enum TileState {
     Loading,
-    /// Its terrain and its liquid surfaces.
     Drawn(Vec<Entity>),
-    /// Holes cover the whole tile and it holds no liquid.
     Empty,
     Failed,
 }

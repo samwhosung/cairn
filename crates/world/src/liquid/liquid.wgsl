@@ -1,13 +1,3 @@
-// Every liquid surface, one arm per liquid renderer the client has, in gamma space.
-//   Terrain water: a depth swatch from the zone's water colours on the first texture stage, the
-//     animated sheet on the second, combined as rgb = primary·swatch + sheet.rgb +
-//     (secondary + 0.25)·sheet.a, alpha = swatch.a.
-//   Building water outdoors: one stage, rgb = primary + sheet.rgb + secondary·sheet.a, where
-//     primary is the lit deep river colour; alpha from the authored per-vertex byte.
-//   Building water indoors: unlit, rgb = the pool material's colour + sheet.rgb, alpha likewise
-//     summed.
-//   Magma and slime, terrain or building: the sheet is the opaque body, unlit but fogged.
-
 #import bevy_pbr::{
     mesh_functions,
     forward_io::Vertex,
@@ -19,29 +9,39 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var frames_samp: sampler;
 
 struct LiquidParams {
-    // x magma or slime; y the ocean swatch; z fogs indoors; w the sheen's shininess.
-    kind: vec4<f32>,
-    // x the renderer: 0 terrain, 1 building outdoors, 2 building indoors.
-    path: vec4<f32>,
-    // y frame count; z scrolls; w the clock runs.
-    anim: vec4<f32>,
+    fullbright: f32,
+    ocean: f32,
+    room_fogged: f32,
+    shininess: f32,
+    renderer: f32,
+    frame_count: f32,
+    scrolls: f32,
+    clock: f32,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> w: LiquidParams;
 
 struct WowLight {
     light_ambient: vec4<f32>,
     light_diffuse: vec4<f32>,
-    light_sun: vec4<f32>,     // xyz the direction sunlight travels
+    sun_travel: vec4<f32>,
     light_spec: vec4<f32>,
-    fog_color: vec4<f32>,     // w > 0.5 enables fog
-    fog_params: vec4<f32>,    // x fog start, y fog end, w the far-clip wall (0 disables it)
+    fog_color: vec3<f32>,
+    fog_on: f32,
+    fog_start: f32,
+    fog_end: f32,
+    _fog_unused: f32,
+    far_wall: f32,
     _sh: array<vec4<f32>, 6>,
     _sh_c16: vec4<f32>,
-    water_river: array<vec4<f32>, 2>,  // shallow, deep; w alpha
-    water_ocean: array<vec4<f32>, 2>,
+    river_shallow: vec4<f32>,
+    river_deep: vec4<f32>,
+    ocean_shallow: vec4<f32>,
+    ocean_deep: vec4<f32>,
     _grade: vec4<f32>,
-    wmo_fog_color: vec4<f32>,
-    wmo_fog_params: vec4<f32>,
+    room_fog_color: vec3<f32>,
+    room_fog_on: f32,
+    room_fog_start: f32,
+    room_fog_end: f32,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
 
@@ -50,6 +50,9 @@ const FRAMES_PER_SECOND: f32 = 24.0;
 const SCROLL_PERIOD: f32 = 10.0;
 const SWATCH_ROWS: f32 = 64.0;
 const OCEAN_LAST_ROW_VALUE: f32 = 0.9;
+const MIN_GLINT: f32 = 0.25;
+const RENDERER_BUILDING_OUTDOORS: f32 = 1.0;
+const RENDERER_BUILDING_INDOORS: f32 = 2.0;
 
 struct LiquidVsOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -62,45 +65,46 @@ struct LiquidVsOut {
     @location(6) @interpolate(flat) room_fog: u32,
 }
 
-// The sun's Blinn highlight with a local viewer, per vertex. The lighting sun never sets, so the
-// fixed-function N·L gate never closes on the flat up normal.
+// The lighting sun never sets, so the fixed-function N·L gate never closes on the flat up normal.
 fn sun_sheen(world_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
     let n = normalize(world_normal);
-    let to_light = -normalize(wow_light.light_sun.xyz);
+    let to_light = -normalize(wow_light.sun_travel.xyz);
     let to_view = normalize(view.world_position.xyz - world_pos);
     let half_v = normalize(to_light + to_view);
     let ndoth = max(dot(n, half_v), 0.0);
-    return wow_light.light_spec.rgb * pow(ndoth, max(w.kind.w, 1.0));
+    return wow_light.light_spec.rgb * pow(ndoth, max(w.shininess, 1.0));
 }
 
 fn anim_time() -> f32 {
-    return w.anim.w * globals.time;
+    return w.clock * globals.time;
 }
 
 fn frame_layer() -> i32 {
-    return i32(floor(anim_time() * FRAMES_PER_SECOND) % max(w.anim.y, 1.0));
+    return i32(floor(anim_time() * FRAMES_PER_SECOND) % max(w.frame_count, 1.0));
 }
 
 fn apply_scroll(uv: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(uv.x, uv.y + w.anim.z * fract(anim_time() / SCROLL_PERIOD));
+    return vec2<f32>(uv.x, uv.y + w.scrolls * fract(anim_time() / SCROLL_PERIOD));
 }
 
-// Linear eye-Z fog in gamma space. An indoor pool fogs with its room while the room is on the
-// interior fog chain.
 fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>, room_fog: u32) -> vec3<f32> {
-    var fog_color = wow_light.fog_color;
-    var fog_span = wow_light.fog_params.xy;
-    if (w.kind.z > 0.5 && room_fog != 0u) {
-        fog_color = wow_light.wmo_fog_color;
-        fog_span = wow_light.wmo_fog_params.xy;
+    var color = wow_light.fog_color;
+    var on = wow_light.fog_on;
+    var start = wow_light.fog_start;
+    var end = wow_light.fog_end;
+    if (w.room_fogged > 0.5 && room_fog != 0u) {
+        color = wow_light.room_fog_color;
+        on = wow_light.room_fog_on;
+        start = wow_light.room_fog_start;
+        end = wow_light.room_fog_end;
     }
-    if (fog_color.w <= 0.5) {
+    if (on <= 0.5) {
         return rgb;
     }
     let eye_z = -(view.view_from_world * vec4<f32>(world_pos, 1.0)).z;
-    let denom = max(fog_span.y - fog_span.x, 0.001);
-    let factor = clamp((fog_span.y - eye_z) / denom, 0.0, 1.0);
-    return mix(fog_color.xyz, rgb, factor);
+    let denom = max(end - start, 0.001);
+    let factor = clamp((end - eye_z) / denom, 0.0, 1.0);
+    return mix(color, rgb, factor);
 }
 
 @vertex
@@ -135,7 +139,6 @@ fn swatch_row(shallow: vec4<f32>, deep: vec4<f32>, i: f32, ocean: bool) -> vec4<
     return row / 255.0;
 }
 
-// The swatch sampled with linear filtering at depth coordinate `v`.
 fn swatch_at(shallow: vec4<f32>, deep: vec4<f32>, v: f32, ocean: bool) -> vec4<f32> {
     let t = clamp(v * SWATCH_ROWS - 0.5, 0.0, SWATCH_ROWS - 1.0);
     let i0 = floor(t);
@@ -146,54 +149,75 @@ fn swatch_at(shallow: vec4<f32>, deep: vec4<f32>, v: f32, ocean: bool) -> vec4<f
     );
 }
 
+fn primary_light(world_normal: vec3<f32>) -> vec3<f32> {
+    let n = normalize(world_normal);
+    let to_light = -normalize(wow_light.sun_travel.xyz);
+    return clamp(
+        wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * max(dot(n, to_light), 0.0),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+}
+
+fn fullbright_liquid(in: LiquidVsOut, sheet: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(apply_fog(sheet.rgb, in.world_position.xyz, in.room_fog), 1.0);
+}
+
+fn building_water_indoors(in: LiquidVsOut, sheet: vec4<f32>, alpha: f32) -> vec4<f32> {
+    let body = clamp(in.vcolor.rgb + sheet.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(
+        apply_fog(body, in.world_position.xyz, in.room_fog),
+        clamp(alpha + sheet.a, 0.0, 1.0),
+    );
+}
+
+fn building_water_outdoors(
+    in: LiquidVsOut,
+    sheet: vec4<f32>,
+    deep: vec4<f32>,
+    alpha: f32,
+) -> vec4<f32> {
+    let rgb = primary_light(in.world_normal) * deep.rgb + sheet.rgb + in.secondary_vtx * sheet.a;
+    return vec4<f32>(apply_fog(rgb, in.world_position.xyz, in.room_fog), alpha);
+}
+
+fn terrain_water(in: LiquidVsOut, sheet: vec4<f32>, shallow: vec4<f32>, deep: vec4<f32>) -> vec4<f32> {
+    let swatch = swatch_at(shallow, deep, clamp(in.depth, 0.0, 1.0), w.ocean > 0.5);
+    let glint = in.secondary_vtx + vec3<f32>(MIN_GLINT);
+    let rgb = primary_light(in.world_normal) * swatch.rgb + sheet.rgb + glint * sheet.a;
+    return vec4<f32>(apply_fog(rgb, in.world_position.xyz, in.room_fog), swatch.w);
+}
+
 @fragment
 fn fragment(in: LiquidVsOut) -> @location(0) vec4<f32> {
-    if (wow_light.fog_params.w > 0.0) {
-        let clip_z = -(view.view_from_world * vec4<f32>(in.world_position.xyz, 1.0)).z;
-        if (clip_z > wow_light.fog_params.w) {
+    if (wow_light.far_wall > 0.0) {
+        let eye_z = -(view.view_from_world * vec4<f32>(in.world_position.xyz, 1.0)).z;
+        if (eye_z > wow_light.far_wall) {
             discard;
         }
     }
-
-    let detail = textureSampleBias(
+    let sheet = textureSampleBias(
         frames,
         frames_samp,
         apply_scroll(in.uv),
         frame_layer(),
         view.mip_bias,
     );
-
-    if (w.kind.x > 0.5) {
-        return vec4<f32>(apply_fog(detail.rgb, in.world_position.xyz, in.room_fog), 1.0);
+    if (w.fullbright > 0.5) {
+        return fullbright_liquid(in, sheet);
     }
-
-    let depth = clamp(in.depth, 0.0, 1.0);
-    var shallow = wow_light.water_river[0];
-    var deep = wow_light.water_river[1];
-    if (w.kind.y > 0.5) {
-        shallow = wow_light.water_ocean[0];
-        deep = wow_light.water_ocean[1];
+    var shallow = wow_light.river_shallow;
+    var deep = wow_light.river_deep;
+    if (w.ocean > 0.5) {
+        shallow = wow_light.ocean_shallow;
+        deep = wow_light.ocean_deep;
     }
-    let vtx_alpha = mix(shallow.w, deep.w, depth);
-    if (w.path.x > 1.5) {
-        let body = clamp(in.vcolor.rgb + detail.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-        return vec4<f32>(
-            apply_fog(body, in.world_position.xyz, in.room_fog),
-            clamp(vtx_alpha + detail.a, 0.0, 1.0),
-        );
+    let alpha = mix(shallow.w, deep.w, clamp(in.depth, 0.0, 1.0));
+    if (w.renderer >= RENDERER_BUILDING_INDOORS - 0.5) {
+        return building_water_indoors(in, sheet, alpha);
     }
-    let n = normalize(in.world_normal);
-    let to_light = -normalize(wow_light.light_sun.xyz);
-    let primary = clamp(
-        wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * max(dot(n, to_light), 0.0),
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    if (w.path.x > 0.5) {
-        let rgb = primary * deep.rgb + detail.rgb + in.secondary_vtx * detail.a;
-        return vec4<f32>(apply_fog(rgb, in.world_position.xyz, in.room_fog), vtx_alpha);
+    if (w.renderer >= RENDERER_BUILDING_OUTDOORS - 0.5) {
+        return building_water_outdoors(in, sheet, deep, alpha);
     }
-    let swatch = swatch_at(shallow, deep, depth, w.kind.y > 0.5);
-    let rgb = primary * swatch.rgb + detail.rgb + (in.secondary_vtx + vec3<f32>(0.25)) * detail.a;
-    return vec4<f32>(apply_fog(rgb, in.world_position.xyz, in.room_fog), swatch.w);
+    return terrain_water(in, sheet, shallow, deep);
 }

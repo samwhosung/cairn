@@ -95,7 +95,7 @@ fn a_flooded_room_is_under_its_liquid_at_every_height() {
 
 #[test]
 fn a_flooded_room_outranks_a_lower_pool_of_its_own() {
-    let sibling = wet_footprint(
+    let sibling = world_grid(
         &flat_quad(-100.0),
         &Transform::IDENTITY,
         LiquidSource::WmoGroup(pool(1, f32::NEG_INFINITY)),
@@ -121,12 +121,12 @@ fn an_empty_world_is_dry_for_every_claim() {
 
 #[test]
 fn an_identity_footprint_keeps_the_raw_bounds() {
-    let g = wet_footprint(
+    let g = world_grid(
         &flat_quad(5.0),
         &Transform::IDENTITY,
         LiquidSource::AdtChunk,
     );
-    assert_eq!(g.xy_bounds(), Some([[0.0, 0.0], [10.0, 10.0]]));
+    assert_eq!(g.xy_bounds(), Some(Rect::new(0.0, 0.0, 10.0, 10.0)));
     assert_eq!(g.surface_z_at(5.0, 5.0), Some(5.0));
 }
 
@@ -139,7 +139,7 @@ fn a_yawed_placement_keeps_the_surface_level() {
             rotation: Quat::from_rotation_y(deg.to_radians()),
             scale: Vec3::ONE,
         };
-        let g = wet_footprint(&flat_quad(5.0), &transform, LiquidSource::AdtChunk);
+        let g = world_grid(&flat_quad(5.0), &transform, LiquidSource::AdtChunk);
         let centre = bevy_to_wow(transform.transform_point(wow_to_bevy([5.0, 5.0, 5.0])));
         let z = g
             .surface_z_at(centre[0], centre[1])

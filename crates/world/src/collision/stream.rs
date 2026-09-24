@@ -9,12 +9,12 @@ use terrain::{Doodad, WmoInstance};
 
 use super::assets::{M2Hull, TileCollision, WmoHull};
 use super::colliders::{PendingCollider, build_collider_task, placement_collider_data};
-use super::liquid::{LiquidSurface, PlacedRooms, liquid_collider};
+use super::liquid::{PlacedRooms, SwimSurface, waterline_collider};
 use super::weld::HullWelds;
 use super::{camera_layers, liquid_layers, walk_layers};
 use crate::CurrentMap;
 use crate::coords::{bevy_to_wow, placement_rotation, wmo_doodad_local, wow_to_bevy};
-use crate::liquid::{LiquidSource, WmoPool, wet_footprint};
+use crate::liquid::{LiquidSource, WmoPool, world_grid};
 use crate::source::{MPQ_SOURCE, m2_url, wmo_url};
 use crate::stream::Window;
 use crate::view::{FARCLIP, WorldCamera};
@@ -195,9 +195,9 @@ fn spawn_tile(commands: &mut Commands<'_, '_>, tc: &TileCollision) -> Vec<Entity
         );
     }
     for liquid in &tc.liquids {
-        let grid = wet_footprint(liquid, &Transform::IDENTITY, LiquidSource::AdtChunk);
-        let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface(grid)));
-        if let Some(collider) = liquid_collider(liquid, &Transform::IDENTITY) {
+        let grid = world_grid(liquid, &Transform::IDENTITY, LiquidSource::AdtChunk);
+        let mut entity = commands.spawn((Transform::IDENTITY, SwimSurface(grid)));
+        if let Some(collider) = waterline_collider(liquid, &Transform::IDENTITY) {
             entity.insert((collider, liquid_layers()));
         }
         entities.push(entity.id());
@@ -205,8 +205,6 @@ fn spawn_tile(commands: &mut Commands<'_, '_>, tc: &TileCollision) -> Vec<Entity
     entities
 }
 
-/// A building's rooms, and a surface for each group's liquid, owned by those rooms when the
-/// building has portals or an area id.
 fn spawn_wmo_liquids(
     commands: &mut Commands<'_, '_>,
     hull: &Handle<WmoHull>,
@@ -224,9 +222,9 @@ fn spawn_wmo_liquids(
     for (gi, liquid) in rooms.group_liquids.iter().enumerate() {
         let Some(liquid) = liquid else { continue };
         let pool = WmoPool::of(rooms, gi, instance, at);
-        let grid = wet_footprint(liquid, at, LiquidSource::WmoGroup(pool));
-        let mut entity = commands.spawn((Transform::IDENTITY, LiquidSurface(grid)));
-        if let Some(collider) = liquid_collider(liquid, at) {
+        let grid = world_grid(liquid, at, LiquidSource::WmoGroup(pool));
+        let mut entity = commands.spawn((Transform::IDENTITY, SwimSurface(grid)));
+        if let Some(collider) = waterline_collider(liquid, at) {
             entity.insert((collider, liquid_layers()));
         }
         entities.push(entity.id());
@@ -235,14 +233,13 @@ fn spawn_wmo_liquids(
 }
 
 impl CollisionStreamer {
-    /// The ground's height (WoW Z) under a Bevy position, from its tile when that has arrived.
     pub(super) fn terrain_z_under(&self, tiles: &Assets<TileCollision>, at: Vec3) -> Option<f32> {
         let wow = bevy_to_wow(at);
         let key = wdt::world_to_tile(wow[0], wow[1]);
         let TileState::Built(handle) = &self.tiles.get(&key)?.state else {
             return None;
         };
-        terrain::terrain_height_at(&tiles.get(handle)?.chunks, wow)
+        terrain::terrain_height_at(&tiles.get(handle)?.ground, wow)
     }
 }
 
