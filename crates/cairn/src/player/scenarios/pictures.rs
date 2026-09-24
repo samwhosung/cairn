@@ -51,6 +51,17 @@ const FACING_A_LAMPPOST_BELOW_THE_ABBEY: Stand = Stand {
     heading: 320.0,
 };
 const SOUTH: f32 = 180.0;
+/// The ground's baked shadow of a tree below the abbey, its edge four yards east, seen with the
+/// sun behind the camera.
+const IN_A_TREES_SHADOW_BELOW_THE_ABBEY: Stand = Stand {
+    xy: [-8960.0, -133.0],
+    heading: SUN_BEARING + 180.0,
+};
+const IN_THE_SUN_BESIDE_IT: [f32; 2] = [-8960.0, -137.0];
+const ON_THE_SNOW_OUTSIDE_KHARANOS: Stand = Stand {
+    xy: [-5650.0, -450.0],
+    heading: 0.0,
+};
 
 struct Painter {
     app: App,
@@ -320,6 +331,68 @@ fn the_doodads_move_in_goldshire_and_before_the_abbey() {
             p.shoot(&format!("{place}-doodads-{i}"));
             p.wait(0.4);
         }
+    }
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_in_the_sun_in_a_trees_shadow_and_by_a_lamp_at_night() {
+    let shade = IN_A_TREES_SHADOW_BELOW_THE_ABBEY;
+    let human = CharacterLook::naked(1, 0);
+    let Some(mut p) = Painter::new(IN_THE_SUN_BESIDE_IT, shade.heading, human.clone()) else {
+        return;
+    };
+    p.wait(2.0);
+    p.shoot("light-1-sun");
+    p.put_on_ground(shade.xy);
+    p.settle();
+    p.wait(2.0);
+    p.shoot("light-2-shadow");
+    let lamp = FACING_A_GOLDSHIRE_LAMPPOST;
+    let Some(mut p) = Painter::new(lamp.xy, lamp.heading, human) else {
+        return;
+    };
+    p.orbit(0.0, 6.0);
+    p.set_time(0, 30);
+    p.wait(2.0);
+    p.shoot("light-3-lamp-at-night");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_runs_on_snow_strafes_and_sits() {
+    let snow = ON_THE_SNOW_OUTSIDE_KHARANOS;
+    let Some(mut p) = Painter::new(snow.xy, snow.heading, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    p.wait(1.5);
+    p.shoot("pose-1-running-on-snow");
+    p.key(KeyCode::KeyW, ButtonState::Released);
+    p.key(KeyCode::KeyQ, ButtonState::Pressed);
+    p.wait(1.0);
+    p.shoot("pose-2-strafing");
+    p.key(KeyCode::KeyQ, ButtonState::Released);
+    p.wait(1.0);
+    p.key(KeyCode::KeyX, ButtonState::Pressed);
+    p.run(1);
+    p.key(KeyCode::KeyX, ButtonState::Released);
+    p.wait(1.5);
+    p.shoot("pose-3-sitting");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn a_tauren_and_a_gnome_stand_where_the_human_does() {
+    for (name, look) in [
+        ("race-tauren", CharacterLook::naked(6, 0)),
+        ("race-gnome", CharacterLook::naked(7, 1)),
+    ] {
+        let Some(mut p) = Painter::new(GOLDSHIRE, EAST, look) else {
+            return;
+        };
+        p.wait(2.0);
+        p.shoot(name);
     }
 }
 
