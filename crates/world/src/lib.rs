@@ -29,6 +29,7 @@ mod room;
 mod sh;
 mod sky;
 mod sky_order;
+mod skybox;
 mod source;
 mod stream;
 mod terrain;
@@ -105,6 +106,7 @@ impl Plugin for WorldPlugin {
             sky::SkyPlugin,
             clouds::CloudsPlugin,
             celestial::CelestialPlugin,
+            skybox::SkyboxPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
@@ -157,17 +159,19 @@ impl TimeOfDay {
 }
 
 /// Whether everything around the camera has arrived: every terrain tile the far clip reaches is
-/// drawn or known to be missing, every model it places is drawn with its textures, and the
-/// horizon ring is up.
+/// drawn or known to be missing, every model it places is drawn with its textures, the horizon
+/// ring is up, and a painted sky a building shows is built or known to be missing.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Resource, Default, Debug)]
 pub struct Residency {
     terrain: bool,
     models: bool,
     horizon: bool,
+    skybox_pending: bool,
 }
 
 impl Residency {
     pub fn settled(&self) -> bool {
-        self.terrain && self.models && self.horizon
+        self.terrain && self.models && self.horizon && !self.skybox_pending
     }
 }

@@ -307,6 +307,7 @@ pub(crate) fn batch_look(
         wmo_class: None,
         sidn: None,
         window: false,
+        skybox: false,
     }
 }
 
@@ -331,6 +332,7 @@ fn character_look(texture: Handle<Image>, blend: ModelBlend, two_sided: bool) ->
         wmo_class: None,
         sidn: None,
         window: false,
+        skybox: false,
     }
 }
 

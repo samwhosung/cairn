@@ -14,6 +14,7 @@ use bevy::shader::ShaderRef;
 
 use super::kernel::SIDE;
 use crate::sky_order::{self, SKY_VERTEX_SHADER, sky_pipeline_state};
+use crate::skybox::ReplacedByPaintedSky;
 use crate::view::WorldCamera;
 
 pub type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudExtension>;
@@ -140,6 +141,7 @@ pub(super) fn spawn_layer(
         MeshMaterial3d(material.clone()),
         Transform::default(),
         CloudLayer,
+        ReplacedByPaintedSky,
     ));
     commands.insert_resource(CloudImage { image, material });
 }

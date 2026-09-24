@@ -15,6 +15,7 @@ use super::materials::{
 use super::{Body, Celestial, StarPatch};
 use crate::coords::wow_to_bevy;
 use crate::sky_order;
+use crate::skybox::ReplacedByPaintedSky;
 use crate::source::{Install, Repeat};
 use crate::texture::blp_image;
 
@@ -168,6 +169,8 @@ pub(super) fn spawn_bodies(
         ));
         if glare {
             sprite.insert(Glare::default());
+        } else {
+            sprite.insert(ReplacedByPaintedSky);
         }
     }
     let formats = support.map_or(CompressedImageFormats::NONE, |s| s.0);
@@ -250,6 +253,7 @@ fn spawn_stars(
             MeshMaterial3d(material),
             Transform::default(),
             StarPatch { authored_alpha },
+            ReplacedByPaintedSky,
         ));
     }
 }

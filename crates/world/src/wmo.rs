@@ -43,6 +43,8 @@ pub struct WmoModel {
     pub group_light_refs: Vec<Vec<u16>>,
     /// The fogs its rooms ask for; the first is the building's own.
     pub fogs: Vec<WmoFog>,
+    /// The model a room that asks for it shows as its sky.
+    pub skybox: Option<String>,
 }
 
 /// A group's flags, its box from the root, and its slice of the portal refs.
@@ -262,6 +264,7 @@ impl AssetLoader for WmoLoader {
             lights: parse_wmo_lights(&bytes),
             group_light_refs,
             fogs: root.fogs().to_vec(),
+            skybox: root.skybox().map(str::to_owned),
         })
     }
 

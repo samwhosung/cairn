@@ -71,6 +71,10 @@ pub(crate) struct RoomCrossfade {
 }
 
 impl RoomCrossfade {
+    pub(crate) fn weight(&self) -> f32 {
+        self.weight
+    }
+
     pub(crate) fn blend(
         &mut self,
         target: Option<RoomFog>,

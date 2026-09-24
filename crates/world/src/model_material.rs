@@ -39,6 +39,7 @@ const MODULATE_2X: u16 = 1 << 8;
 const DEPTH_PRIME: u16 = 1 << 9;
 const TWIN_CUTOUT: u16 = 1 << 10;
 const ENV_MAP: u16 = 1 << 12;
+const SKY_DEPTH: u16 = 1 << 13;
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +51,7 @@ pub struct ModelKey {
     modulate: bool,
     modulate2x: bool,
     depth_prime: bool,
+    sky_depth: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
@@ -63,6 +65,7 @@ impl From<&ModelExtension> for ModelKey {
             modulate: markers & MODULATE != 0,
             modulate2x: markers & MODULATE_2X != 0,
             depth_prime: markers & DEPTH_PRIME != 0,
+            sky_depth: markers & SKY_DEPTH != 0,
         }
     }
 }
@@ -130,6 +133,10 @@ impl MaterialExtension for ModelExtension {
             if key.no_depth_test {
                 ds.depth_compare = CompareFunction::Always;
             }
+        }
+        if key.sky_depth {
+            descriptor.vertex.shader_defs.push("WOW_SKY_DEPTH".into());
+            crate::sky_order::sky_pipeline_state(descriptor);
         }
         let target = descriptor
             .fragment
@@ -243,6 +250,7 @@ pub(crate) struct BatchLook {
     pub wmo_class: Option<WmoBatchClass>,
     pub sidn: Option<[u8; 3]>,
     pub window: bool,
+    pub skybox: bool,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -265,6 +273,7 @@ struct MatKey {
     wmo_class: Option<WmoBatchClass>,
     sidn: Option<[u8; 3]>,
     window: bool,
+    skybox: bool,
     variant: Variant,
 }
 
@@ -297,6 +306,7 @@ impl ModelMaterials {
             wmo_class: look.wmo_class,
             sidn: look.sidn,
             window: look.window,
+            skybox: look.skybox,
             variant,
         };
         self.0
@@ -322,11 +332,11 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
             ModelBlend::Blend | ModelBlend::Mod | ModelBlend::Mod2x => AlphaMode::Blend,
         }
     };
-    let depth_bias = if matches!(alpha_mode, AlphaMode::Blend) {
-        (f32::from(look.batch_order.map_or(0, NonZeroU16::get)) * BATCH_ORDER_SORT_EPS)
-            .min(BATCH_ORDER_SORT_CAP)
-    } else {
-        0.0
+    let order = f32::from(look.batch_order.map_or(0, NonZeroU16::get));
+    let depth_bias = match (alpha_mode, look.skybox) {
+        (AlphaMode::Blend, false) => (order * BATCH_ORDER_SORT_EPS).min(BATCH_ORDER_SORT_CAP),
+        (AlphaMode::Blend, true) => crate::sky_order::skybox_batch_bias(order),
+        _ => 0.0,
     };
     let opaque_intent = matches!(blend, ModelBlend::Opaque | ModelBlend::AlphaTest)
         && !fade_variant
@@ -339,7 +349,8 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
         | (u16::from(blend == ModelBlend::Mod) * MODULATE)
         | (u16::from(blend == ModelBlend::Mod2x) * MODULATE_2X)
         | (u16::from(fade_variant && source_cutout) * TWIN_CUTOUT)
-        | (u16::from(look.env_map) * ENV_MAP);
+        | (u16::from(look.env_map) * ENV_MAP)
+        | (u16::from(look.skybox) * SKY_DEPTH);
     let flag = |on: bool| if on { 1.0 } else { 0.0 };
     let unlit =
         look.emissive || (!look.is_wmo && matches!(blend, ModelBlend::Mod | ModelBlend::Mod2x));

@@ -55,6 +55,7 @@ struct WowLight {
 const VANILLA_ALPHA_KEY: f32 = 0.8784314;
 const DETAIL_DOODAD_MIP_BIAS: f32 = 0.25;
 const F32_EPSILON: f32 = 1.1920929e-7;
+const SKY_FAR_CLIP_Z: f32 = 0.0;
 const TILE_YARDS: f32 = 533.33333;
 
 const NEAREST_POINT_LIGHTS: u32 = 3u;
@@ -301,6 +302,9 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
     out.position = view.clip_from_view * vec4<f32>(view_rot * p_cam, 1.0);
     // A later WMO batch wins its coplanar tie by n ULPs of depth, as the client's draw order does.
     out.position.z *= 1.0 + m.sun_scale.y * F32_EPSILON;
+#ifdef WOW_SKY_DEPTH
+    out.position.z = SKY_FAR_CLIP_Z;
+#endif
 #endif
 
 #ifdef VERTEX_UVS_A

@@ -509,6 +509,7 @@ impl Spawner<'_, '_, '_> {
                     wmo_class: g.wmo_batch,
                     sidn: g.sidn,
                     window: g.window,
+                    skybox: false,
                 };
                 let cutout = self
                     .cache
