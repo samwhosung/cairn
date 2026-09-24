@@ -71,6 +71,20 @@ pub struct SceneLight {
     pub night_glow: f32,
     /// The full-screen glow's weight, a byte fraction.
     pub glow: f32,
+    /// The colour the sun, the white moon and their glares are drawn in.
+    pub celestial_tint: [f32; 3],
+    pub sun_disc_scale: f32,
+    /// How much of the sun's glare the hour allows, `0..=1`.
+    pub sun_flare: f32,
+    /// The direction to the white moon, in Bevy's axes.
+    pub moon: Vec3,
+    pub moon_disc_scale: f32,
+    /// How much of the moon's glare the hour allows, `0..=1`.
+    pub moon_flare: f32,
+    /// The direction to the second moon, in Bevy's axes.
+    pub moon02: Vec3,
+    pub moon02_disc_scale: f32,
+    pub star_alpha: f32,
     /// How much of the sky clouds may cover, 1 being all of it.
     pub cloud_density: f32,
     /// `[glow, gradient slope, gradient base]`.

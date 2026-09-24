@@ -8,6 +8,7 @@ const NOT_A_ROOM_FOG: u32 = 1;
 
 #[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct CameraRoom {
+    pub indoors: bool,
     pub fog: Option<RoomFog>,
 }
 

@@ -59,6 +59,16 @@ pub(crate) struct Horizon {
     spawned: HashMap<(u32, u32), Entity>,
 }
 
+impl Horizon {
+    pub(crate) fn height_under(&self, bevy_pos: Vec3) -> Option<f32> {
+        let Wdl::Read(wdl) = &self.wdl else {
+            return None;
+        };
+        let [x, y, _] = bevy_to_wow(bevy_pos);
+        wdl.height_at(x, y)
+    }
+}
+
 fn read_wdl(install: &Install, dir: &str) -> Wdl {
     let path = format!("World\\Maps\\{dir}\\{dir}.wdl");
     let parsed = install

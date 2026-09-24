@@ -96,7 +96,7 @@ pub(crate) fn compute_wmo_pvs(
     let clip_from_world = projection.get_clip_from_view() * cam.to_matrix().inverse();
     let eye_world = cam.translation();
     let terrain = terrain_wow_z_under(&streamer, &adts, eye_world);
-    let (mut found, mut indoors) = (CameraRoom::default(), false);
+    let mut found = CameraRoom::default();
     for mut inst in &mut instances {
         let Some(model) = wmos.get(&inst.handle) else {
             continue;
@@ -127,9 +127,9 @@ pub(crate) fn compute_wmo_pvs(
         if inst.interior_fog != pvs.interior_fog {
             inst.interior_fog = pvs.interior_fog;
         }
-        if !indoors && pvs.seeds.indoors(&model.group_nav) {
-            indoors = true;
+        if !found.indoors && pvs.seeds.indoors(&model.group_nav) {
             found = CameraRoom {
+                indoors: true,
                 fog: room_fog(model, pvs.seeds, eye_local),
             };
         }

@@ -7,6 +7,7 @@
 mod adt;
 mod atmosphere;
 mod billboard;
+mod celestial;
 mod clouds;
 pub mod collision;
 pub mod coords;
@@ -103,6 +104,7 @@ impl Plugin for WorldPlugin {
             horizon::HorizonPlugin,
             sky::SkyPlugin,
             clouds::CloudsPlugin,
+            celestial::CelestialPlugin,
         ))
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()

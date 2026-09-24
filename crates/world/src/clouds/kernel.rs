@@ -2,14 +2,16 @@
 //! bytes come out the same.
 //!
 //! One departure: where the client's arc cosine of a sky direction would go out of range, this one
-//! clamps, which reads the zenith's cell. The lighting body's cell goes out of range whenever the
-//! body is up, so a risen body lights the clouds' glow from overhead.
+//! clamps, which reads the zenith's cell. The glare's lookup goes out of range above about 70
+//! degrees, and the lighting body's cell whenever the body is up, so a risen body lights the
+//! clouds' glow from overhead.
 
 use bevy::math::Vec3;
 
 use super::tables::{COVERAGE_CURVE, PERM, fade_table, gradient_table};
 
 pub(super) const SIDE: usize = 128;
+const SHIFT: u32 = 7;
 const ROWS_PER_TICK: usize = 32;
 const OCTAVES: usize = 4;
 const SLOPE_OCTAVES: usize = 3;
@@ -252,6 +254,15 @@ impl CloudKernel {
         }
     }
 
+    pub(super) fn coverage(&self, d: Vec3) -> f32 {
+        let Some((u, v)) = project_cells(d) else {
+            return f32::from(self.tile[(SIDE / 2) * SIDE + SIDE / 2]) / 255.0;
+        };
+        let (col, row) = (u as i32, v as i32);
+        let cell = ((row as usize & (SIDE - 1)) << SHIFT) + (col as usize & (SIDE - 1));
+        f32::from(self.tile[cell]) / 255.0
+    }
+
     pub(super) fn rgba(&self) -> &[[u8; 4]] {
         &self.rgba
     }
@@ -337,6 +348,14 @@ fn pack_channel(ch: f64) -> u8 {
     float_byte(clamped * 255.0)
 }
 
+pub(crate) fn sun_clearance(coverage: f32) -> f32 {
+    1.0 - coverage
+}
+
+pub(crate) fn moon_halo(coverage: f32) -> f32 {
+    1.0 - (2.0 * (coverage - 0.5)).abs()
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -358,6 +377,8 @@ mod tests {
         k.rebuild(0.0, &frame());
         assert!(k.tile.iter().all(|&b| b == 0));
         assert!(k.rgba().iter().all(|px| px[3] == 0));
+        assert_eq!(k.coverage(Vec3::new(0.3, 0.5, 0.2).normalize() * 12.0), 0.0);
+        assert_eq!((sun_clearance(0.0), moon_halo(0.0)), (1.0, 0.0));
     }
 
     #[test]
@@ -444,6 +465,25 @@ mod tests {
     fn the_inverse_square_root_is_the_clients_estimate() {
         assert_eq!(fast_inv_sqrt(1.0).to_bits(), 0x3f79_97bb);
         assert!((fast_inv_sqrt(4.0) - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn the_zenith_reads_the_centre_and_the_horizon_the_rim() {
+        let mut k = CloudKernel::default();
+        let mid = SIDE / 2;
+        k.tile[mid * SIDE + mid] = 255;
+        assert_eq!(k.coverage(Vec3::new(0.0, 12.0, 0.0)), 1.0);
+        k.tile[mid * SIDE] = 51;
+        let rim = k.coverage(Vec3::new(12.0, 0.0, 0.0));
+        assert!((rim - 0.2).abs() < 1e-3, "rim {rim}");
+        assert_eq!(k.coverage(Vec3::new(12.0, -4.0, 0.0)), rim);
+    }
+
+    #[test]
+    fn the_moon_halo_peaks_in_half_cover() {
+        assert_eq!(moon_halo(0.5), 1.0);
+        assert_eq!(moon_halo(1.0), 0.0);
+        assert!((moon_halo(0.25) - 0.5).abs() < 1e-6);
     }
 
     #[test]

@@ -7,9 +7,11 @@ use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
+use crate::celestial::SPRITE_SPHERE_YARDS;
 use crate::light::SceneLight;
 use crate::view::WorldCamera;
 
+pub(crate) use kernel::{moon_halo, sun_clearance};
 pub use layer::CloudMaterial;
 
 /// How the clouds keep time. Live, a band of the field regenerates every tenth of a second and
@@ -28,6 +30,12 @@ pub(crate) struct CloudCoverage {
     primed: bool,
     density: f32,
     frame: Option<kernel::CloudFrame>,
+}
+
+impl CloudCoverage {
+    pub(crate) fn coverage_toward(&self, dir: Vec3) -> f32 {
+        self.kernel.coverage(dir * SPRITE_SPHERE_YARDS)
+    }
 }
 
 pub(crate) struct CloudsPlugin;
