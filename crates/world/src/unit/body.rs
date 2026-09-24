@@ -13,12 +13,15 @@ use model::{CharSkinSlot, FogPolicy, ModelBlend, RenderSubmesh};
 use crate::light::LightBuffer;
 use crate::m2::M2Model;
 use crate::model::{ModelSubmesh, skinned_submesh_mesh, submesh_mesh};
-use crate::model_material::{BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant};
+use crate::model_material::{
+    BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
+};
 use crate::rig::{GlobalSeqDrive, RigPalettes, RigPose, RigSkin};
 use crate::source::{Repeat, m2_url, texture_url};
 use crate::visibility::alpha_bits;
 
 use super::fade::{PartFade, UnitAppear};
+use super::loops::{UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card};
 
 /// A body to draw at this entity's transform: its model, the creature skins it fills from its
 /// display, and for a character the textures and geosets its appearance chose.
@@ -96,6 +99,7 @@ pub(crate) fn dress_bodies(
     mut cache: ResMut<'_, ModelMaterials>,
     mut mesh_cache: ResMut<'_, MeshCache>,
     mut palettes: ResMut<'_, RigPalettes>,
+    mut loops: UnitLoops<'_>,
     bodies: Query<'_, '_, (Entity, &UnitBody, Option<&BodyModel>), Without<BodyDressed>>,
 ) {
     let Some(light) = light else {
@@ -124,7 +128,8 @@ pub(crate) fn dress_bodies(
             .iter()
             .find(|s| s.geometry.char_slot == Some(CharSkinSlot::Hair))
             .map(|s| (s.geometry.blend, s.geometry.two_sided));
-        let mut parts = Vec::new();
+        let mut pose = rigged.then(|| RigPose::new(entity, &m2.skeleton));
+        let (mut parts, mut cards, mut alpha_moves) = (Vec::new(), Vec::new(), false);
         for (i, sub) in m2.submeshes.iter().enumerate() {
             let g = &sub.geometry;
             if let Some(dress) = &body.character
@@ -132,13 +137,10 @@ pub(crate) fn dress_bodies(
             {
                 continue;
             }
-            if sub.billboard.is_some() {
-                continue;
-            }
             let PartLook {
                 look,
                 runtime_sheet,
-            } = part_look(sub, i, body, &server, dir, hair_part);
+            } = part_look(sub, i, body, &server, dir, hair_part, handle.id());
             let material = cache.get(&mut materials, &look, Variant::Steady, &light.0);
             let fade = PartFade::of(
                 &mut cache,
@@ -148,26 +150,23 @@ pub(crate) fn dress_bodies(
                 runtime_sheet,
                 &light.0,
             );
+            let scrolls = loops.register(&mut materials, &fade, g);
+            let alpha = loops.alpha(g, Some(entity));
+            if let Some(info) = &sub.billboard {
+                let joint = card_joint(&mut commands, pose.as_mut(), entity, info);
+                let tag = rig_bits(slot) | alpha_bits(1.0);
+                let mesh = form.static_meshes[i].clone();
+                let mut card = spawn_card(&mut commands, mesh, tag, fade, info, joint, sub.aabb);
+                alpha_moves |= mark_moving(&mut card, scrolls, alpha);
+                cards.push(card.id());
+                continue;
+            }
             let skinned = slot != 0 && rigged;
-            let mesh = if skinned {
-                form.skinned_meshes[i].clone()
-            } else {
-                form.static_meshes[i].clone()
-            };
-            let mut part = commands.spawn((
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
-                Transform::default(),
-                ChildOf(entity),
-                MeshTag(rig_bits(slot) | alpha_bits(1.0)),
-                BodyPart,
-                fade,
-            ));
-            if skinned {
-                part.insert(NoFrustumCulling);
-            } else if let Some(aabb) = sub.aabb {
+            let mut part = spawn_part(&mut commands, entity, &form, i, skinned, slot, fade);
+            if !skinned && let Some(aabb) = sub.aabb {
                 part.insert(aabb);
             }
+            alpha_moves |= mark_moving(&mut part, scrolls, alpha);
             parts.push(part.id());
         }
         let worn = body
@@ -179,19 +178,56 @@ pub(crate) fn dress_bodies(
             BodyDressed { parts, slot },
             HoldMeshes(form),
             UnitAppear::at(time.elapsed_secs()),
+            UnitCards(cards),
         ));
+        if alpha_moves {
+            root.insert(UnitAlphaAnimated);
+        }
         if !worn.is_empty() {
             root.insert(super::attach::WornPending::new(worn, &server));
         }
-        insert_rig_and_players(&mut root, m2, skin);
+        insert_rig_and_players(&mut root, m2, skin, pose);
     }
 }
 
-fn insert_rig_and_players(root: &mut EntityCommands<'_>, m2: &M2Model, skin: Option<RigSkin>) {
+fn spawn_part<'a>(
+    commands: &'a mut Commands<'_, '_>,
+    owner: Entity,
+    form: &ModelMeshes,
+    index: usize,
+    skinned: bool,
+    slot: u16,
+    fade: PartFade,
+) -> EntityCommands<'a> {
+    let mesh = if skinned {
+        &form.skinned_meshes[index]
+    } else {
+        &form.static_meshes[index]
+    };
+    let mut part = commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(fade.steady().clone()),
+        Transform::default(),
+        ChildOf(owner),
+        MeshTag(rig_bits(slot) | alpha_bits(1.0)),
+        BodyPart,
+        fade,
+    ));
+    if skinned {
+        part.insert(NoFrustumCulling);
+    }
+    part
+}
+
+fn insert_rig_and_players(
+    root: &mut EntityCommands<'_>,
+    m2: &M2Model,
+    skin: Option<RigSkin>,
+    pose: Option<RigPose>,
+) {
     let skeleton = &m2.skeleton;
-    let rigged = !skeleton.joints.is_empty();
-    if rigged {
-        root.insert(RigPose::new(root.id(), skeleton));
+    if let Some(pose) = pose {
+        root.insert(pose);
         if let Some(skin) = skin {
             root.insert(skin);
             let bone = |b: Option<u16>| b.filter(|&b| usize::from(b) < skeleton.joints.len());
@@ -201,6 +237,7 @@ fn insert_rig_and_players(root: &mut EntityCommands<'_>, m2: &M2Model, skin: Opt
             }
         }
     }
+    let rigged = !skeleton.joints.is_empty();
     if let Some(anims) = &m2.animations {
         if rigged
             && let Some(drive) = GlobalSeqDrive::new(&anims.global_bones, m2.skeleton.joints.len())
@@ -256,6 +293,7 @@ fn part_look(
     server: &AssetServer,
     dir: &str,
     hair_part: Option<(ModelBlend, bool)>,
+    model: AssetId<M2Model>,
 ) -> PartLook {
     let g: &RenderSubmesh = &sub.geometry;
     if let (Some(slot), Some(dress)) = (g.char_slot, &body.character) {
@@ -288,15 +326,17 @@ fn part_look(
         _ => None,
     };
     PartLook {
-        look: batch_look(g, texture, index),
+        look: batch_look(g, texture, index, model),
         runtime_sheet: false,
     }
 }
 
+/// A batch whose texture scrolls has a material of its model's own, which its scroll runs on.
 pub(crate) fn batch_look(
     g: &RenderSubmesh,
     texture: Option<Handle<Image>>,
     index: usize,
+    model: AssetId<M2Model>,
 ) -> BatchLook {
     BatchLook {
         texture,
@@ -314,7 +354,14 @@ pub(crate) fn batch_look(
         batch_order: Some(NonZeroU16::MIN.saturating_add(u16::try_from(index).unwrap_or(u16::MAX))),
         uv_offset_at_rest: g.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0)),
         tint_at_rest: g.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0)),
-        animated: None,
+        animated: g
+            .uv_anim
+            .as_ref()
+            .filter(|a| a.period > 0.0)
+            .map(|_| BatchId {
+                model: model.untyped(),
+                index,
+            }),
         seq_owner: None,
         wmo_class: None,
         sidn: None,

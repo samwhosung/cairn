@@ -5,6 +5,7 @@ use model::CharSkinSlot;
 use super::MeshCache;
 use super::body::{BodyModel, BodyPart, HoldMeshes, WornModel, batch_look, meshes_for};
 use super::fade::PartFade;
+use super::loops::{UnitAlphaAnimated, UnitCards, UnitLoops, card_joint, mark_moving, spawn_card};
 use crate::light::LightBuffer;
 use crate::m2::M2Model;
 use crate::model_material::{ModelMaterial, ModelMaterials, Variant};
@@ -38,12 +39,23 @@ pub(crate) fn attach_worn(
     mut materials: ResMut<'_, Assets<ModelMaterial>>,
     mut cache: ResMut<'_, ModelMaterials>,
     mut mesh_cache: ResMut<'_, MeshCache>,
-    mut units: Query<'_, '_, (Entity, &mut WornPending, &BodyModel, &mut RigPose)>,
+    mut loops: UnitLoops<'_>,
+    mut units: Query<
+        '_,
+        '_,
+        (
+            Entity,
+            &mut WornPending,
+            &BodyModel,
+            &mut RigPose,
+            &mut UnitCards,
+        ),
+    >,
 ) {
     let Some(light) = light else {
         return;
     };
-    for (entity, mut pending, body, mut pose) in &mut units {
+    for (entity, mut pending, body, mut pose, mut cards) in &mut units {
         let Some(host) = m2s.get(&body.0) else {
             continue;
         };
@@ -74,17 +86,15 @@ pub(crate) fn attach_worn(
                     HoldMeshes(form.clone()),
                 ))
                 .id();
+            let mut alpha_moves = false;
             for (i, sub) in item.submeshes.iter().enumerate() {
-                if sub.billboard.is_some() {
-                    continue;
-                }
                 let g = &sub.geometry;
                 let texture = if g.char_slot == Some(CharSkinSlot::Object) {
                     object.clone()
                 } else {
                     sub.texture.clone()
                 };
-                let look = batch_look(g, texture, i);
+                let look = batch_look(g, texture, i, handle.id());
                 let material = cache.get(&mut materials, &look, Variant::Steady, &light.0);
                 let fade = PartFade::of(
                     &mut cache,
@@ -94,8 +104,20 @@ pub(crate) fn attach_worn(
                     false,
                     &light.0,
                 );
+                let scrolls = loops.register(&mut materials, &fade, g);
+                let alpha = loops.alpha(g, None);
+                let mesh = form.static_meshes[i].clone();
+                if let Some(info) = &sub.billboard {
+                    let joint = card_joint(&mut commands, None, root, info);
+                    let tag = alpha_bits(1.0);
+                    let mut card =
+                        spawn_card(&mut commands, mesh, tag, fade, info, joint, sub.aabb);
+                    alpha_moves |= mark_moving(&mut card, scrolls, alpha);
+                    cards.0.push(card.id());
+                    continue;
+                }
                 let mut part = commands.spawn((
-                    Mesh3d(form.static_meshes[i].clone()),
+                    Mesh3d(mesh),
                     MeshMaterial3d(material),
                     Transform::default(),
                     ChildOf(root),
@@ -106,6 +128,10 @@ pub(crate) fn attach_worn(
                 if let Some(aabb) = sub.aabb {
                     part.insert(aabb);
                 }
+                alpha_moves |= mark_moving(&mut part, scrolls, alpha);
+            }
+            if alpha_moves {
+                commands.entity(entity).insert(UnitAlphaAnimated);
             }
             false
         });

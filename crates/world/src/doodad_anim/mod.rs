@@ -8,8 +8,8 @@ use bevy::camera::primitives::{Frustum, Sphere};
 use bevy::prelude::*;
 
 use lazy::LazyRig;
-pub(crate) use mat_anim::MatAnim;
-use mat_anim::{TintAnimMaterials, UvAnimMaterials};
+use mat_anim::TintAnimMaterials;
+pub(crate) use mat_anim::{AnimMatPart, MatAnim, MatLoop, UvAnimMaterials, register};
 pub(crate) use placement::{MaterialLoops, RigBuilder};
 
 use crate::doodad_events::idle_has_sound_keys;

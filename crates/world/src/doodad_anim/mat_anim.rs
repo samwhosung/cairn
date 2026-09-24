@@ -17,6 +17,11 @@ const TINT_STEPS: f32 = 255.0;
 pub(crate) struct MatAnim {
     anim: Arc<AlphaAnim>,
     origin: f64,
+    /// The unit whose playing sequence picks the loops, on that clip's clock; without one the
+    /// loops are the first sequence's, on the clock since `origin`.
+    host: Option<Entity>,
+    /// The sequence last read off the host, kept while it plays nothing.
+    seq: Option<usize>,
     pub(crate) alpha: f32,
 }
 
@@ -26,16 +31,39 @@ impl MatAnim {
         Self {
             anim,
             origin,
+            host: None,
+            seq: None,
             alpha,
+        }
+    }
+
+    /// A unit's batch: its alpha is authored per sequence, so which of them draw follows what the
+    /// unit plays.
+    pub(crate) fn following(anim: Arc<AlphaAnim>, host: Entity, origin: f64) -> Self {
+        Self {
+            host: Some(host),
+            ..Self::new(anim, origin)
         }
     }
 }
 
-pub(super) fn sample_mat_anim(time: Res<'_, Time>, mut q: Query<'_, '_, &mut MatAnim>) {
+pub(super) fn sample_mat_anim(
+    time: Res<'_, Time>,
+    hosts: SeqOwners<'_, '_>,
+    mut q: Query<'_, '_, &mut MatAnim>,
+) {
     let now = time.elapsed_secs_f64();
     for mut m in &mut q {
         let age = now - m.origin;
-        m.alpha = m.anim.sample(None, age as f32, age);
+        let (seq, elapsed) = match owner_playing(&hosts, m.host) {
+            Some(p) => {
+                m.seq = Some(p.seq);
+                (Some(p.seq), p.clip_time)
+            }
+            None if m.host.is_some() => (m.seq, 0.0),
+            None => (None, age as f32),
+        };
+        m.alpha = m.anim.sample(seq, elapsed, age);
     }
 }
 
@@ -359,6 +387,70 @@ mod tests {
         for i in 0..3 {
             assert!((at_rest[i] + d[i] - want[i]).abs() < 1e-6, "channel {i}");
         }
+    }
+
+    #[test]
+    fn a_units_batch_takes_the_alpha_of_the_sequence_it_plays() {
+        use bevy::animation::graph::AnimationNodeIndex;
+
+        use crate::rig::AnimClip;
+
+        let constant = |v: f32| AlphaSeq {
+            color: Some(KeyAnim {
+                period: 1.0,
+                step: false,
+                wrap: true,
+                gseq: false,
+                keys: vec![(0.0, v)],
+            }),
+            weight: None,
+        };
+        let anim = AlphaAnim::new(vec![constant(1.0), constant(0.0)]).expect("a loop");
+        let clip = |anim_id, seq_index, node| AnimClip {
+            anim_id,
+            seq_index,
+            node: AnimationNodeIndex::new(node),
+            looping: true,
+            duration: 1.0,
+            move_speed: 0.0,
+            blend_time: 0.0,
+            bounds_min: Vec3::ZERO,
+            bounds_max: Vec3::ZERO,
+            frequency: 0,
+            replay: (0, 0),
+            poses_bones: true,
+            events: Arc::from([]),
+        };
+        let anims = ModelAnimations {
+            graph: Handle::default(),
+            clips: vec![clip(0, 0, 1), clip(1, 1, 2)],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            moving_idle: None,
+            pose: Arc::default(),
+        };
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.add_systems(Update, sample_mat_anim);
+        let mut player = AnimationPlayer::default();
+        player.play(AnimationNodeIndex::new(2));
+        let unit = app.world_mut().spawn((player, anims)).id();
+        let part = app
+            .world_mut()
+            .spawn(MatAnim::following(Arc::new(anim), unit, 0.0))
+            .id();
+        app.update();
+        let alpha = |app: &App| app.world().get::<MatAnim>(part).expect("an alpha").alpha;
+        assert_eq!(alpha(&app), 0.0, "the second sequence hides it");
+        let mut player = app
+            .world_mut()
+            .get_mut::<AnimationPlayer>(unit)
+            .expect("a player");
+        player.stop_all();
+        player.play(AnimationNodeIndex::new(1));
+        app.update();
+        assert_eq!(alpha(&app), 1.0, "the first shows it");
     }
 
     #[test]

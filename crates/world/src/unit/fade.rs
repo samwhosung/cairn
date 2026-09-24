@@ -12,7 +12,9 @@ use model::ModelBlend;
 
 use super::body::BodyDressed;
 use super::light::{Law, UnitLight};
+use super::loops::{UnitAlphaAnimated, UnitCards};
 use super::shade::UnitShade;
+use crate::doodad_anim::MatAnim;
 use crate::liquid::FarSide;
 use crate::model_material::{BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant};
 use crate::visibility::{translucent, with_alpha, with_interior_fog, with_payload};
@@ -105,6 +107,21 @@ impl PartFade {
             depth_prime,
         }
     }
+
+    pub(crate) fn steady(&self) -> &Handle<ModelMaterial> {
+        &self.steady
+    }
+
+    /// Every material the part can be drawn with.
+    pub(crate) fn materials(&self) -> [AssetId<ModelMaterial>; 4] {
+        [
+            &self.steady,
+            &self.see_through,
+            &self.probe_lit,
+            &self.probe_lit_see_through,
+        ]
+        .map(Handle::id)
+    }
 }
 
 #[derive(Component)]
@@ -129,6 +146,8 @@ type Units<'w, 's> = Query<
         Option<&'static UnitAppear>,
         Option<Ref<'static, UnitLight>>,
         Option<&'static UnitShade>,
+        Option<&'static UnitCards>,
+        Has<UnitAlphaAnimated>,
     ),
     With<BodyDressed>,
 >;
@@ -141,6 +160,7 @@ type Parts<'w, 's> = Query<
         &'static mut MeshTag,
         &'static mut MeshMaterial3d<ModelMaterial>,
         &'static mut Visibility,
+        Option<&'static MatAnim>,
     ),
 >;
 
@@ -150,8 +170,8 @@ const OUTDOORS: UnitLight = UnitLight {
 };
 
 /// A unit's parts are rewritten while its alpha moves, when its light changes, and when a part
-/// joins it. The appear ramp never hides a part: at its start it draws at the smallest alpha there
-/// is.
+/// joins it; its cards with them. The appear ramp never hides a part: at its start it draws at the
+/// smallest alpha there is. A batch's own authored alpha multiplies in, and at zero hides it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_unit_look(
     mut commands: Commands<'_, '_>,
@@ -169,7 +189,7 @@ pub(crate) fn apply_unit_look(
         joined_units.extend(parents.iter_ancestors(part).filter(|&e| units.contains(e)));
     }
     let now = time.elapsed_secs();
-    for (root, owner, appear, light, shade) in &mut units {
+    for (root, owner, appear, light, shade, cards, alpha_moves) in &mut units {
         let (look, fading) = if let Some(appear) = appear {
             if appear.done(now) {
                 commands.entity(root).remove::<UnitAppear>();
@@ -191,12 +211,15 @@ pub(crate) fn apply_unit_look(
             (Look::Steady, false)
         };
         let relit = light.as_ref().is_some_and(Ref::is_changed);
-        if !fading && !relit && !joined_units.contains(&root) {
+        let joins = joined_units.contains(&root)
+            || cards.is_some_and(|c| c.0.iter().any(|&e| joined.contains(e)));
+        if !fading && !relit && !joins && !alpha_moves {
             continue;
         }
         let light = light.map_or(OUTDOORS, |l| *l);
         let shade_byte = shade.map(|s| u16::from(s.byte()));
-        for part in children.iter_descendants(root) {
+        let cards = cards.map_or(&[][..], |c| &c.0[..]);
+        for part in children.iter_descendants(root).chain(cards.iter().copied()) {
             if let Ok(item) = parts.get_mut(part) {
                 show_part(part, item, look, light, shade_byte, &side);
             }
@@ -204,20 +227,24 @@ pub(crate) fn apply_unit_look(
     }
 }
 
+type PartItem<'a> = (
+    &'a PartFade,
+    Mut<'a, MeshTag>,
+    Mut<'a, MeshMaterial3d<ModelMaterial>>,
+    Mut<'a, Visibility>,
+    Option<&'a MatAnim>,
+);
+
 fn show_part(
     part: Entity,
-    (fade, mut tag, mut material, mut vis): (
-        &PartFade,
-        Mut<'_, MeshTag>,
-        Mut<'_, MeshMaterial3d<ModelMaterial>>,
-        Mut<'_, Visibility>,
-    ),
+    (fade, mut tag, mut material, mut vis, authored): PartItem<'_>,
     look: Look,
     light: UnitLight,
     shade_byte: Option<u16>,
     side: &FarSide,
 ) {
     let probe = light.probe_lit();
+    let authored = authored.map_or(1.0, |m| m.alpha);
     let (alpha, want) = match (look, probe) {
         (Look::Steady, false) => (1.0, &fade.steady),
         (Look::Steady, true) => (1.0, &fade.probe_lit),
@@ -228,8 +255,12 @@ fn show_part(
             return;
         }
     };
+    if authored <= 0.0 {
+        vis.set_if_neq(Visibility::Hidden);
+        return;
+    }
     vis.set_if_neq(Visibility::Inherited);
-    let mut bits = with_alpha(tag.0, alpha);
+    let mut bits = with_alpha(tag.0, alpha * authored);
     bits = match (light.law, shade_byte) {
         (Law::Probe(slot), _) => with_payload(bits, slot),
         (_, Some(byte)) => with_payload(bits, byte),

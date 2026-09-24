@@ -2,6 +2,7 @@ use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
 use super::light::UnitLight;
+use super::loops::UnitCards;
 use crate::adt::AdtTile;
 use crate::model_material::GroundShade;
 use crate::models::ground_shade;
@@ -98,18 +99,30 @@ fn ramp_toward(v: f32, target: f32, step: f32) -> f32 {
     }
 }
 
+type Units<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static GlobalTransform,
+        &'static mut UnitShade,
+        Option<&'static UnitLight>,
+        Option<&'static UnitCards>,
+    ),
+>;
+
 /// A unit lit by a probe of its own holds the probe's slot where the shade byte would go.
 pub(crate) fn update_unit_shade(
     time: Res<'_, Time>,
     streamer: Res<'_, Streamer>,
     adts: Res<'_, Assets<AdtTile>>,
-    mut units: Query<'_, '_, (Entity, &GlobalTransform, &mut UnitShade, Option<&UnitLight>)>,
+    mut units: Units<'_, '_>,
     children: Query<'_, '_, &Children>,
     mut tags: Query<'_, '_, &mut MeshTag>,
 ) {
     let step = RAMP_PER_SEC * time.delta_secs();
     let ambient_step = AMBIENT_RAMP_PER_SEC * time.delta_secs();
-    for (root, gt, mut shade, light) in &mut units {
+    for (root, gt, mut shade, light, cards) in &mut units {
         let pos = gt.translation();
         if !shade.sampled || pos.distance(shade.last_pos) >= RESAMPLE_DIST {
             let at = Transform::from_translation(pos);
@@ -138,7 +151,8 @@ pub(crate) fn update_unit_shade(
             continue;
         }
         let byte = u32::from(shade.byte());
-        for part in children.iter_descendants(root) {
+        let cards = cards.map_or(&[][..], |c| &c.0[..]);
+        for part in children.iter_descendants(root).chain(cards.iter().copied()) {
             if let Ok(mut tag) = tags.get_mut(part)
                 && (tag.0 & SHADE_MASK) >> SHADE_SHIFT != byte
             {

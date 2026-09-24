@@ -7,6 +7,7 @@ mod drive;
 mod fade;
 mod light;
 mod look;
+mod loops;
 mod motion;
 mod shade;
 mod twist;
