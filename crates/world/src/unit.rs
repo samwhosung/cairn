@@ -1,10 +1,11 @@
 //! Creatures and characters: a body's model dressed in its skins, skinned to its skeleton and
-//! lit by its own shade.
+//! lit by its own shade outdoors and by the room it stands in indoors.
 
 mod attach;
 mod body;
 mod drive;
 mod fade;
+mod light;
 mod look;
 mod motion;
 mod shade;
@@ -22,7 +23,7 @@ pub use shade::UnitShade;
 pub use twist::BodyTwist;
 
 /// A unit's per-frame work in `Update`: dress what arrived, hang what it wears, drive its
-/// animation from its movement, ramp its shade, carry its alpha.
+/// animation from its movement, light it by where it stands, ramp its shade, carry its alpha.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UnitSystems;
 
@@ -38,8 +39,9 @@ impl Plugin for UnitPlugin {
                     body::dress_bodies,
                     attach::attach_worn,
                     drive::drive_units,
+                    light::classify_unit_light.after(crate::portal::compute_wmo_pvs),
+                    fade::apply_unit_look,
                     shade::update_unit_shade,
-                    fade::apply_unit_alpha,
                     fade::sync_depth_primes,
                 )
                     .chain()

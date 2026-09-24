@@ -52,41 +52,113 @@ impl SurfaceUnderfoot<'_, '_> {
 }
 
 fn material_under(model: &WmoModel, group: usize, probe: [f32; 3]) -> Option<u32> {
-    let fp = model.group_footprints.get(group)?.as_ref()?;
-    let [px, py, pz] = probe;
-    if let Some(Some((min, max))) = model.group_footprint_bounds.get(group)
-        && (px < min[0] || px > max[0] || py < min[1] || py > max[1] || min[2] > pz)
-    {
-        return None;
-    }
-    let mut best: Option<(f32, u8)> = None;
-    for (ti, tri) in fp.indices.as_chunks::<3>().0.iter().enumerate() {
-        let (Some(a), Some(b), Some(c)) = (
-            fp.positions.get(usize::from(tri[0])),
-            fp.positions.get(usize::from(tri[1])),
-            fp.positions.get(usize::from(tri[2])),
-        ) else {
-            continue;
-        };
-        let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
-        if det.abs() < 1e-9 {
-            continue;
-        }
-        let wb = ((px - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (py - a[1])) / det;
-        let wc = ((b[0] - a[0]) * (py - a[1]) - (px - a[0]) * (b[1] - a[1])) / det;
-        let wa = 1.0 - wb - wc;
-        if wa < 0.0 || wb < 0.0 || wc < 0.0 {
-            continue;
-        }
-        let z = wa * a[2] + wb * b[2] + wc * c[2];
-        if z > pz || best.is_some_and(|(bz, _)| z < bz) {
-            continue;
-        }
-        best = Some((z, fp.mopy_material.get(ti).copied().unwrap_or(0xFF)));
-    }
-    let (_, material) = best?;
+    let hit = footprint_under(model, probe, Some(group))?;
     model
         .material_ground_types
-        .get(usize::from(material))
+        .get(usize::from(hit.material))
         .copied()
+}
+
+/// The render face a ray down from a point meets first among a building's interior groups.
+pub(crate) struct FootprintHit {
+    pub group: usize,
+    /// The face's baked colour where the ray meets it.
+    pub mocv: [u8; 3],
+    /// The face asks to be lit by the day and night instead of its baked colour.
+    pub day_night: bool,
+    pub material: u8,
+}
+
+/// Of faces at the same height the later one wins, as in the client.
+pub(crate) fn footprint_under(
+    model: &WmoModel,
+    probe: [f32; 3],
+    only_group: Option<usize>,
+) -> Option<FootprintHit> {
+    let [px, py, pz] = probe;
+    let mut best: Option<(f32, FootprintHit)> = None;
+    for (gi, fp) in model.group_footprints.iter().enumerate() {
+        let Some(fp) = fp else { continue };
+        if only_group.is_some_and(|g| g != gi) {
+            continue;
+        }
+        if let Some(Some((min, max))) = model.group_footprint_bounds.get(gi)
+            && (px < min[0] || px > max[0] || py < min[1] || py > max[1] || min[2] > pz)
+        {
+            continue;
+        }
+        for (ti, tri) in fp.indices.as_chunks::<3>().0.iter().enumerate() {
+            let corner = |k: usize| {
+                let i = usize::from(tri[k]);
+                Some((*fp.positions.get(i)?, *fp.mocv.get(i)?))
+            };
+            let (Some((a, ca)), Some((b, cb)), Some((c, cc))) = (corner(0), corner(1), corner(2))
+            else {
+                continue;
+            };
+            let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+            if det.abs() < 1e-9 {
+                continue;
+            }
+            let wb = ((px - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (py - a[1])) / det;
+            let wc = ((b[0] - a[0]) * (py - a[1]) - (px - a[0]) * (b[1] - a[1])) / det;
+            let wa = 1.0 - wb - wc;
+            if wa < 0.0 || wb < 0.0 || wc < 0.0 {
+                continue;
+            }
+            let z = wa * a[2] + wb * b[2] + wc * c[2];
+            if z > pz || best.as_ref().is_some_and(|(bz, _)| z < *bz) {
+                continue;
+            }
+            let mocv = std::array::from_fn(|k| {
+                let v = wa * f32::from(ca[k]) + wb * f32::from(cb[k]) + wc * f32::from(cc[k]);
+                v.round().clamp(0.0, 255.0) as u8
+            });
+            let hit = FootprintHit {
+                group: gi,
+                mocv,
+                day_night: fp.mopy_flags.get(ti).is_some_and(|f| f & 0x1 != 0),
+                material: fp.mopy_material.get(ti).copied().unwrap_or(0xFF),
+            };
+            best = Some((z, hit));
+        }
+    }
+    best.map(|(_, hit)| hit)
+}
+
+#[cfg(test)]
+mod tests {
+    use model::FootprintTris;
+
+    use super::*;
+
+    fn floor(z: f32, mocv: [[u8; 3]; 3], flags: u8) -> FootprintTris {
+        FootprintTris {
+            positions: vec![[0.0, 0.0, z], [10.0, 0.0, z], [0.0, 10.0, z]],
+            indices: vec![0, 1, 2],
+            mocv: mocv.to_vec(),
+            mopy_flags: vec![flags],
+            mopy_material: vec![3],
+        }
+    }
+
+    #[test]
+    fn the_nearest_floor_below_gives_its_colour_where_the_ray_meets_it() {
+        let mut m = WmoModel::empty();
+        m.group_footprints = vec![
+            Some(floor(0.0, [[0, 0, 0], [200, 100, 50], [0, 0, 0]], 0)),
+            Some(floor(2.0, [[9; 3]; 3], 0x1)),
+        ];
+        m.group_footprint_bounds = vec![None, None];
+        let hit = footprint_under(&m, [5.0, 0.0, 1.0], None).expect("the lower floor");
+        assert_eq!(
+            (hit.group, hit.mocv, hit.day_night),
+            (0, [100, 50, 25], false)
+        );
+        let hit = footprint_under(&m, [5.0, 0.0, 3.0], None).expect("the upper floor");
+        assert_eq!((hit.group, hit.day_night, hit.material), (1, true, 3));
+        let hit = footprint_under(&m, [5.0, 0.0, 3.0], Some(0)).expect("the one group asked");
+        assert_eq!(hit.group, 0);
+        assert!(footprint_under(&m, [8.0, 8.0, 3.0], None).is_none());
+    }
 }

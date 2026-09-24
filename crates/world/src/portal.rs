@@ -16,7 +16,7 @@ use crate::wmo::{Triangle, WmoGroupNav, WmoModel, WmoRooms};
 
 pub(crate) const EXTERIOR: u32 = 0x8;
 /// An indoor group lit as outdoors.
-const EXTERIOR_LIT: u32 = 0x40;
+pub(crate) const EXTERIOR_LIT: u32 = 0x40;
 /// A group the client draws in a pass of its own, against the whole frustum.
 const CALLBACK_PASS: u32 = 0x10000;
 const ON_PLANE_EPS: f32 = 0.01;

@@ -52,13 +52,16 @@ pub(crate) fn fold_interior_probe(
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ProbeKey([[u32; 4]; PROBE_ROWS]);
 
+/// Identical probes share a slot; an owned slot, a moving unit's, is its alone and rewritten in
+/// place.
 #[derive(Resource)]
 pub(crate) struct PropProbes {
     rows: Arc<Vec<[[f32; 4]; PROBE_ROWS]>>,
     free: Vec<u16>,
     high: usize,
     by_key: HashMap<ProbeKey, u16>,
-    slots: Vec<Option<(u32, ProbeKey)>>,
+    /// A live slot's references and, unless it is owned, the probe it is shared by.
+    slots: Vec<Option<(u32, Option<ProbeKey>)>>,
     generation: u64,
 }
 
@@ -84,19 +87,41 @@ impl PropProbes {
             *refs += 1;
             return Some(slot);
         }
-        let slot = match self.free.pop() {
-            Some(s) => s,
-            None if self.high < MAX_PROP_PROBES => {
-                self.high += 1;
-                (self.high - 1) as u16
-            }
-            None => return None,
-        };
+        let slot = self.take_free()?;
         Arc::make_mut(&mut self.rows)[slot as usize] = coeffs.map(|v| v.to_array());
         self.by_key.insert(key.clone(), slot);
-        self.slots[slot as usize] = Some((1, key));
+        self.slots[slot as usize] = Some((1, Some(key)));
         self.generation += 1;
         Some(slot)
+    }
+
+    pub(crate) fn alloc_owned(&mut self, coeffs: [Vec4; PROBE_ROWS]) -> Option<u16> {
+        let slot = self.take_free()?;
+        Arc::make_mut(&mut self.rows)[slot as usize] = coeffs.map(|v| v.to_array());
+        self.slots[slot as usize] = Some((1, None));
+        self.generation += 1;
+        Some(slot)
+    }
+
+    /// A slot that is not owned is left alone: writing a shared one would relight every prop on it.
+    pub(crate) fn update_owned(&mut self, slot: u16, coeffs: [Vec4; PROBE_ROWS]) {
+        if !matches!(self.slots.get(slot as usize), Some(Some((_, None)))) {
+            warn_once!("a unit's probe slot {slot} is not its own");
+            return;
+        }
+        Arc::make_mut(&mut self.rows)[slot as usize] = coeffs.map(|v| v.to_array());
+        self.generation += 1;
+    }
+
+    fn take_free(&mut self) -> Option<u16> {
+        match self.free.pop() {
+            Some(s) => Some(s),
+            None if self.high < MAX_PROP_PROBES => {
+                self.high += 1;
+                Some((self.high - 1) as u16)
+            }
+            None => None,
+        }
     }
 
     fn release(&mut self, slot: u16) {
@@ -107,7 +132,7 @@ impl PropProbes {
         if *refs > 0 {
             return;
         }
-        if let Some((_, key)) = self.slots[slot as usize].take() {
+        if let Some((_, Some(key))) = self.slots[slot as usize].take() {
             self.by_key.remove(&key);
         }
         Arc::make_mut(&mut self.rows)[slot as usize] = [[0.0; 4]; PROBE_ROWS];
@@ -211,6 +236,25 @@ mod tests {
             t.alloc([Vec4::ONE; PROBE_ROWS]),
             Some(a),
             "a freed slot is reused"
+        );
+    }
+
+    #[test]
+    fn an_owned_slot_is_never_shared_and_rewrites_in_place() {
+        let mut t = PropProbes::default();
+        let c = [Vec4::splat(0.5); PROBE_ROWS];
+        let owned = t.alloc_owned(c).expect("room");
+        let shared = t.alloc(c).expect("room");
+        assert_ne!(owned, shared, "an owned slot takes no sharers");
+        t.update_owned(owned, [Vec4::ONE; PROBE_ROWS]);
+        assert_eq!(t.rows[owned as usize], [[1.0; 4]; PROBE_ROWS]);
+        t.update_owned(shared, [Vec4::ONE; PROBE_ROWS]);
+        assert_eq!(t.rows[shared as usize], [[0.5; 4]; PROBE_ROWS]);
+        t.release(owned);
+        assert_eq!(
+            t.alloc_owned(c),
+            Some(owned),
+            "a freed owned slot is reused"
         );
     }
 

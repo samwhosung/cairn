@@ -77,12 +77,21 @@ pub(crate) fn cap96(c: [u8; 3]) -> [f32; 3] {
 /// The diffuse word from a doodad's baked colour: raised, keeping its hue, until its brightest
 /// channel is 112, truncating.
 pub(crate) fn floor112(c: [u8; 3]) -> [f32; 3] {
-    const THRESH: u32 = 112;
+    floor_raise(c, 112)
+}
+
+/// The diffuse word a unit takes from the baked colour of the floor under it: as a doodad's, raised
+/// to 168.
+pub(crate) fn floor168(c: [u8; 3]) -> [f32; 3] {
+    floor_raise(c, 168)
+}
+
+fn floor_raise(c: [u8; 3], thresh: u32) -> [f32; 3] {
     let max = c[0].max(c[1]).max(c[2]);
-    if u32::from(max) >= THRESH || max == 0 {
+    if u32::from(max) >= thresh || max == 0 {
         return c.map(|v| f32::from(v) / 255.0);
     }
-    c.map(|v| ((u32::from(v) * THRESH) / u32::from(max)) as f32 / 255.0)
+    c.map(|v| ((u32::from(v) * thresh) / u32::from(max)) as f32 / 255.0)
 }
 
 fn first_placing_groups(doodad_count: usize, group_refs: &[Vec<u16>]) -> Vec<Option<u16>> {
@@ -231,6 +240,40 @@ impl AssetLoader for WmoLoader {
 }
 
 #[cfg(test)]
+impl WmoModel {
+    /// A building with nothing in it, for a test to furnish.
+    pub(crate) fn empty() -> Self {
+        Self {
+            submeshes: Vec::new(),
+            submesh_group: Vec::new(),
+            rooms: WmoRooms {
+                wmo_id: 0,
+                group_nav: Vec::new(),
+                portal_vertices: Vec::new(),
+                portal_infos: Vec::new(),
+                portal_refs: Vec::new(),
+                group_collision_tris: Vec::new(),
+                group_camera_only_tris: Vec::new(),
+                group_collision_bounds: Vec::new(),
+                group_liquids: Vec::new(),
+            },
+            material_diff_colors: Vec::new(),
+            group_footprints: Vec::new(),
+            group_footprint_bounds: Vec::new(),
+            material_ground_types: Vec::new(),
+            doodads: Vec::new(),
+            doodad_sets: Vec::new(),
+            doodad_base: Vec::new(),
+            doodad_groups: Vec::new(),
+            lights: Vec::new(),
+            group_light_refs: Vec::new(),
+            fogs: Vec::new(),
+            skybox: None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -246,6 +289,8 @@ mod tests {
         assert_eq!(bytes(floor112([78, 76, 134])), [78, 76, 134]);
         assert_eq!(bytes(floor112([56, 28, 14])), [112, 56, 28]);
         assert_eq!(bytes(floor112([0, 0, 0])), [0, 0, 0]);
+        assert_eq!(bytes(floor168([141, 105, 59])), [168, 125, 70]);
+        assert_eq!(bytes(floor168([200, 20, 0])), [200, 20, 0]);
     }
 
     fn prop(color: [u8; 4]) -> WmoDoodad {

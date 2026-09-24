@@ -78,7 +78,7 @@ impl UnitRoom {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct WmoGeneration(u32);
+pub(crate) struct WmoGeneration(pub(crate) u32);
 
 pub(crate) fn bump_wmo_generation(
     mut generation: ResMut<'_, WmoGeneration>,
@@ -257,22 +257,46 @@ fn interior_group_under(
     eye_model: [f32; 3],
     terrain_z: Option<f32>,
 ) -> Option<usize> {
+    down_ray_claim(model, eye_model, terrain_z, EXTERIOR)
+        .filter(|c| !c.outdoor)
+        .map(|c| c.group)
+}
+
+/// The building face a ray down from a point meets first, if the building takes the column.
+pub(crate) struct DownRayClaim {
+    pub group: usize,
+    /// How far below the point it lies; buildings are placed without scale, so depths compare
+    /// across them.
+    pub depth: f32,
+    /// Its group carries one of the caller's outdoor flags.
+    pub outdoor: bool,
+}
+
+pub(crate) fn down_ray_claim(
+    model: &WmoModel,
+    eye_model: [f32; 3],
+    terrain_z: Option<f32>,
+    outdoor_mask: u32,
+) -> Option<DownRayClaim> {
     let (group, best_z) = nearest_face_below(
         &model.rooms.group_collision_tris,
         &model.rooms.group_collision_bounds,
         eye_model,
     )?;
-    if eye_model[2] - best_z > FEET_RAY_REACH
-        || terrain_z.is_some_and(|tz| tz <= eye_model[2] && tz > best_z)
-    {
+    let depth = eye_model[2] - best_z;
+    if depth > FEET_RAY_REACH || terrain_z.is_some_and(|tz| tz <= eye_model[2] && tz > best_z) {
         return None;
     }
     let outdoor = model
         .rooms
         .group_nav
         .get(group)
-        .is_none_or(|g: &WmoGroupNav| g.flags & EXTERIOR != 0);
-    (!outdoor).then_some(group)
+        .is_none_or(|g: &WmoGroupNav| g.flags & outdoor_mask != 0);
+    Some(DownRayClaim {
+        group,
+        depth,
+        outdoor,
+    })
 }
 
 /// Groups are culled by the box of their own collision faces, never their authored box, which can
@@ -302,4 +326,46 @@ fn nearest_face_below(
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::portal::EXTERIOR_LIT;
+
+    fn nav(flags: u32) -> WmoGroupNav {
+        WmoGroupNav {
+            flags,
+            wmo_group_id: 0,
+            bbox_min: [0.0; 3],
+            bbox_max: [10.0; 3],
+            ref_start: 0,
+            ref_count: 0,
+            interior: false,
+            flooded: None,
+            fog_indices: [0; 4],
+        }
+    }
+
+    #[test]
+    fn a_claim_is_the_nearest_face_below_under_the_callers_outdoor_flags() {
+        let mut m = WmoModel::empty();
+        let tri = |z: f32| [[0.0, 0.0, z], [10.0, 0.0, z], [0.0, 10.0, z]];
+        m.rooms.group_collision_tris = vec![vec![tri(0.0)], vec![tri(2.0)]];
+        m.rooms.group_collision_bounds = vec![
+            Some(([0.0, 0.0, 0.0], [10.0, 10.0, 0.0])),
+            Some(([0.0, 0.0, 2.0], [10.0, 10.0, 2.0])),
+        ];
+        m.rooms.group_nav = vec![nav(0), nav(EXTERIOR_LIT)];
+        let eye = [1.0, 1.0, 5.0];
+        let lit = down_ray_claim(&m, eye, None, EXTERIOR | EXTERIOR_LIT).expect("a face");
+        assert_eq!((lit.group, lit.depth, lit.outdoor), (1, 3.0, true));
+        let area = down_ray_claim(&m, eye, None, EXTERIOR).expect("a face");
+        assert!(!area.outdoor, "a room lit as outdoors is still a room");
+        assert!(down_ray_claim(&m, eye, Some(4.0), EXTERIOR).is_none());
+        assert!(
+            down_ray_claim(&m, eye, Some(2.0), EXTERIOR).is_some(),
+            "a tie keeps it"
+        );
+    }
 }
