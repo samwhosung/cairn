@@ -63,6 +63,10 @@ const ON_THE_SNOW_OUTSIDE_KHARANOS: Stand = Stand {
     xy: [-5650.0, -450.0],
     heading: 0.0,
 };
+const ON_THE_SAND_OF_THE_WESTFALL_COAST: Stand = Stand {
+    xy: [-11350.0, 1850.0],
+    heading: 0.0,
+};
 
 struct Painter {
     app: App,
@@ -382,6 +386,40 @@ fn the_walker_runs_on_snow_strafes_and_sits() {
     p.key(KeyCode::KeyX, ButtonState::Released);
     p.wait(1.5);
     p.shoot("pose-3-sitting");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_leaves_prints_on_snow_and_sand_and_breathes_in_the_cold() {
+    // Every stand a dwarf rolls breathes; one of a human's never does.
+    let dwarf = CharacterLook::naked(3, 0);
+    for (ground, stand, look) in [
+        ("snow", ON_THE_SNOW_OUTSIDE_KHARANOS, dwarf),
+        (
+            "sand",
+            ON_THE_SAND_OF_THE_WESTFALL_COAST,
+            CharacterLook::naked(1, 0),
+        ),
+    ] {
+        let Some(mut p) = Painter::new(stand.xy, stand.heading, look) else {
+            return;
+        };
+        p.key(KeyCode::KeyW, ButtonState::Pressed);
+        p.wait(2.0);
+        p.key(KeyCode::KeyW, ButtonState::Released);
+        p.orbit(std::f32::consts::PI, 5.0);
+        p.tilt_up(-0.8);
+        p.wait(0.5);
+        p.shoot(&format!("marks-{ground}-prints"));
+        if ground == "snow" {
+            p.orbit(-std::f32::consts::FRAC_PI_2, 3.0);
+            p.tilt_up(-0.1);
+            p.wait(2.4);
+            p.shoot("marks-snow-breath-1");
+            p.wait(0.3);
+            p.shoot("marks-snow-breath-2");
+        }
+    }
 }
 
 #[test]
