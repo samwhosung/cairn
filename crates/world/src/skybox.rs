@@ -23,7 +23,7 @@ const GROUP_SHOWS_SKYBOX: u32 = 0x40000;
 const REPLACES_SKY: f32 = 0.99;
 
 #[derive(Component)]
-pub(crate) struct ReplacedByPaintedSky;
+pub(crate) struct SkyPass;
 
 #[derive(Resource, Default, Clone, PartialEq, Debug)]
 pub(crate) struct Skybox {
@@ -243,11 +243,10 @@ fn show(
     }
 }
 
-/// Under a liquid the client skips the whole sky pass, as it does for a painted sky.
 fn stand_down_sky(
     skybox: Res<'_, Skybox>,
     underwater: Res<'_, Underwater>,
-    mut sky: Query<'_, '_, &mut Visibility, With<ReplacedByPaintedSky>>,
+    mut sky: Query<'_, '_, &mut Visibility, With<SkyPass>>,
 ) {
     let want = if skybox.weight > REPLACES_SKY || underwater.0.any() {
         Visibility::Hidden

@@ -14,7 +14,7 @@ use bevy::transform::TransformSystems;
 
 use crate::light::SceneLight;
 use crate::sky_order::{SKY_VERTEX_SHADER, sky_pipeline_state};
-use crate::skybox::ReplacedByPaintedSky;
+use crate::skybox::SkyPass;
 use crate::view::WorldCamera;
 
 pub type SkyMaterial = ExtendedMaterial<StandardMaterial, SkyExtension>;
@@ -105,7 +105,7 @@ fn spawn_dome(
         MeshMaterial3d(material),
         Transform::default(),
         Dome,
-        ReplacedByPaintedSky,
+        SkyPass,
     ));
 }
 

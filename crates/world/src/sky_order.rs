@@ -21,18 +21,26 @@ pub(crate) const GLARE_SORT_RUNG: f32 = 2.0e4;
 /// the rung's one key.
 const SKYBOX_ORDER_STEP: f32 = 1.0 / 64.0;
 const SKYBOX_ORDER_CAP: f32 = 0.9;
-const SKYBOX_BAND_DROP: f32 = 0.99;
+/// A band's batches start this far under their rung, so their order steps, below one, all
+/// truncate to the band's one pipeline key.
+pub(crate) const BAND_DROP: f32 = 0.99;
 
 pub(crate) fn skybox_batch_bias(batch_order: f32) -> f32 {
-    SKYBOX_SORT_RUNG - SKYBOX_BAND_DROP + (batch_order * SKYBOX_ORDER_STEP).min(SKYBOX_ORDER_CAP)
+    SKYBOX_SORT_RUNG - BAND_DROP + (batch_order * SKYBOX_ORDER_STEP).min(SKYBOX_ORDER_CAP)
 }
 
-/// A rung rides the material's depth bias, which also offsets the rasterized depth; a sky pipeline
-/// takes it back, so the pinned far depth reaches the depth test as it is.
+/// A rung rides the material's depth bias, which also offsets the rasterized depth; a draw placed
+/// by its rung takes it back, so its depth reaches the depth test as it is.
+pub(crate) fn sort_only(descriptor: &mut RenderPipelineDescriptor) {
+    if let Some(depth) = descriptor.depth_stencil.as_mut() {
+        depth.bias.constant = 0;
+    }
+}
+
 pub(crate) fn sky_pipeline_state(descriptor: &mut RenderPipelineDescriptor) {
+    sort_only(descriptor);
     if let Some(depth) = descriptor.depth_stencil.as_mut() {
         depth.depth_write_enabled = false;
-        depth.bias.constant = 0;
     }
 }
 
@@ -57,7 +65,7 @@ const _: () = {
         assert!(rungs[i] - rungs[i - 1] > PROJECTION_FAR);
         i += 1;
     }
-    let band_floor = SKYBOX_SORT_RUNG - SKYBOX_BAND_DROP;
+    let band_floor = SKYBOX_SORT_RUNG - BAND_DROP;
     assert!(band_floor as i32 == (band_floor + SKYBOX_ORDER_CAP) as i32);
     assert!(band_floor + SKYBOX_ORDER_STEP > band_floor);
 };

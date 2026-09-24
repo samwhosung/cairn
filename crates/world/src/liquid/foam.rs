@@ -46,7 +46,6 @@ struct FoamRecord {
     patch: Patch,
 }
 
-/// A record's triangles, in Bevy space, and the surface it lies on.
 struct Patch {
     triangles: Vec<Vec3>,
     surface: Entity,
@@ -325,7 +324,18 @@ fn patch_mesh(positions: Vec<[f32; 3]>, uvs: Vec<[f32; 2]>, colors: Vec<[f32; 4]
     mesh
 }
 
-/// Each draw sorts at the centre of its vertices.
+/// Bevy sorts a transparent draw at its box's centre: the box is set about the vertices' centroid.
+fn sort_at_centroid(positions: &[[f32; 3]]) -> Aabb {
+    let centre = positions.iter().map(|&p| Vec3::from(p)).sum::<Vec3>() / positions.len() as f32;
+    let reach = positions
+        .iter()
+        .fold(Vec3::ZERO, |r, &p| r.max((Vec3::from(p) - centre).abs()));
+    Aabb {
+        center: centre.into(),
+        half_extents: reach.into(),
+    }
+}
+
 fn draw_foam(
     time: Res<'_, Time>,
     draws: Option<Res<'_, FoamDraws>>,
@@ -363,15 +373,7 @@ fn draw_foam(
             vis.set_if_neq(Visibility::Hidden);
             continue;
         }
-        let centre =
-            positions.iter().map(|&p| Vec3::from(p)).sum::<Vec3>() / positions.len() as f32;
-        let reach = positions
-            .iter()
-            .fold(Vec3::ZERO, |r, &p| r.max((Vec3::from(p) - centre).abs()));
-        *aabb = Aabb {
-            center: centre.into(),
-            half_extents: reach.into(),
-        };
+        *aabb = sort_at_centroid(&positions);
         if let Some(m) = meshes.get_mut(mesh) {
             *m = patch_mesh(positions, uvs, colors);
         }

@@ -96,7 +96,6 @@ impl LiquidClaim {
     }
 }
 
-/// A wet cell's corners in world WoW space.
 pub(crate) struct CellCorners {
     pub(crate) tl: [f32; 3],
     pub(crate) tr: [f32; 3],

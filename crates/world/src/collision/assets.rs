@@ -32,8 +32,8 @@ pub struct TileCollision {
 #[derive(Asset, TypePath)]
 pub struct M2Hull(pub Option<CollisionMesh>);
 
-/// A WMO's walking faces and camera faces over all its groups, in model space, and the doodads
-/// its sets place.
+/// A WMO's walking faces and camera faces over all its groups, in model space, the doodads its
+/// sets place, and its rooms and their liquid.
 #[derive(Asset, TypePath)]
 pub struct WmoHull {
     pub(super) walk: Option<CollisionMesh>,

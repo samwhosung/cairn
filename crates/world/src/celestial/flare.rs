@@ -78,9 +78,10 @@ impl FlareGate<'_> {
     }
 }
 
-/// The client fades the glare out over the first ten yards of water over the eye.
+const GLARE_GONE_AT_DEPTH: f32 = 10.0;
+
 fn submersion_fade(depth: f32) -> f32 {
-    1.0 - (depth * 0.1).clamp(0.0, 1.0)
+    1.0 - (depth / GLARE_GONE_AT_DEPTH).clamp(0.0, 1.0)
 }
 
 fn horizon_fade(dir: Vec3) -> f32 {

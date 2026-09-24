@@ -30,9 +30,8 @@ use crate::wmo::WmoRooms;
 pub type LiquidMaterial = ExtendedMaterial<StandardMaterial, LiquidExtension>;
 
 const WATER_SHININESS: f32 = 6.0;
-/// The type nibbles of a building's scrolling magma and slime.
-const SCROLLING_MAGMA: u8 = 6;
-const SCROLLING_SLIME: u8 = 7;
+const WMO_SCROLLING_MAGMA_NIBBLE: u8 = 6;
+const WMO_SCROLLING_SLIME_NIBBLE: u8 = 7;
 const DEPTH_COORD: MeshVertexAttribute = Mesh::ATTRIBUTE_UV_1;
 const BODY_COLOR: MeshVertexAttribute = Mesh::ATTRIBUTE_COLOR;
 
@@ -69,16 +68,13 @@ impl MaterialExtension for LiquidExtension {
         "embedded://world/liquid/liquid.wgsl".into()
     }
 
-    /// The water rung is a sort key only: as a depth bias it would move the waterline.
     fn specialize(
         _pipeline: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        if let Some(ds) = descriptor.depth_stencil.as_mut() {
-            ds.bias.constant = 0;
-        }
+        crate::sky_order::sort_only(descriptor);
         Ok(())
     }
 }
@@ -114,7 +110,10 @@ impl LiquidRenderer {
 }
 
 pub(super) fn scrolls(nibble: u8) -> bool {
-    matches!(nibble, SCROLLING_MAGMA | SCROLLING_SLIME)
+    matches!(
+        nibble,
+        WMO_SCROLLING_MAGMA_NIBBLE | WMO_SCROLLING_SLIME_NIBBLE
+    )
 }
 
 struct FrameSet {
