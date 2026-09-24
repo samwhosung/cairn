@@ -12,13 +12,13 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use super::super::motion::anim::{
-    FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, STAND, SWIM, SWIM_IDLE,
-    WALK, WALK_BACKWARDS,
+    FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, SIT_GROUND,
+    SIT_GROUND_DOWN, SIT_GROUND_UP, STAND, SWIM, SWIM_IDLE, WALK, WALK_BACKWARDS,
 };
 use super::super::motion::move_flags::{
     BACKWARD, FALLING, FALLING_FAR, FORWARD, SWIMMING, TURN_LEFT, WALK_MODE,
 };
-use super::super::motion::{Airborne, Mode, UnitMotion};
+use super::super::motion::{Mode, Special, UnitMotion};
 use super::{UnitDriver, drive_units};
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 
@@ -114,6 +114,14 @@ fn moving(app: &mut App, unit: Entity, flags: u32, speed: f32, vertical_speed: f
         speed,
         vertical_speed,
         flags,
+        stand_state: 0,
+    });
+}
+
+fn posed(app: &mut App, unit: Entity, stand_state: u8) {
+    app.world_mut().entity_mut(unit).insert(UnitMotion {
+        stand_state,
+        ..UnitMotion::default()
     });
 }
 
@@ -170,7 +178,7 @@ fn a_jump_starts_hangs_and_lands_running_then_stands_when_the_keys_let_go() {
         Some(JUMP_START),
         "JumpStart on the launch frame"
     );
-    assert_eq!(playing(&app, unit).2, Mode::Entering(Airborne::Jump));
+    assert_eq!(playing(&app, unit).2, Mode::Entering(Special::Jump));
     moving(&mut app, unit, FORWARD | FALLING, 7.0, 3.0);
     frames(&mut app, 40);
     assert_eq!(
@@ -248,7 +256,7 @@ fn a_step_off_holds_its_gait_until_it_falls_far() {
     frames(&mut app, 1);
     assert_eq!(
         (playing(&app, unit).0, playing(&app, unit).2),
-        (Some(FALL), Mode::Looping(Airborne::Fall))
+        (Some(FALL), Mode::Looping(Special::Fall))
     );
 }
 
@@ -263,7 +271,7 @@ fn a_jump_out_of_a_one_frame_step_off_still_jumps() {
     assert_eq!(playing(&app, unit).2, Mode::Gait);
     moving(&mut app, unit, FORWARD | FALLING, 7.0, 7.96);
     frames(&mut app, 1);
-    assert_eq!(playing(&app, unit).2, Mode::Entering(Airborne::Jump));
+    assert_eq!(playing(&app, unit).2, Mode::Entering(Special::Jump));
 }
 
 #[test]
@@ -328,4 +336,48 @@ fn a_standing_body_rolls_among_its_stand_variations() {
         }
     }
     assert!(nodes.iter().all(|n| seen.contains(n)), "{seen:?}");
+}
+
+#[test]
+fn a_sit_goes_down_holds_and_stands_up_or_walks_straight_out() {
+    let mut app = app();
+    let mut rows = WALKER.to_vec();
+    rows.extend([
+        (SIT_GROUND_DOWN, 0.5, false, 0.0, 0x7fff, (0, 0)),
+        (SIT_GROUND, 2.0, true, 0.0, 0x7fff, (0, 0)),
+        (SIT_GROUND_UP, 0.5, false, 0.0, 0x7fff, (0, 0)),
+    ]);
+    let unit = body(&mut app, &rows);
+    frames(&mut app, 2);
+    posed(&mut app, unit, 1);
+    frames(&mut app, 2);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(SIT_GROUND_DOWN), Mode::Entering(Special::Pose(1)))
+    );
+    frames(&mut app, 60);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(SIT_GROUND), Mode::Looping(Special::Pose(1)))
+    );
+    posed(&mut app, unit, 0);
+    frames(&mut app, 2);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (
+            Some(SIT_GROUND_UP),
+            Mode::Exiting(Special::Pose(1), SIT_GROUND_UP)
+        )
+    );
+    frames(&mut app, 60);
+    assert_eq!(playing(&app, unit).0, Some(STAND));
+    posed(&mut app, unit, 1);
+    frames(&mut app, 70);
+    moving(&mut app, unit, FORWARD, 2.5, 0.0);
+    frames(&mut app, 2);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(WALK), Mode::Gait),
+        "walking out of a sit skips the stand-up"
+    );
 }

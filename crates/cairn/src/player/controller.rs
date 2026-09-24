@@ -279,6 +279,7 @@ pub fn control(
             },
             vertical_speed: player.vel_y,
             flags: anim_flags,
+            stand_state: 0,
         };
         alpha.alpha = rig.self_fade_alpha;
         if let Some(mut twist) = twist {

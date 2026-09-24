@@ -1,6 +1,6 @@
 //! What a moving unit asks its body to play: the client's animation selector for the states a
 //! walking body takes, standing, walking, running, backing, turning, swimming, jumping and
-//! falling.
+//! falling, and the poses it holds, sitting, sleeping and kneeling.
 
 use bevy::prelude::*;
 
@@ -46,11 +46,30 @@ pub(crate) mod anim {
     pub const FLY: u16 = 135;
     pub const SPRINT: u16 = 143;
     pub const JUMP_LAND_RUN: u16 = 187;
+    pub const SIT_GROUND_DOWN: u16 = 96;
+    pub const SIT_GROUND: u16 = 97;
+    pub const SIT_GROUND_UP: u16 = 98;
+    pub const SLEEP_DOWN: u16 = 99;
+    pub const SLEEP: u16 = 100;
+    pub const SLEEP_UP: u16 = 101;
+    pub const KNEEL_START: u16 = 114;
+    pub const KNEEL_LOOP: u16 = 115;
+    pub const KNEEL_END: u16 = 116;
+}
+
+/// The stand states a body holds a pose in, the unit field's values.
+pub mod stand_state {
+    pub const STAND: u8 = 0;
+    pub const SIT: u8 = 1;
+    pub const SLEEP: u8 = 3;
+    pub const KNEEL: u8 = 8;
 }
 
 use anim::{
-    FALL, FLY, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, SHUFFLE_RIGHT, SPRINT,
-    STAND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
+    FALL, FLY, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, KNEEL_END, KNEEL_LOOP, KNEEL_START, RUN,
+    SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SLEEP, SLEEP_DOWN,
+    SLEEP_UP, SPRINT, STAND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK,
+    WALK_BACKWARDS,
 };
 
 /// A unit's movement this frame, as its animation reads it. A unit without one stands.
@@ -63,22 +82,31 @@ pub struct UnitMotion {
     /// from a step-off.
     pub vertical_speed: f32,
     pub flags: u32,
+    /// The pose it holds while it stands still, a [`stand_state`] value.
+    pub stand_state: u8,
 }
 
 pub(crate) const DEFAULT_WALK_SPEED: f32 = 2.5;
 const SPRINT_SPEED: f32 = 11.0;
 
+/// A state a body enters, holds and leaves by its own clips: a jump's arc, a far fall, and a pose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Airborne {
+pub(crate) enum Special {
     Jump,
     Fall,
+    /// Sitting, sleeping or kneeling, by its [`stand_state`].
+    Pose(u8),
 }
 
-impl Airborne {
+impl Special {
     pub(crate) fn entry_id(self) -> u16 {
         match self {
             Self::Jump => JUMP_START,
             Self::Fall => FALL,
+            Self::Pose(stand_state::SIT) => SIT_GROUND_DOWN,
+            Self::Pose(stand_state::SLEEP) => SLEEP_DOWN,
+            Self::Pose(stand_state::KNEEL) => KNEEL_START,
+            Self::Pose(_) => STAND,
         }
     }
 
@@ -86,7 +114,25 @@ impl Airborne {
         match self {
             Self::Jump => JUMP,
             Self::Fall => FALL,
+            Self::Pose(stand_state::SIT) => SIT_GROUND,
+            Self::Pose(stand_state::SLEEP) => SLEEP,
+            Self::Pose(stand_state::KNEEL) => KNEEL_LOOP,
+            Self::Pose(_) => STAND,
         }
+    }
+
+    /// The clip a pose stands up by; an arc lands by [`jump_land_pick`] instead.
+    pub(crate) fn exit_id(self) -> u16 {
+        match self {
+            Self::Pose(stand_state::SIT) => SIT_GROUND_UP,
+            Self::Pose(stand_state::SLEEP) => SLEEP_UP,
+            Self::Pose(stand_state::KNEEL) => KNEEL_END,
+            Self::Jump | Self::Fall | Self::Pose(_) => STAND,
+        }
+    }
+
+    pub(crate) fn airborne(self) -> bool {
+        matches!(self, Self::Jump | Self::Fall)
     }
 }
 
@@ -107,12 +153,14 @@ pub(crate) fn jump_land_pick(flags: u32) -> Option<u16> {
 pub(crate) enum Mode {
     #[default]
     Gait,
-    Entering(Airborne),
-    Looping(Airborne),
+    Entering(Special),
+    Looping(Special),
     Land {
         id: u16,
         touchdown_flags: u32,
     },
+    /// A pose's stand-up clip playing out; the gait follows it.
+    Exiting(Special, u16),
 }
 
 /// The gait a unit plays, the wanted id first and the fallbacks after it.
@@ -158,13 +206,24 @@ pub(crate) fn gait_candidates(motion: &UnitMotion, walk_speed: f32) -> &'static 
     &[STAND]
 }
 
-pub(crate) fn current_airborne(motion: &UnitMotion, jump_arc: bool) -> Option<Airborne> {
-    if motion.flags & move_flags::FALLING == 0 {
-        None
-    } else if motion.flags & move_flags::FALLING_FAR != 0 {
-        Some(Airborne::Fall)
-    } else if jump_arc {
-        Some(Airborne::Jump)
+/// A step-off holds its gait until it falls far; a pose holds only while the body stands still.
+pub(crate) fn current_special(motion: &UnitMotion, jump_arc: bool) -> Option<Special> {
+    let f = motion.flags;
+    if f & move_flags::FALLING != 0 {
+        if f & move_flags::FALLING_FAR != 0 {
+            Some(Special::Fall)
+        } else if jump_arc {
+            Some(Special::Jump)
+        } else {
+            None
+        }
+    } else if f & move_flags::ANY_MOVE == 0
+        && matches!(
+            motion.stand_state,
+            stand_state::SIT | stand_state::SLEEP | stand_state::KNEEL
+        )
+    {
+        Some(Special::Pose(motion.stand_state))
     } else {
         None
     }
@@ -285,19 +344,43 @@ mod tests {
     #[test]
     fn the_air_splits_into_jump_fall_and_a_held_gait() {
         let arc = moving(FORWARD | FALLING, 7.0);
-        assert_eq!(current_airborne(&arc, true), Some(Airborne::Jump));
-        assert_eq!(current_airborne(&arc, false), None);
+        assert_eq!(current_special(&arc, true), Some(Special::Jump));
+        assert_eq!(current_special(&arc, false), None);
         let far = moving(FORWARD | FALLING | FALLING_FAR, 7.0);
-        assert_eq!(current_airborne(&far, true), Some(Airborne::Fall));
-        assert_eq!(current_airborne(&far, false), Some(Airborne::Fall));
+        assert_eq!(current_special(&far, true), Some(Special::Fall));
+        assert_eq!(current_special(&far, false), Some(Special::Fall));
         assert_eq!(
-            (Airborne::Jump.entry_id(), Airborne::Jump.loop_id()),
+            (Special::Jump.entry_id(), Special::Jump.loop_id()),
             (37, 38)
         );
         assert_eq!(
-            (Airborne::Fall.entry_id(), Airborne::Fall.loop_id()),
+            (Special::Fall.entry_id(), Special::Fall.loop_id()),
             (40, 40)
         );
+    }
+
+    #[test]
+    fn a_pose_is_held_standing_still_and_brackets_its_loop() {
+        let sat = |flags| UnitMotion {
+            flags,
+            stand_state: stand_state::SIT,
+            ..UnitMotion::default()
+        };
+        assert_eq!(current_special(&sat(0), false), Some(Special::Pose(1)));
+        assert_eq!(
+            current_special(&sat(TURN_LEFT), false),
+            Some(Special::Pose(1))
+        );
+        assert_eq!(current_special(&sat(FORWARD), false), None);
+        let chair = UnitMotion {
+            stand_state: 4,
+            ..UnitMotion::default()
+        };
+        assert_eq!(current_special(&chair, false), None);
+        for (state, ids) in [(1, (96, 97, 98)), (3, (99, 100, 101)), (8, (114, 115, 116))] {
+            let p = Special::Pose(state);
+            assert_eq!((p.entry_id(), p.loop_id(), p.exit_id()), ids);
+        }
     }
 
     #[test]
