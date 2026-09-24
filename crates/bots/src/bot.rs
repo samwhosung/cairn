@@ -14,7 +14,7 @@ use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
-use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic};
+use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic, UnsentJudged};
 use crate::ground::Ground;
 use crate::mover::{Mover, Told};
 use crate::region::Scenario;
@@ -169,6 +169,8 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         corrections: tx,
         seen,
         view: crowd.roles.is_checker(i).then(HashMap::new),
+        open: false,
+        unsent: Unsent::default(),
         last_tick: None,
         next_sweep: now + JOIN_GRACE_MS,
         late_ms: Vec::new(),
@@ -274,6 +276,16 @@ struct Seen {
     pos: [f32; 3],
 }
 
+#[derive(Default)]
+struct Unsent {
+    decode_errors: u64,
+    relayed_honest: UnsentJudged,
+    relayed_liars: UnsentJudged,
+    stale_by_tier: [UnsentJudged; 3],
+    unknown_moves: u64,
+    double_appears: u64,
+}
+
 struct Reader {
     me: u32,
     welcome: Welcome,
@@ -282,6 +294,8 @@ struct Reader {
     corrections: mpsc::UnboundedSender<u32>,
     seen: Arc<AtomicU32>,
     view: Option<HashMap<u32, Seen>>,
+    open: bool,
+    unsent: Unsent,
     last_tick: Option<u32>,
     next_sweep: u32,
     late_ms: Vec<i64>,
@@ -329,9 +343,10 @@ impl Reader {
         }
         self.last_tick = Some(batch.tick);
         self.seen.store(batch.tick, Ordering::Relaxed);
+        self.open = crowd.checks.is_open();
         let ticks = batch.tick.saturating_sub(self.welcome.tick);
         let due = self.welcomed_at + ticks * u32::from(self.welcome.tick_ms);
-        if crowd.checks.is_open() {
+        if self.open {
             self.late_ms.push(i64::from(now) - i64::from(due));
         } else if let Some(&soonest) = self.late_ms.iter().min() {
             for &late in &self.late_ms {
@@ -340,7 +355,6 @@ impl Reader {
             self.late_ms.clear();
         }
         for record in batch {
-            Checks::count(&traffic.records);
             match record {
                 Ok(Record::Appear { id, movement, .. }) => self.appear(id, &movement),
                 Ok(Record::Move { id, movement }) => self.moved(id, &movement, now),
@@ -350,15 +364,28 @@ impl Reader {
                     }
                 }
                 Ok(Record::Correct { seq, .. }) => self.corrected(seq),
-                Err(_) => Checks::count(&traffic.decode_errors),
+                Err(_) => self.unsent.decode_errors += 1,
             }
         }
+        self.hand_in();
         if self.view.is_some() && now >= self.next_sweep {
             self.next_sweep = now + SWEEP_MS;
-            if crowd.checks.is_open() {
+            if self.open {
                 self.sweep(now);
             }
         }
+    }
+
+    fn hand_in(&mut self) {
+        let (checks, t) = (&self.crowd.checks, &mut self.unsent);
+        Checks::absorb(&self.crowd.traffic.decode_errors, &mut t.decode_errors);
+        checks.relayed_honest.absorb(&mut t.relayed_honest);
+        checks.relayed_liars.absorb(&mut t.relayed_liars);
+        for (judged, unsent) in checks.stale_by_tier.iter().zip(&mut t.stale_by_tier) {
+            judged.absorb(unsent);
+        }
+        Checks::absorb(&checks.unknown_moves, &mut t.unknown_moves);
+        Checks::absorb(&checks.double_appears, &mut t.double_appears);
     }
 
     fn corrected(&self, seq: u32) {
@@ -372,16 +399,15 @@ impl Reader {
         let _ = self.corrections.send(seq);
     }
 
-    fn judge_relayed(&self, id: u32, movement: &Movement) {
+    fn judge_relayed(&mut self, id: u32, movement: &Movement) {
         if let Some(track) = self.crowd.track(id)
-            && self.crowd.checks.is_open()
+            && self.open
         {
             let e = dist(ground(movement.pos), track.xy(movement.time));
-            let checks = &self.crowd.checks;
             let judged = if track.lie.is_some() {
-                &checks.relayed_liars
+                &mut self.unsent.relayed_liars
             } else {
-                &checks.relayed_honest
+                &mut self.unsent.relayed_honest
             };
             judged.judge(e, RELAYED_EPSILON_YD);
         }
@@ -389,8 +415,8 @@ impl Reader {
 
     fn appear(&mut self, id: u32, movement: &Movement) {
         let Some(view) = &self.view else { return };
-        if view.contains_key(&id) && self.crowd.checks.is_open() {
-            Checks::count(&self.crowd.checks.double_appears);
+        if view.contains_key(&id) && self.open {
+            self.unsent.double_appears += 1;
         }
         self.judge_relayed(id, movement);
         if let Some(view) = &mut self.view {
@@ -401,10 +427,9 @@ impl Reader {
     fn moved(&mut self, id: u32, movement: &Movement, now: u32) {
         let Some(view) = &self.view else { return };
         let crowd = &self.crowd;
-        let checks = &crowd.checks;
         match view.get(&id) {
-            None if checks.is_open() => Checks::count(&checks.unknown_moves),
-            Some(prev) if checks.is_open() => {
+            None if self.open => self.unsent.unknown_moves += 1,
+            Some(prev) if self.open => {
                 if let (Some(me), Some(them)) = (
                     crowd.track(self.me),
                     crowd.settled(id, now).filter(|t| t.lie.is_none()),
@@ -412,7 +437,7 @@ impl Reader {
                     let truth = them.xy(now);
                     let t = crowd.limits.tier(dist(me.xy(now), truth));
                     let bound = crowd.limits.view_lag_bound_yd(t);
-                    checks.stale_by_tier[t].judge(dist(truth, ground(prev.pos)), bound);
+                    self.unsent.stale_by_tier[t].judge(dist(truth, ground(prev.pos)), bound);
                 }
             }
             _ => {}

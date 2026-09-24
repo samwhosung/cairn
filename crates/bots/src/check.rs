@@ -65,10 +65,34 @@ pub struct Judged {
 
 impl Judged {
     pub fn judge(&self, value: f32, bound: f32) {
-        self.checked.fetch_add(1, Ordering::Relaxed);
-        self.worst.note(value);
+        let mut one = UnsentJudged::default();
+        one.judge(value, bound);
+        self.absorb(&mut one);
+    }
+
+    pub fn absorb(&self, unsent: &mut UnsentJudged) {
+        if unsent.checked > 0 {
+            self.checked.fetch_add(unsent.checked, Ordering::Relaxed);
+            self.bad.fetch_add(unsent.bad, Ordering::Relaxed);
+            self.worst.note(unsent.worst);
+        }
+        *unsent = UnsentJudged::default();
+    }
+}
+
+#[derive(Default)]
+pub struct UnsentJudged {
+    checked: u64,
+    bad: u64,
+    worst: f32,
+}
+
+impl UnsentJudged {
+    pub fn judge(&mut self, value: f32, bound: f32) {
+        self.checked += 1;
+        self.worst = self.worst.max(value);
         if value > bound {
-            self.bad.fetch_add(1, Ordering::Relaxed);
+            self.bad += 1;
         }
     }
 }
@@ -98,6 +122,13 @@ impl Checks {
     pub fn count(n: &AtomicU64) {
         n.fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn absorb(n: &AtomicU64, unsent: &mut u64) {
+        if *unsent > 0 {
+            n.fetch_add(*unsent, Ordering::Relaxed);
+            *unsent = 0;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -105,7 +136,6 @@ pub struct Counters {
     pub bytes_in: u64,
     pub bytes_out: u64,
     pub batches: u64,
-    pub records: u64,
     pub claims: u64,
     pub gaps: u64,
     pub decode_errors: u64,
@@ -117,7 +147,6 @@ impl Counters {
             bytes_in: self.bytes_in - before.bytes_in,
             bytes_out: self.bytes_out - before.bytes_out,
             batches: self.batches - before.batches,
-            records: self.records - before.records,
             claims: self.claims - before.claims,
             gaps: self.gaps - before.gaps,
             decode_errors: self.decode_errors - before.decode_errors,
@@ -130,7 +159,6 @@ pub struct Traffic {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     pub batches: AtomicU64,
-    pub records: AtomicU64,
     pub claims: AtomicU64,
     pub gaps: AtomicU64,
     pub decode_errors: AtomicU64,
@@ -146,7 +174,6 @@ impl Traffic {
             bytes_in: get(&self.bytes_in),
             bytes_out: get(&self.bytes_out),
             batches: get(&self.batches),
-            records: get(&self.records),
             claims: get(&self.claims),
             gaps: get(&self.gaps),
             decode_errors: get(&self.decode_errors),
