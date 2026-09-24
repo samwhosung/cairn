@@ -20,12 +20,17 @@ const FEET_RAY_REACH: f32 = 1000.0;
 const SUNK_ORIGIN_RECAST_RISE: f32 = 2.0;
 const UNIT_ROOM_RESAMPLE_DIST_SQ: f32 = 0.25 * 0.25;
 
-/// The player's body, when the eye is on one: its feet in Bevy space, and whether the world under
-/// it has arrived. The app writes it.
+/// The player's body, when the eye is on one: its feet in Bevy space, whether the world under it
+/// has arrived, and how it moves. The app writes it.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
 pub struct Viewer {
     pub body: Option<Vec3>,
     pub settled: bool,
+    /// Moving forward, back or sideways.
+    pub translating: bool,
+    pub turning: bool,
+    /// Its collision height, yards.
+    pub height: f32,
 }
 
 /// `WMOAreaTable`'s keys for a group of a placed building.

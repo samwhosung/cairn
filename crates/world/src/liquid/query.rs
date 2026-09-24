@@ -203,6 +203,22 @@ impl LiquidGrid {
         (self.min[0]..=self.max[0]).contains(&x) && (self.min[1]..=self.max[1]).contains(&y)
     }
 
+    pub(crate) fn overlaps(&self, lo: [f32; 2], hi: [f32; 2]) -> bool {
+        hi[0] >= self.min[0] && lo[0] <= self.max[0] && hi[1] >= self.min[1] && lo[1] <= self.max[1]
+    }
+
+    /// Calls `f` with every wet cell's four corners, `[tl, tr, bl, br]`, in world WoW space.
+    pub(crate) fn for_each_wet_cell(&self, mut f: impl FnMut([[f32; 3]; 4])) {
+        let Some(cells_x) = self.cols.checked_sub(1) else {
+            return;
+        };
+        for cell in (0..self.wet.len()).filter(|&c| self.wet[c]) {
+            let (i, j) = (cell % cells_x, cell / cells_x);
+            let p = |di: usize, dj: usize| self.positions[(j + dj) * self.cols + i + di];
+            f([p(0, 0), p(1, 0), p(0, 1), p(1, 1)]);
+        }
+    }
+
     /// `[[min_x, min_y], [max_x, max_y]]` of the wet cells; `None` when none is.
     pub(crate) fn xy_bounds(&self) -> Option<[[f32; 2]; 2]> {
         (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then_some([self.min, self.max])

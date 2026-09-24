@@ -2,6 +2,7 @@
 //! and slime, where they are, and what the camera's eye is under.
 
 mod drift;
+mod foam;
 mod frames;
 mod interleave;
 mod query;
@@ -40,6 +41,7 @@ impl Plugin for LiquidPlugin {
     fn build(&self, app: &mut App) {
         surface::plugin(app);
         drift::plugin(app);
+        foam::plugin(app);
         app.init_resource::<WaterIndex>()
             .init_resource::<Underwater>()
             .init_resource::<SubmergedEye>()

@@ -400,6 +400,9 @@ fn a_malformed_grid_claims_and_walks_nothing() {
     );
     assert_eq!(g.surface_z_at(0.0, 0.0), None);
     assert!(g.xy_bounds().is_none());
+    let mut cells = 0;
+    g.for_each_wet_cell(|_| cells += 1);
+    assert_eq!(cells, 0);
 }
 
 #[test]

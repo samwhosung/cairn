@@ -3,11 +3,11 @@ use sound::{ListenerCharacter, Listening, SoundBody};
 use world::interior::Viewer;
 use world::unit::{CharacterTables, UnitBody};
 
-use super::Mode;
 use super::body::{PlayerBody, PlayerLook};
 use super::camera::{CameraPivot, model_pivot_height};
 use super::state::Player;
 use super::swim::swim_enter_depth;
+use super::{Mode, flags};
 
 const HEAD_HEIGHT_UNLOADED: f32 = 1.8;
 
@@ -38,6 +38,9 @@ pub fn publish_body(
         viewer.set_if_neq(Viewer {
             body: walking.then_some(player.pos),
             settled: walking && !player.settling,
+            translating: player.move_flags & flags::ANY_MOVE != 0,
+            turning: player.move_flags & (flags::TURN_LEFT | flags::TURN_RIGHT) != 0,
+            height: player.collision_height,
         });
     }
     if let Some(mut listener) = listener {
