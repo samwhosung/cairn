@@ -38,7 +38,7 @@ impl Default for Config {
         Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             threads: std::thread::available_parallelism().map_or(1, usize::from),
-            io_threads: 2,
+            io_threads: 4,
             tick_ms: 50,
             map: 0,
             spawns: Vec::new(),
