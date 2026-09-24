@@ -7,6 +7,7 @@
 //! There is no depenetration pass either: the client's resolver only sweeps, and nothing moves a
 //! body that asked to go nowhere.
 
+use core::cmp::Ordering;
 use core::time::Duration;
 
 use avian3d::character_controller::move_and_slide::{
@@ -53,8 +54,10 @@ pub(super) fn cast_move(
         max: a0.max.max(a1.max) + Vec3::splat(skin_width),
     };
 
-    let mut best: Option<MoveHitData> = None;
-    let mut best_time = max_time;
+    let mut nearest = Nearest {
+        hit: None,
+        max_time,
+    };
     for entity in ms.spatial_query.aabb_intersections_with_aabb(swept) {
         let Ok((collider, pos, rot, layers)) = ms.colliders.get(entity) else {
             continue;
@@ -62,36 +65,27 @@ pub(super) fn cast_move(
         if !filter.test(entity, layers.copied().unwrap_or_default()) {
             continue;
         }
-        let options = ShapeCastOptions {
-            max_time_of_impact: best_time,
-            target_distance: 0.0,
-            stop_at_penetration: false,
-            compute_impact_geometry_on_penetration: true,
-        };
-        let hit = if let Some(trimesh) = collider.shape_scaled().as_trimesh() {
-            trimesh_hit(
+        if let Some(trimesh) = collider.shape_scaled().as_trimesh() {
+            sweep_trimesh(
                 trimesh,
                 entity,
                 (pos.0, rot.0),
                 shape,
                 (from, dir),
                 swept,
-                options,
-            )
-        } else {
+                &mut nearest,
+            );
+        } else if let Ok(Some(hit)) = cast_shapes(
+            &Pose3::from_parts(pos.0, rot.0),
+            Vec3::ZERO,
+            collider.shape_scaled().as_ref(),
+            &Pose3::from_parts(from, Quat::IDENTITY),
+            *dir,
+            shape.shape_scaled().as_ref(),
+            nearest.options(),
+        ) {
             // A convex collider has no reachable backface: avian's whole-shape sweep.
-            cast_shapes(
-                &Pose3::from_parts(pos.0, rot.0),
-                Vec3::ZERO,
-                collider.shape_scaled().as_ref(),
-                &Pose3::from_parts(from, Quat::IDENTITY),
-                *dir,
-                shape.shape_scaled().as_ref(),
-                options,
-            )
-            .ok()
-            .flatten()
-            .map(|hit| MoveHitData {
+            nearest.offer(MoveHitData {
                 entity,
                 distance: 0.0,
                 point1: pos.0 + rot.0 * hit.witness1,
@@ -99,17 +93,11 @@ pub(super) fn cast_move(
                 normal1: rot.0 * hit.normal1,
                 normal2: hit.normal2,
                 collision_distance: hit.time_of_impact,
-            })
-        };
-        if let Some(hit) = hit
-            && hit.collision_distance < best_time
-        {
-            best_time = hit.collision_distance;
-            best = Some(hit);
+            });
         }
     }
 
-    best.map(|mut hit| {
+    nearest.hit.map(|mut hit| {
         hit.distance = if max_time == 0.0 {
             0.0
         } else {
@@ -120,23 +108,82 @@ pub(super) fn cast_move(
     })
 }
 
-/// The nearest front face of a placed trimesh that `shape`, swept from `from` along `dir`, meets
-/// sooner than the options' limit.
-fn trimesh_hit(
+struct Nearest {
+    hit: Option<MoveHitData>,
+    max_time: f32,
+}
+
+impl Nearest {
+    fn options(&self) -> ShapeCastOptions {
+        ShapeCastOptions {
+            max_time_of_impact: self
+                .hit
+                .as_ref()
+                .map_or(self.max_time, |best| best.collision_distance),
+            target_distance: 0.0,
+            stop_at_penetration: false,
+            compute_impact_geometry_on_penetration: true,
+        }
+    }
+
+    fn offer(&mut self, hit: MoveHitData) {
+        let sooner = self.hit.as_ref().is_none_or(|best| {
+            Contact::from(&hit)
+                .canonical_order(&Contact::from(best))
+                .is_lt()
+        });
+        if hit.collision_distance < self.max_time && sooner {
+            self.hit = Some(hit);
+        }
+    }
+}
+
+struct Contact {
+    distance: f32,
+    normal: Vec3,
+    point: Vec3,
+    entity: Entity,
+}
+
+impl Contact {
+    fn canonical_order(&self, other: &Self) -> Ordering {
+        let floats = |c: &Self| {
+            let (n, p) = (c.normal, c.point);
+            [c.distance, n.x, n.y, n.z, p.x, p.y, p.z]
+        };
+        floats(self)
+            .iter()
+            .zip(&floats(other))
+            .map(|(a, b)| a.total_cmp(b))
+            .find(|o| o.is_ne())
+            .unwrap_or(Ordering::Equal)
+    }
+}
+
+impl From<&MoveHitData> for Contact {
+    fn from(hit: &MoveHitData) -> Self {
+        Self {
+            distance: hit.collision_distance,
+            normal: hit.normal1,
+            point: hit.point1,
+            entity: hit.entity,
+        }
+    }
+}
+
+fn sweep_trimesh(
     trimesh: &TriMesh,
     entity: Entity,
     (pos, rot): (Vec3, Quat),
     shape: &Collider,
     (from, dir): (Vec3, Dir3),
     swept: ColliderAabb,
-    options: ShapeCastOptions,
-) -> Option<MoveHitData> {
+    nearest: &mut Nearest,
+) {
     // In the trimesh's frame; a proper rotation keeps the sign of every `n·dir`.
     let inv_rot = rot.inverse();
     let local_dir = inv_rot * *dir;
     let local_pose = Pose3::from_parts(inv_rot * (from - pos), inv_rot);
-    let mut best = None;
-    let mut best_time = options.max_time_of_impact;
     for tri_id in trimesh
         .bvh()
         .intersect_aabb(&aabb_to_local(swept, pos, inv_rot))
@@ -148,10 +195,6 @@ fn trimesh_hit(
         if n.dot(local_dir) > FACING_EPS {
             continue;
         }
-        let options = ShapeCastOptions {
-            max_time_of_impact: best_time,
-            ..options
-        };
         let Ok(Some(hit)) = cast_shapes(
             &Pose3::IDENTITY,
             Vec3::ZERO,
@@ -159,7 +202,7 @@ fn trimesh_hit(
             &local_pose,
             local_dir,
             shape.shape_scaled().as_ref(),
-            options,
+            nearest.options(),
         ) else {
             continue;
         };
@@ -168,20 +211,16 @@ fn trimesh_hit(
         {
             continue;
         }
-        if hit.time_of_impact < best_time {
-            best_time = hit.time_of_impact;
-            best = Some(MoveHitData {
-                entity,
-                distance: 0.0,
-                point1: pos + rot * hit.witness1,
-                point2: pos + rot * (hit.witness2 + local_dir * hit.time_of_impact),
-                normal1: rot * hit.normal1,
-                normal2: rot * hit.normal2,
-                collision_distance: hit.time_of_impact,
-            });
-        }
+        nearest.offer(MoveHitData {
+            entity,
+            distance: 0.0,
+            point1: pos + rot * hit.witness1,
+            point2: pos + rot * (hit.witness2 + local_dir * hit.time_of_impact),
+            normal1: rot * hit.normal1,
+            normal2: rot * hit.normal2,
+            collision_distance: hit.time_of_impact,
+        });
     }
-    best
 }
 
 /// One-sided [`SpatialQuery::cast_ray`].
@@ -373,6 +412,7 @@ fn for_each_contact(
         min: a.min - Vec3::splat(prediction),
         max: a.max + Vec3::splat(prediction),
     };
+    let mut contacts: Vec<Contact> = Vec::new();
     for entity in ms.spatial_query.aabb_intersections_with_aabb(grown) {
         let Ok((collider, pos, rot, layers)) = ms.colliders.get(entity) else {
             continue;
@@ -390,9 +430,12 @@ fn for_each_contact(
             ) else {
                 continue;
             };
-            if !callback(entity, c.point1, c.normal1) {
-                return;
-            }
+            contacts.push(Contact {
+                distance: c.dist,
+                normal: c.normal1,
+                point: c.point1,
+                entity,
+            });
             continue;
         };
         let inv_rot = rot.0.inverse();
@@ -424,9 +467,18 @@ fn for_each_contact(
             if c.dist < 0.0 && behind_the_band(&tri, &local_pose, shape, local_dir) {
                 continue;
             }
-            if !callback(entity, pos.0 + rot.0 * c.point1, rot.0 * c.normal1) {
-                return;
-            }
+            contacts.push(Contact {
+                distance: c.dist,
+                normal: rot.0 * c.normal1,
+                point: pos.0 + rot.0 * c.point1,
+                entity,
+            });
+        }
+    }
+    contacts.sort_by(Contact::canonical_order);
+    for c in contacts {
+        if !callback(c.entity, c.point, c.normal) {
+            return;
         }
     }
 }

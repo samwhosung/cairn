@@ -181,3 +181,97 @@ fn a_ray_passes_a_backface_and_stops_on_a_front_face() {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+enum Side {
+    Left,
+    Right,
+}
+
+fn trough(spawn_order: [Side; 2]) -> App {
+    let mut app = crate::collision::tests::physics_app(false);
+    for side in spawn_order {
+        let (x, tris) = match side {
+            Side::Left => (-1.0, vec![[0u32, 2, 1], [0, 3, 2]]),
+            Side::Right => (1.0, vec![[0u32, 1, 2], [0, 2, 3]]),
+        };
+        let (a, b) = (Vec3::new(0.0, 0.0, -3.0), Vec3::new(0.0, 0.0, 3.0));
+        let outer = Vec3::new(x, 1.0, 0.0);
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::trimesh(vec![a, b, outer + b, outer + a], tris),
+            Transform::default(),
+        ));
+    }
+    app.update();
+    app
+}
+
+#[derive(Debug, PartialEq)]
+struct Answers {
+    sweep: Option<[u32; 7]>,
+    slide_normals: Vec<[u32; 3]>,
+    slide_end: [u32; 6],
+}
+
+fn wedged(app: &mut App) -> Answers {
+    app.world_mut()
+        .run_system_once(|ms: MoveAndSlide<'_, '_>| {
+            let from = Vec3::new(0.0, 0.95, 0.0);
+            let bits = |v: Vec3| v.to_array().map(f32::to_bits);
+            let sweep = cast_move(
+                &ms,
+                &capsule(),
+                from,
+                Vec3::NEG_Y * 0.5,
+                0.02,
+                &SpatialQueryFilter::default(),
+            )
+            .map(|h| {
+                let [nx, ny, nz] = bits(h.normal1);
+                let [px, py, pz] = bits(h.point1);
+                [h.collision_distance.to_bits(), nx, ny, nz, px, py, pz]
+            });
+            let mut slide_normals = Vec::new();
+            let out = move_and_slide(
+                &ms,
+                &capsule(),
+                from,
+                Vec3::new(0.0, -2.0, 1.0),
+                Duration::from_millis(100),
+                &MoveAndSlideConfig::default(),
+                &SpatialQueryFilter::default(),
+                |hit| {
+                    slide_normals.push(bits(**hit.normal));
+                    *hit.velocity = hit.velocity.reject_from(**hit.normal);
+                    MoveAndSlideHitResponse::Accept
+                },
+            );
+            let [x, y, z] = bits(out.position);
+            let [vx, vy, vz] = bits(out.projected_velocity);
+            Answers {
+                sweep,
+                slide_normals,
+                slide_end: [x, y, z, vx, vy, vz],
+            }
+        })
+        .expect("the system runs")
+}
+
+#[test]
+fn the_answers_are_the_same_whatever_order_the_faces_arrive_in() {
+    let left_first = wedged(&mut trough([Side::Left, Side::Right]));
+    let right_first = wedged(&mut trough([Side::Right, Side::Left]));
+    assert_eq!(
+        left_first.sweep.map(|s| s[0]),
+        Some(0.0f32.to_bits()),
+        "the capsule starts inside both sides"
+    );
+    let normal_x = |n: &[u32; 3]| f32::from_bits(n[0]);
+    assert!(
+        left_first.slide_normals.iter().any(|n| normal_x(n) > 0.0)
+            && left_first.slide_normals.iter().any(|n| normal_x(n) < 0.0),
+        "the slide meets both sides"
+    );
+    assert_eq!(left_first, right_first);
+}
