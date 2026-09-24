@@ -14,11 +14,12 @@ use crate::Residency;
 use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
+use crate::doodad_anim::{DrawBounds, RigBuilder};
 use crate::doodad_sound::{SoundHost, idle_has_sound_keys};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
 use crate::m2::M2Model;
-use crate::model::{ModelSubmesh, submesh_mesh};
+use crate::model::{ModelSubmesh, skinned_submesh_mesh, submesh_mesh};
 use crate::model_material::{
     BatchId, BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant,
 };
@@ -101,6 +102,7 @@ impl Furnishing {
 pub(crate) struct Furnished {
     by_id: BTreeMap<u32, Furnishing>,
     forms: HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
+    skinned: HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,12 +119,17 @@ pub(crate) fn furnish(
     mut probes: ResMut<'_, PropProbes>,
     mut furnished: ResMut<'_, Furnished>,
     mut residency: ResMut<'_, Residency>,
+    time: Res<'_, Time>,
 ) {
     let Some(light) = light else {
         return;
     };
     let ((m2s, wmos), (streamer, adts)) = (assets, ground);
-    let Furnished { by_id, forms } = &mut *furnished;
+    let Furnished {
+        by_id,
+        forms,
+        skinned,
+    } = &mut *furnished;
     by_id.retain(|id, f| {
         let keep = placements.get(*id).is_some();
         if !keep {
@@ -133,6 +140,7 @@ pub(crate) fn furnish(
         keep
     });
     forms.retain(|_, weak| weak.strong_count() > 0);
+    skinned.retain(|_, weak| weak.strong_count() > 0);
     for (id, p) in placements.iter() {
         by_id
             .entry(id)
@@ -158,53 +166,20 @@ pub(crate) fn furnish(
     if !ready || residency.models {
         return;
     }
+    let now = time.elapsed_secs();
     let mut spawner = Spawner {
         commands: &mut commands,
         meshes: &mut meshes,
         forms,
+        skinned,
         cache: &mut cache,
         materials: &mut materials,
         light: &light.0,
+        now,
     };
     for f in by_id.values_mut().filter(|f| !f.spawned) {
         f.spawned = true;
-        match &f.model {
-            ModelHandle::M2(h) => {
-                let Some(m) = m2s.get(h) else {
-                    continue;
-                };
-                let shade =
-                    ground_shade(&streamer, &adts, &f.transform).unwrap_or(GroundShade::Lit);
-                let (entities, form) =
-                    spawner.placed_doodad(m, h.id().untyped(), &f.transform, shade);
-                f.entities = entities;
-                f.forms.push(form);
-            }
-            ModelHandle::Wmo {
-                handle,
-                props,
-                name_set,
-                ..
-            } => {
-                let Some(m) = wmos.get(handle) else {
-                    continue;
-                };
-                let form = spawner.forms(handle.id().untyped(), &m.submeshes);
-                let instance =
-                    spawner.building(handle, *name_set, m, &form, &f.transform, &mut f.entities);
-                f.forms.push(form);
-                for prop in props.iter().flatten() {
-                    let Some(pm) = m2s.get(&prop.handle) else {
-                        continue;
-                    };
-                    let form = spawner.forms(prop.handle.id().untyped(), &pm.submeshes);
-                    let ents =
-                        spawner.prop(pm, &form, prop, instance, &streamer, &adts, &mut probes);
-                    f.entities.extend(ents);
-                    f.forms.push(form);
-                }
-            }
-        }
+        spawner.furnishing(f, (&m2s, &wmos), (&streamer, &adts), &mut probes);
     }
     residency.models = true;
 }
@@ -311,39 +286,105 @@ struct Spawner<'a, 'w, 's> {
     commands: &'a mut Commands<'w, 's>,
     meshes: &'a mut Assets<Mesh>,
     forms: &'a mut HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
+    skinned: &'a mut HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
     cache: &'a mut ModelMaterials,
     materials: &'a mut Assets<ModelMaterial>,
     light: &'a Buffer,
+    now: f32,
+}
+
+struct PropSite<'a> {
+    building: Entity,
+    streamer: &'a Streamer,
+    adts: &'a Assets<AdtTile>,
+}
+
+struct PlacedDoodad {
+    batches: Vec<Entity>,
+    rig_root: Option<Entity>,
+}
+
+fn cached_form(
+    cache: &mut HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
+    meshes: &mut Assets<Mesh>,
+    model: UntypedAssetId,
+    build: impl Fn(&mut Assets<Mesh>) -> Arc<[Handle<Mesh>]>,
+) -> Arc<[Handle<Mesh>]> {
+    if let Some(form) = cache.get(&model).and_then(Weak::upgrade) {
+        return form;
+    }
+    let form = build(meshes);
+    cache.insert(model, Arc::downgrade(&form));
+    form
 }
 
 impl Spawner<'_, '_, '_> {
-    fn forms(&mut self, model: UntypedAssetId, submeshes: &[ModelSubmesh]) -> Arc<[Handle<Mesh>]> {
-        if let Some(form) = self.forms.get(&model).and_then(Weak::upgrade) {
-            return form;
-        }
-        let form: Arc<[Handle<Mesh>]> = submeshes
-            .iter()
-            .map(|s| self.meshes.add(submesh_mesh(&s.geometry)))
-            .collect();
-        self.forms.insert(model, Arc::downgrade(&form));
-        form
-    }
-
-    fn placed_doodad(
+    fn furnishing(
         &mut self,
-        m: &M2Model,
-        model: UntypedAssetId,
-        transform: &Transform,
-        shade: GroundShade,
-    ) -> (Vec<Entity>, Arc<[Handle<Mesh>]>) {
-        let form = self.forms(model, &m.submeshes);
-        let mut entities = self.doodad(m, model, &form, transform, DoodadLight::Sky(shade));
-        let parts = entities.clone();
-        entities.extend(self.sound_host(m, transform, None, parts));
-        self.doodad_lights(m, transform, None, &mut entities);
-        (entities, form)
+        f: &mut Furnishing,
+        (m2s, wmos): (&Assets<M2Model>, &Assets<WmoModel>),
+        (streamer, adts): (&Streamer, &Assets<AdtTile>),
+        probes: &mut PropProbes,
+    ) {
+        match &f.model {
+            ModelHandle::M2(h) => {
+                let Some(m) = m2s.get(h) else {
+                    return;
+                };
+                let shade = ground_shade(streamer, adts, &f.transform).unwrap_or(GroundShade::Lit);
+                let id = h.id().untyped();
+                let form = self.forms(id, &m.submeshes);
+                let light = DoodadLight::Sky(shade);
+                let placed = self.doodad(m, id, &form, &f.transform, light, None, &mut f.forms);
+                let mut ents = placed.batches;
+                let parts = ents.clone();
+                ents.extend(self.sound_host(m, &f.transform, None, parts));
+                self.doodad_lights(m, &f.transform, None, &mut ents);
+                ents.extend(placed.rig_root);
+                f.entities = ents;
+                f.forms.push(form);
+            }
+            ModelHandle::Wmo {
+                handle,
+                props,
+                name_set,
+                ..
+            } => {
+                let Some(m) = wmos.get(handle) else {
+                    return;
+                };
+                let form = self.forms(handle.id().untyped(), &m.submeshes);
+                let building =
+                    self.building(handle, *name_set, m, &form, &f.transform, &mut f.entities);
+                f.forms.push(form);
+                let site = PropSite {
+                    building,
+                    streamer,
+                    adts,
+                };
+                for prop in props.iter().flatten() {
+                    let Some(pm) = m2s.get(&prop.handle) else {
+                        continue;
+                    };
+                    let form = self.forms(prop.handle.id().untyped(), &pm.submeshes);
+                    let ents = self.prop(pm, &form, prop, &site, probes, &mut f.forms);
+                    f.entities.extend(ents);
+                    f.forms.push(form);
+                }
+            }
+        }
     }
 
+    fn forms(&mut self, model: UntypedAssetId, submeshes: &[ModelSubmesh]) -> Arc<[Handle<Mesh>]> {
+        cached_form(self.forms, self.meshes, model, |meshes| {
+            submeshes
+                .iter()
+                .map(|s| meshes.add(submesh_mesh(&s.geometry)))
+                .collect()
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn doodad(
         &mut self,
         m: &M2Model,
@@ -351,8 +392,33 @@ impl Spawner<'_, '_, '_> {
         form: &[Handle<Mesh>],
         transform: &Transform,
         light: DoodadLight,
-    ) -> Vec<Entity> {
+        room: Option<&WmoGroupVis>,
+        placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
+    ) -> PlacedDoodad {
         let (radius, center) = m.fade_sphere(transform.scale.x);
+        let bounds = DrawBounds {
+            radius,
+            center: transform.transform_point(center),
+            room: room.cloned(),
+        };
+        let (skinned, meshes) = (&mut *self.skinned, &mut *self.meshes);
+        let mut rig = RigBuilder::spawn(
+            self.commands,
+            m,
+            transform,
+            || {
+                let form = cached_form(skinned, meshes, model, |meshes| {
+                    m.submeshes
+                        .iter()
+                        .map(|s| meshes.add(skinned_submesh_mesh(&s.geometry)))
+                        .collect()
+                });
+                placement_forms.push(form.clone());
+                form
+            },
+            bounds,
+            self.now,
+        );
         let placed = Placed {
             model,
             transform,
@@ -361,20 +427,21 @@ impl Spawner<'_, '_, '_> {
             radius,
             local_center: center,
         };
-        self.batches(&m.submeshes, form, &placed)
+        let batches = self.batches(&m.submeshes, form, &placed, rig.as_mut());
+        let rig_root = rig.map(|r| r.finish(self.commands));
+        PlacedDoodad { batches, rig_root }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn prop(
         &mut self,
         m: &M2Model,
         form: &[Handle<Mesh>],
         prop: &Prop,
-        instance: Entity,
-        streamer: &Streamer,
-        adts: &Assets<AdtTile>,
+        site: &PropSite<'_>,
         probes: &mut PropProbes,
+        placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
     ) -> Vec<Entity> {
+        let (building, streamer, adts) = (site.building, site.streamer, site.adts);
         let light = match &prop.light {
             PropLight::Exterior => DoodadLight::Sky(
                 ground_shade(streamer, adts, &prop.transform).unwrap_or(GroundShade::Lit),
@@ -393,7 +460,20 @@ impl Spawner<'_, '_, '_> {
             }
         };
         let model = prop.handle.id().untyped();
-        let mut ents = self.doodad(m, model, form, &prop.transform, light);
+        let room = (!prop.groups.is_empty()).then(|| WmoGroupVis {
+            instance: building,
+            groups: prop.groups.clone(),
+        });
+        let placed = self.doodad(
+            m,
+            model,
+            form,
+            &prop.transform,
+            light,
+            room.as_ref(),
+            placement_forms,
+        );
+        let mut ents = placed.batches;
         let parts = ents.clone();
         if let DoodadLight::Probe(slot) = light {
             let owner = if let Some(&e) = ents.first() {
@@ -405,10 +485,6 @@ impl Spawner<'_, '_, '_> {
             };
             self.commands.entity(owner).insert(PropProbeSlot(slot));
         }
-        let room = (!prop.groups.is_empty()).then(|| WmoGroupVis {
-            instance,
-            groups: prop.groups.clone(),
-        });
         if let Some(room) = &room {
             for &e in &ents {
                 self.commands.entity(e).insert(room.clone());
@@ -416,6 +492,7 @@ impl Spawner<'_, '_, '_> {
         }
         ents.extend(self.sound_host(m, &prop.transform, room.clone(), parts));
         self.doodad_lights(m, &prop.transform, room.as_ref(), &mut ents);
+        ents.extend(placed.rig_root);
         ents
     }
 
@@ -484,7 +561,7 @@ impl Spawner<'_, '_, '_> {
             radius: f32::INFINITY,
             local_center: Vec3::ZERO,
         };
-        let batches = self.batches(&m.submeshes, form, &placed);
+        let batches = self.batches(&m.submeshes, form, &placed, None);
         for (&entity, &group) in batches.iter().zip(&m.submesh_group) {
             if has_portals {
                 self.commands.entity(entity).insert(WmoGroupVis {
@@ -526,95 +603,115 @@ impl Spawner<'_, '_, '_> {
         submeshes: &[ModelSubmesh],
         form: &[Handle<Mesh>],
         placed: &Placed<'_>,
+        mut rig: Option<&mut RigBuilder>,
     ) -> Vec<Entity> {
         let (shade, probe) = match placed.light {
             DoodadLight::Sky(shade) => (shade, None),
             DoodadLight::Probe(slot) => (GroundShade::Lit, Some(slot)),
         };
-        submeshes
-            .iter()
-            .zip(form)
-            .enumerate()
-            .map(|(i, (sub, mesh))| {
-                let g = &sub.geometry;
-                let steady_interior_prop = probe.is_some() && sub.billboard.is_none();
-                let look = BatchLook {
-                    texture: sub.texture.clone(),
-                    blend: g.blend,
-                    two_sided: g.two_sided,
-                    is_wmo: placed.is_wmo,
-                    interior: g.interior || probe.is_some(),
-                    emissive: g.emissive,
-                    additive: g.additive,
-                    no_depth_write: g.no_depth_write,
-                    no_depth_test: g.no_depth_test,
-                    fog_policy: g.fog_policy,
-                    env_map: g.env_map,
-                    shade,
-                    batch_order: Some(
-                        NonZeroU16::MIN.saturating_add(u16::try_from(i).unwrap_or(u16::MAX)),
-                    ),
-                    uv_offset_at_rest: g.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0)),
-                    tint_at_rest: g.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0)),
-                    animated: (g.uv_anim.is_some() || g.rgb_anim.is_some()).then_some(BatchId {
-                        model: placed.model,
-                        index: i,
-                    }),
-                    wmo_class: g.wmo_batch,
-                    sidn: g.sidn,
-                    window: g.window,
-                    skybox: false,
-                };
-                let cutout = self
-                    .cache
-                    .get(self.materials, &look, Variant::Steady, self.light);
-                let blended = if steady_interior_prop
-                    || matches!(
-                        g.blend,
-                        ModelBlend::Blend | ModelBlend::Mod | ModelBlend::Mod2x
-                    ) {
-                    cutout.clone()
-                } else {
-                    self.cache
-                        .get(self.materials, &look, Variant::FadeTwin, self.light)
-                };
-                let tag = MeshTag(match probe {
-                    Some(slot) => probe_bits(slot),
-                    None => alpha_bits(1.0),
-                });
-                let mut e = self.commands.spawn((
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(cutout.clone()),
-                    ModelPart,
-                    tag,
+        let mut out = Vec::with_capacity(submeshes.len());
+        for (i, (sub, mesh)) in submeshes.iter().zip(form).enumerate() {
+            let g = &sub.geometry;
+            let steady_interior_prop = probe.is_some() && sub.billboard.is_none();
+            let look = batch_look(sub, i, placed, shade, probe.is_some());
+            let cutout = self
+                .cache
+                .get(self.materials, &look, Variant::Steady, self.light);
+            let blended = if steady_interior_prop
+                || matches!(
+                    g.blend,
+                    ModelBlend::Blend | ModelBlend::Mod | ModelBlend::Mod2x
+                ) {
+                cutout.clone()
+            } else {
+                self.cache
+                    .get(self.materials, &look, Variant::FadeTwin, self.light)
+            };
+            let tag = MeshTag(match probe {
+                Some(slot) => probe_bits(slot),
+                None => alpha_bits(1.0),
+            });
+            let card = sub.billboard.as_ref().map(|info| {
+                rig.as_deref_mut()
+                    .and_then(|r| r.card(self.commands, info))
+                    .unwrap_or_else(|| BillboardCard::new(info, placed.transform))
+            });
+            let mut e = self.commands.spawn((
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(cutout.clone()),
+                ModelPart,
+                tag,
+            ));
+            let fade_center = if let (Some(info), Some(card)) = (&sub.billboard, card) {
+                e.insert((
+                    Transform::from_translation(placed.transform.transform_point(info.pivot)),
+                    card,
                 ));
-                let fade_center = if let Some(info) = &sub.billboard {
-                    e.insert((
-                        Transform::from_translation(placed.transform.transform_point(info.pivot)),
-                        BillboardCard::new(info, placed.transform),
-                    ));
-                    Vec3::ZERO
-                } else {
-                    e.insert(*placed.transform);
-                    placed.local_center
-                };
                 if let Some(aabb) = sub.aabb {
                     e.insert((aabb, NoAutoAabb));
                 }
-                if let Some(anim) = &g.alpha_anim {
-                    e.insert(MatAlpha(anim.sample(None, 0.0, 0.0)));
+                Vec3::ZERO
+            } else {
+                e.insert(*placed.transform);
+                match rig.as_deref_mut() {
+                    Some(r) => r.add_batch(&mut e, i, mesh, sub.aabb),
+                    None => {
+                        if let Some(aabb) = sub.aabb {
+                            e.insert((aabb, NoAutoAabb));
+                        }
+                    }
                 }
-                if !steady_interior_prop {
-                    e.insert(DoodadFade {
-                        radius: placed.radius,
-                        local_center: fade_center,
-                        cutout,
-                        blend: blended,
-                    });
-                }
-                e.id()
-            })
-            .collect()
+                placed.local_center
+            };
+            if let Some(anim) = &g.alpha_anim {
+                e.insert(MatAlpha(anim.sample(None, 0.0, 0.0)));
+            }
+            if !steady_interior_prop {
+                e.insert(DoodadFade {
+                    radius: placed.radius,
+                    local_center: fade_center,
+                    cutout,
+                    blend: blended,
+                });
+            }
+            out.push(e.id());
+        }
+        out
+    }
+}
+
+fn batch_look(
+    sub: &ModelSubmesh,
+    i: usize,
+    placed: &Placed<'_>,
+    shade: GroundShade,
+    probe_lit: bool,
+) -> BatchLook {
+    let g = &sub.geometry;
+    BatchLook {
+        texture: sub.texture.clone(),
+        blend: g.blend,
+        two_sided: g.two_sided,
+        is_wmo: placed.is_wmo,
+        interior: g.interior || probe_lit,
+        emissive: g.emissive,
+        additive: g.additive,
+        no_depth_write: g.no_depth_write,
+        no_depth_test: g.no_depth_test,
+        fog_policy: g.fog_policy,
+        env_map: g.env_map,
+        shade,
+        batch_order: Some(NonZeroU16::MIN.saturating_add(u16::try_from(i).unwrap_or(u16::MAX))),
+        uv_offset_at_rest: g.uv_anim.as_ref().map_or([0.0, 0.0], |a| a.sample(0.0)),
+        tint_at_rest: g.rgb_anim.as_ref().map_or([1.0; 3], |a| a.sample(0.0)),
+        animated: (g.uv_anim.is_some() || g.rgb_anim.is_some()).then_some(BatchId {
+            model: placed.model,
+            index: i,
+        }),
+        wmo_class: g.wmo_batch,
+        sidn: g.sidn,
+        window: g.window,
+        skybox: false,
     }
 }
 

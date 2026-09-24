@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use bevy::camera::primitives::Aabb;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
@@ -35,6 +37,8 @@ const FADE_BANDS: [FadeBand; 3] = [
 const ALPHA_MASK: u32 = 0x3f;
 const ALPHA_MAX: f32 = 63.0;
 const PROBE_SHIFT: u32 = 6;
+const RIG_MASK: u32 = 0x3ff8_0000;
+const RIG_SHIFT: u32 = 19;
 const INTERIOR_FOG_BIT: u32 = 0x4000_0000;
 
 /// A doodad's distance fade: opaque until `start` yards past its bounding sphere, measured across
@@ -65,6 +69,10 @@ pub(crate) fn probe_bits(slot: u16) -> u32 {
 
 pub(crate) fn with_alpha(tag: u32, alpha: f32) -> u32 {
     (tag & !ALPHA_MASK) | alpha_bits(alpha)
+}
+
+pub(crate) fn with_rig(tag: u32, slot: Option<NonZeroU16>) -> u32 {
+    (tag & !RIG_MASK) | (u32::from(slot.map_or(0, NonZeroU16::get)) << RIG_SHIFT)
 }
 
 pub(crate) fn translucent(tag: u32) -> bool {

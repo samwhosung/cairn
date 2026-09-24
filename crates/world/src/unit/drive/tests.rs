@@ -93,6 +93,7 @@ fn body(app: &mut App, rows: &[Row]) -> Entity {
         playable_animation_lookup: Vec::new(),
         animation_lookup: Vec::new(),
         global_bones: Vec::new(),
+        moving_idle: None,
         pose: Arc::default(),
     };
     app.world_mut()

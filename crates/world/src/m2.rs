@@ -4,6 +4,7 @@ use std::sync::Arc;
 use bevy::animation::graph::AnimationGraph;
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
+use bevy::camera::primitives::Aabb;
 use bevy::math::{Mat4, Vec3};
 use bevy::reflect::TypePath;
 use model::{
@@ -33,9 +34,19 @@ pub struct M2Model {
     pub attachments: Vec<ModelAttachment>,
     /// `None` when nothing in the model moves with a sequence.
     pub animations: Option<ModelAnimations>,
+    pub has_emitters: bool,
 }
 
 impl M2Model {
+    /// The header box every sequence keeps the model inside, model space in Bevy axes; `None`
+    /// for a model that authors none.
+    pub fn animated_bound(&self) -> Option<Aabb> {
+        let b = self.bounds.as_ref()?;
+        let (a, c) = (wow_to_bevy(b.bbox_min), wow_to_bevy(b.bbox_max));
+        let (lo, hi) = (a.min(c), a.max(c));
+        hi.cmpgt(lo).any().then(|| Aabb::from_min_max(lo, hi))
+    }
+
     /// The bounding sphere a placement fades by: the header radius times the placement's scale,
     /// about the header box's centre (model space, Bevy axes). No bounds never fades.
     #[allow(
@@ -83,7 +94,9 @@ impl AssetLoader for M2Loader {
         let pivots = skeleton_pivots(&raw_skeleton);
         let attachments =
             build_attachments(&parse_m2_attachments(&bytes).unwrap_or_default(), &pivots);
-        let animations = animations(ctx, &bytes, &skeleton, &pivots, &submeshes);
+        let has_emitters = parse_m2_animation_summary(&bytes)
+            .is_ok_and(|s| s.particle_emitter_count > 0 || s.ribbon_emitter_count > 0);
+        let animations = animations(ctx, &bytes, &skeleton, &pivots, &submeshes, has_emitters);
         Ok(M2Model {
             submeshes,
             bounds: parse_m2_bounds(&bytes).ok(),
@@ -92,6 +105,7 @@ impl AssetLoader for M2Loader {
             inverse_bindposes: inverse_bindposes.into(),
             attachments,
             animations,
+            has_emitters,
         })
     }
 
@@ -106,6 +120,7 @@ fn animations(
     skeleton: &ModelSkeleton,
     pivots: &[Vec3],
     submeshes: &[ModelSubmesh],
+    has_emitters: bool,
 ) -> Option<ModelAnimations> {
     let mut graph = AnimationGraph::new();
     let root = graph.root;
@@ -113,8 +128,16 @@ fn animations(
         bone_masks: vec![0; skeleton.joints.len()],
         ..PoseSource::default()
     };
+    let playable_animation_lookup = parse_m2_playable_animation_lookup(bytes).unwrap_or_default();
+    let idle_id = playable_animation_lookup
+        .first()
+        .map_or(0, |p| p.resolved_id);
+    let mut moving_idle = None;
     let mut clips = Vec::new();
     for (i, anim) in parse_m2_animations(bytes).iter().enumerate() {
+        if moving_idle.is_none() && anim.anim_id == idle_id && !anim.is_rest_pose() {
+            moving_idle = Some(clips.len());
+        }
         let (clip, pose_clip, poses_bones) = build_animation_clip(anim, skeleton);
         let pose_idx = pose.clips.len() as u32;
         pose.clips.push(pose_clip);
@@ -154,8 +177,7 @@ fn animations(
         });
     }
     let global_bones = build_global_bones(&parse_m2_global_sequence_bones(bytes), skeleton);
-    let samples_sequence = parse_m2_animation_summary(bytes)
-        .is_ok_and(|s| s.particle_emitter_count > 0 || s.ribbon_emitter_count > 0)
+    let samples_sequence = has_emitters
         || submeshes.iter().any(|s| {
             let g = &s.geometry;
             g.alpha_anim.is_some() || g.uv_anim.is_some() || g.rgb_anim.is_some()
@@ -166,9 +188,10 @@ fn animations(
     animates.then(|| ModelAnimations {
         graph: ctx.add_labeled_asset("anim_graph".to_owned(), graph),
         clips,
-        playable_animation_lookup: parse_m2_playable_animation_lookup(bytes).unwrap_or_default(),
+        playable_animation_lookup,
         animation_lookup: parse_m2_animation_lookup(bytes).unwrap_or_default(),
         global_bones,
+        moving_idle,
         pose: Arc::new(pose),
     })
 }

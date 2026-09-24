@@ -64,6 +64,9 @@ pub struct ModelAnimations {
     /// none.
     pub animation_lookup: Vec<u16>,
     pub global_bones: Vec<GlobalBone>,
+    /// Index into `clips` of the idle a placed instance loops, when looping it moves some bone
+    /// off its rest pose; `None` when it would draw as the unrigged mesh.
+    pub moving_idle: Option<usize>,
     pub pose: Arc<PoseSource>,
 }
 
@@ -196,6 +199,7 @@ mod tests {
             playable_animation_lookup: table,
             animation_lookup: Vec::new(),
             global_bones: Vec::new(),
+            moving_idle: None,
             pose: Arc::default(),
         }
     }

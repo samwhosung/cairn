@@ -82,7 +82,7 @@ impl RigPalettes {
         Some((slot, base))
     }
 
-    fn free(&mut self, slot: u16) {
+    pub(crate) fn free(&mut self, slot: u16) {
         let s = slot as usize;
         let Some(&len) = self.slot_len.get(s).filter(|&&l| l > 0) else {
             return;
@@ -141,6 +141,10 @@ impl RigPalettes {
         if n > 0 {
             self.dirty.push((rig.base, n));
         }
+    }
+
+    pub fn free_slots(&self) -> usize {
+        MAX_RIG_SLOTS - self.slot_high + self.free_slots.len()
     }
 
     /// A slot's rows as world-space matrices, the slot's origin added back.

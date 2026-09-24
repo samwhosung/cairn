@@ -9,21 +9,38 @@ use crate::view::WorldCamera;
 #[require(Transform, Visibility)]
 pub(crate) struct BillboardCard {
     kind: BillboardKind,
-    pivot: Vec3,
-    rotation: Quat,
-    scale: Vec3,
-    pulse: Option<BoneScaleAnim>,
+    anchor: CardAnchor,
     placed_at_ms: Option<u32>,
+}
+
+enum CardAnchor {
+    Fixed {
+        pivot: Vec3,
+        rotation: Quat,
+        scale: Vec3,
+        pulse: Option<BoneScaleAnim>,
+    },
+    Joint(Entity),
 }
 
 impl BillboardCard {
     pub(crate) fn new(info: &BillboardInfo, placement: &Transform) -> Self {
         Self {
             kind: info.kind,
-            pivot: placement.transform_point(info.pivot),
-            rotation: placement.rotation,
-            scale: placement.scale,
-            pulse: info.global_seq_scale.clone(),
+            anchor: CardAnchor::Fixed {
+                pivot: placement.transform_point(info.pivot),
+                rotation: placement.rotation,
+                scale: placement.scale,
+                pulse: info.global_seq_scale.clone(),
+            },
+            placed_at_ms: None,
+        }
+    }
+
+    pub(crate) fn following_joint(kind: BillboardKind, joint: Entity) -> Self {
+        Self {
+            kind,
+            anchor: CardAnchor::Joint(joint),
             placed_at_ms: None,
         }
     }
@@ -120,6 +137,7 @@ type Cards<'w, 's> = Query<
     'w,
     's,
     (
+        Entity,
         &'static mut BillboardCard,
         &'static mut Transform,
         &'static mut GlobalTransform,
@@ -127,10 +145,15 @@ type Cards<'w, 's> = Query<
     Without<WorldCamera>,
 >;
 
+type Joints<'w, 's> =
+    Query<'w, 's, Ref<'static, GlobalTransform>, (Without<WorldCamera>, Without<BillboardCard>)>;
+
 /// Writes each card's world transform after propagation, so the frame draws what it computes.
 pub(crate) fn face_billboards(
+    mut commands: Commands<'_, '_>,
     time: Res<'_, Time>,
     camera: Camera<'_, '_>,
+    joints: Joints<'_, '_>,
     mut cards: Cards<'_, '_>,
 ) {
     let Ok((cam, cam_local)) = camera.single() else {
@@ -139,24 +162,44 @@ pub(crate) fn face_billboards(
     let moved = cam.is_changed() || cam_local.is_some_and(|l| l.is_changed());
     let (fwd, right, up) = (*cam.forward(), *cam.right(), *cam.up());
     let now_ms = time.elapsed().as_millis() as u32;
-    for (mut card, mut tf, mut global) in &mut cards {
+    for (entity, mut card, mut tf, mut global) in &mut cards {
         let first = card.placed_at_ms.is_none();
-        if !first && !moved && card.pulse.is_none() {
-            continue;
-        }
-        // The client runs a model's global sequences from its creation.
-        let age_ms = now_ms.wrapping_sub(card.placed_at_ms.unwrap_or(now_ms));
-        let pulse = card
-            .pulse
-            .as_ref()
-            .map_or(Vec3::ONE, |p| Vec3::from_array(p.sample(age_ms)));
+        let (pivot, rotation, scale) = match &card.anchor {
+            CardAnchor::Joint(joint) => {
+                let Ok(joint) = joints.get(*joint) else {
+                    commands.entity(entity).try_despawn();
+                    continue;
+                };
+                if !first && !moved && !joint.is_changed() {
+                    continue;
+                }
+                let t = joint.compute_transform();
+                (t.translation, t.rotation, t.scale)
+            }
+            CardAnchor::Fixed {
+                pivot,
+                rotation,
+                scale,
+                pulse,
+            } => {
+                if !first && !moved && pulse.is_none() {
+                    continue;
+                }
+                // The client runs a model's global sequences from its creation.
+                let age_ms = now_ms.wrapping_sub(card.placed_at_ms.unwrap_or(now_ms));
+                let pulse = pulse
+                    .as_ref()
+                    .map_or(Vec3::ONE, |p| Vec3::from_array(p.sample(age_ms)));
+                (*pivot, *rotation, *scale * pulse)
+            }
+        };
         if first {
             card.placed_at_ms = Some(now_ms);
         }
         let placed = Transform {
-            translation: card.pivot,
-            rotation: billboard_basis(card.kind, card.rotation, fwd, right, up),
-            scale: card.scale * pulse,
+            translation: pivot,
+            rotation: billboard_basis(card.kind, rotation, fwd, right, up),
+            scale,
         };
         if *tf != placed {
             *tf = placed;
@@ -219,6 +262,31 @@ mod tests {
             GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0)),
         ));
         app
+    }
+
+    #[test]
+    fn a_card_on_a_joint_rides_it_and_goes_with_it() {
+        let mut app = app();
+        let joint = app
+            .world_mut()
+            .spawn(GlobalTransform::from(
+                Transform::from_xyz(5.0, 0.0, 0.0).with_scale(Vec3::new(6.0, 3.0, 6.0)),
+            ))
+            .id();
+        let card = app
+            .world_mut()
+            .spawn(BillboardCard::following_joint(
+                BillboardKind::Spherical,
+                joint,
+            ))
+            .id();
+        app.update();
+        let tf = *app.world().entity(card).get::<Transform>().expect("placed");
+        assert_eq!(tf.translation, Vec3::new(5.0, 0.0, 0.0));
+        assert_eq!(tf.scale, Vec3::new(6.0, 3.0, 6.0));
+        app.world_mut().entity_mut(joint).despawn();
+        app.update();
+        assert!(app.world().get_entity(card).is_err());
     }
 
     #[test]

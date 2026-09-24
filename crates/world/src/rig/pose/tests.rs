@@ -172,6 +172,7 @@ fn twins(
         playable_animation_lookup: Vec::new(),
         animation_lookup: Vec::new(),
         global_bones: Vec::new(),
+        moving_idle: None,
         pose: Arc::new(pose.clone()),
     };
     app.world_mut()

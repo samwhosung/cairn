@@ -17,12 +17,18 @@ pub use bake::{
     GlobalBone, GlobalSeqChannel, ModelAttachment, ModelJoint, ModelSkeleton, build_animation_clip,
     build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
 };
+pub(crate) use compose::seed_rig_rows;
 pub use compose::{PosePost, RigFinalize};
 pub use global_seq::GlobalSeqDrive;
 pub use palette::{BONE_BYTES, MAX_PALETTE_BONES, MAX_RIG_SLOTS, RigPalettes, RigSkin};
 pub use pose::RigPose;
 pub use rng::AnimRng;
 pub use source::{PoseBone, PoseClip, PoseNode, PoseSource, PoseTrack};
+
+/// On a rig nobody sees: its pose is neither sampled nor composed, and its global sequences hold,
+/// until the marker goes.
+#[derive(Component)]
+pub struct AnimParked;
 
 pub(crate) struct RigPlugin;
 

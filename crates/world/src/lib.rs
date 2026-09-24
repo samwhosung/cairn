@@ -11,6 +11,7 @@ mod celestial;
 mod clouds;
 pub mod collision;
 pub mod coords;
+mod doodad_anim;
 pub mod doodad_sound;
 mod glow;
 mod ground;
@@ -107,6 +108,7 @@ impl Plugin for WorldPlugin {
             terrain::TerrainMaterialPlugin,
             model_material::ModelMaterialPlugin,
             rig::RigPlugin,
+            doodad_anim::DoodadAnimPlugin,
             unit::UnitPlugin,
             probes::ProbePlugin,
             horizon::HorizonPlugin,
@@ -162,7 +164,7 @@ impl Plugin for WorldPlugin {
             PostUpdate,
             (
                 billboard::face_billboards
-                    .after(bevy::transform::TransformSystems::Propagate)
+                    .after(rig::RigFinalize)
                     .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
                 (
                     doodad_sound::reroll_sound_hosts,

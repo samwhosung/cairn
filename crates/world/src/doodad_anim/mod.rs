@@ -1,0 +1,334 @@
+mod lazy;
+mod placement;
+
+use bevy::animation::graph::{AnimationGraphHandle, AnimationNodeIndex};
+use bevy::app::AnimationSystems;
+use bevy::camera::primitives::{Frustum, Sphere};
+use bevy::prelude::*;
+
+use lazy::LazyRig;
+pub(crate) use placement::RigBuilder;
+
+use crate::m2::M2Model;
+use crate::portal::{WmoGroupVis, WmoPortalInstance, room_admits};
+use crate::rig::{
+    AnimClip, AnimParked, AnimRng, GlobalSeqDrive, ModelAnimations, ModelSkeleton, RigPalettes,
+    RigPose, RigSkin,
+};
+use crate::view::{FARCLIP, WorldCamera};
+use crate::visibility::{ModelPart, doodad_fade_alpha};
+
+pub(crate) enum DoodadAnimTier<'a> {
+    Static,
+    GlobalSeqOnly,
+    MovingIdle(&'a AnimClip),
+}
+
+pub(crate) fn classify<'a>(
+    skeleton: &ModelSkeleton,
+    animations: Option<&'a ModelAnimations>,
+) -> DoodadAnimTier<'a> {
+    let Some(anims) = animations else {
+        return DoodadAnimTier::Static;
+    };
+    if skeleton.joints.is_empty() {
+        return DoodadAnimTier::Static;
+    }
+    match anims.moving_idle.and_then(|i| anims.clips.get(i)) {
+        Some(clip) => DoodadAnimTier::MovingIdle(clip),
+        None if !anims.global_bones.is_empty() => DoodadAnimTier::GlobalSeqOnly,
+        None => DoodadAnimTier::Static,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ArmedClip {
+    pub(crate) node: AnimationNodeIndex,
+    pub(crate) duration: f32,
+}
+
+pub(crate) struct HostBuilder {
+    pub(crate) root: Entity,
+    pose: RigPose,
+    clip: Option<ArmedClip>,
+    anim_id: Option<u16>,
+}
+
+impl HostBuilder {
+    pub(crate) fn anchor(&mut self, commands: &mut Commands<'_, '_>, bone: u16) -> Option<Entity> {
+        self.pose.anchor_for(commands, bone)
+    }
+
+    fn finish(self, commands: &mut Commands<'_, '_>) {
+        commands.entity(self.root).insert(self.pose);
+    }
+}
+
+pub(crate) fn spawn_anim_host(
+    commands: &mut Commands<'_, '_>,
+    m: &M2Model,
+    transform: Transform,
+) -> Option<HostBuilder> {
+    let tier = classify(&m.skeleton, m.animations.as_ref());
+    if matches!(tier, DoodadAnimTier::Static) {
+        return None;
+    }
+    let anims = m.animations.as_ref()?;
+    let root = commands.spawn((transform, Visibility::default())).id();
+    let pose = RigPose::new(root, &m.skeleton);
+    let (mut clip, mut anim_id) = (None, None);
+    if let DoodadAnimTier::MovingIdle(idle) = tier {
+        let mut player = AnimationPlayer::default();
+        player.play(idle.node).repeat();
+        commands.entity(root).insert((
+            player,
+            AnimationGraphHandle(anims.graph.clone()),
+            anims.clone(),
+        ));
+        clip = Some(ArmedClip {
+            node: idle.node,
+            duration: idle.duration,
+        });
+        anim_id = Some(idle.anim_id);
+    }
+    if let Some(drive) = GlobalSeqDrive::new(&anims.global_bones, m.skeleton.joints.len()) {
+        commands.entity(root).insert(drive);
+    }
+    Some(HostBuilder {
+        root,
+        pose,
+        clip,
+        anim_id,
+    })
+}
+
+#[derive(Clone)]
+pub(crate) struct DrawBounds {
+    pub(crate) radius: f32,
+    pub(crate) center: Vec3,
+    pub(crate) room: Option<WmoGroupVis>,
+}
+
+impl DrawBounds {
+    fn admits(
+        &self,
+        cam_pos: Vec3,
+        cam_fwd: Vec3,
+        frustum: &Frustum,
+        instances: &Query<'_, '_, &WmoPortalInstance>,
+    ) -> bool {
+        let (dx, dz) = (self.center.x - cam_pos.x, self.center.z - cam_pos.z);
+        let sphere = Sphere {
+            center: self.center.into(),
+            radius: self.radius,
+        };
+        doodad_fade_alpha(self.radius, (dx * dx + dz * dz).sqrt()) > 0.0
+            && (self.center - cam_pos).dot(cam_fwd) - self.radius <= FARCLIP
+            && frustum.intersects_sphere(&sphere, false)
+            && room_admits(
+                self.room.as_ref(),
+                self.room
+                    .as_ref()
+                    .and_then(|r| instances.get(r.instance).ok()),
+            )
+    }
+}
+
+pub(crate) enum SeenBy {
+    Batches(Vec<Entity>),
+    Bounds(DrawBounds),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gate {
+    New,
+    ArmedAtSpawn,
+    Drawn,
+    Parked,
+}
+
+impl Gate {
+    fn posing(self) -> bool {
+        matches!(self, Gate::ArmedAtSpawn | Gate::Drawn)
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct DoodadAnimHost {
+    pub(crate) seen_by: SeenBy,
+    pub(crate) clip: Option<ArmedClip>,
+    pub(crate) armed_at: f32,
+    pub(crate) rerolls_at: f32,
+    pub(crate) anim_id: Option<u16>,
+    pub(crate) gate: Gate,
+    pub(crate) parked_at: f32,
+}
+
+fn reroll_doodad_variation(
+    time: Res<'_, Time>,
+    mut rng: ResMut<'_, AnimRng>,
+    mut hosts: Query<
+        '_,
+        '_,
+        (
+            &mut DoodadAnimHost,
+            &ModelAnimations,
+            Option<&mut AnimationPlayer>,
+        ),
+    >,
+) {
+    let now = time.elapsed_secs();
+    for (mut host, anims, player) in &mut hosts {
+        let Some(anim_id) = host.anim_id else {
+            continue;
+        };
+        if now < host.rerolls_at {
+            continue;
+        }
+        let Some(clip) = anims.pick_variation(anim_id, rng.draw()) else {
+            host.anim_id = None;
+            continue;
+        };
+        let armed = ArmedClip {
+            node: clip.node,
+            duration: clip.duration,
+        };
+        let replay = rng.replay_count(clip.replay);
+        host.armed_at = now;
+        host.rerolls_at = now + (armed.duration * replay as f32).max(f32::EPSILON);
+        host.clip = Some(armed);
+        if host.gate.posing()
+            && let Some(mut p) = player
+        {
+            // The client snaps to the new variation rather than blending into it.
+            p.stop_all();
+            p.play(armed.node).repeat();
+        }
+    }
+}
+
+type Hosts<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut DoodadAnimHost,
+        Option<&'static LazyRig>,
+        Option<&'static RigPose>,
+        Has<RigSkin>,
+        Option<&'static mut AnimationPlayer>,
+    ),
+>;
+
+type Camera<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Ref<'static, GlobalTransform>,
+        &'static Frustum,
+        Ref<'static, Projection>,
+        Option<Ref<'static, Transform>>,
+    ),
+    With<WorldCamera>,
+>;
+
+#[allow(clippy::too_many_arguments)]
+fn gate_doodad_anim(
+    time: Res<'_, Time>,
+    mut hosts: Hosts<'_, '_>,
+    vis: Query<'_, '_, &Visibility>,
+    cam: Camera<'_, '_>,
+    changed_vis: Query<'_, '_, (), (Changed<Visibility>, With<ModelPart>)>,
+    instances: Query<'_, '_, &WmoPortalInstance>,
+    changed_instances: Query<'_, '_, (), Changed<WmoPortalInstance>>,
+    mut palettes: ResMut<'_, RigPalettes>,
+    worlds: Query<'_, '_, &GlobalTransform>,
+    mut twin_parts: lazy::TwinParts<'_, '_>,
+    mut commands: Commands<'_, '_>,
+) {
+    let now = time.elapsed_secs();
+    let world_cam = cam.single().ok();
+    let still = world_cam.as_ref().is_some_and(|(tf, _, proj, local)| {
+        !tf.is_changed()
+            && !proj.is_changed()
+            && !local.as_ref().is_some_and(DetectChanges::is_changed)
+    }) && changed_vis.is_empty()
+        && changed_instances.is_empty();
+    for (entity, mut host, lazy, pose, has_rig, player) in &mut hosts {
+        let was_posing = host.gate.posing();
+        let drawn = match host.gate {
+            Gate::New => true,
+            Gate::Drawn | Gate::Parked if still => was_posing,
+            _ => match &host.seen_by {
+                SeenBy::Batches(batches) => batches
+                    .iter()
+                    .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden)),
+                SeenBy::Bounds(bounds) => world_cam.as_ref().is_some_and(|(tf, frustum, _, _)| {
+                    bounds.admits(tf.translation(), *tf.forward(), frustum, &instances)
+                }),
+            },
+        };
+        if drawn
+            && was_posing
+            && !has_rig
+            && let Some(lazy) = lazy
+        {
+            lazy::promote_lazy_rig(
+                &mut commands,
+                &mut palettes,
+                &worlds,
+                entity,
+                lazy,
+                pose,
+                &mut twin_parts,
+            );
+        }
+        let gate = match (host.gate, drawn) {
+            (Gate::New, _) => Gate::ArmedAtSpawn,
+            (_, true) => Gate::Drawn,
+            (_, false) => Gate::Parked,
+        };
+        if host.gate != gate {
+            host.gate = gate;
+        }
+        if drawn == was_posing {
+            continue;
+        }
+        if drawn {
+            commands.entity(entity).remove::<AnimParked>();
+        } else {
+            host.parked_at = now;
+            commands.entity(entity).insert(AnimParked);
+        }
+        let Some(mut p) = player else {
+            continue;
+        };
+        if !drawn {
+            p.stop_all();
+        } else if let Some(clip) = host.clip {
+            let anim = p.start(clip.node);
+            anim.repeat();
+            if clip.duration > 0.0 {
+                anim.seek_to((now - host.armed_at).rem_euclid(clip.duration));
+            }
+        }
+    }
+}
+
+pub(crate) struct DoodadAnimPlugin;
+
+impl Plugin for DoodadAnimPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            (reroll_doodad_variation, gate_doodad_anim)
+                .chain()
+                .before(AnimationSystems),
+        )
+        .add_systems(Update, lazy::reap_parked_rigs);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests;

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::AnimParked;
 use super::bake::GlobalBone;
 use super::compose::PosePost;
 use super::pose::RigPose;
@@ -29,11 +30,14 @@ impl GlobalSeqDrive {
 
 fn apply_global_sequences(
     time: Res<'_, Time>,
-    mut drives: Query<'_, '_, (&mut GlobalSeqDrive, &mut RigPose)>,
+    mut drives: Query<'_, '_, (&mut GlobalSeqDrive, &mut RigPose, Has<AnimParked>)>,
 ) {
     let now = time.elapsed_secs_f64();
-    for (mut drive, mut rig) in &mut drives {
+    for (mut drive, mut rig, parked) in &mut drives {
         let t = now - *drive.appeared_at.get_or_insert(now);
+        if parked {
+            continue;
+        }
         rig.pose_dirty = true;
         for bone in &drive.bones {
             let Some(tf) = rig.locals.get_mut(bone.bone as usize) else {

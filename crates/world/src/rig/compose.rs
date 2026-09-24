@@ -1,6 +1,7 @@
 use bevy::math::Vec3A;
 use bevy::prelude::*;
 
+use super::AnimParked;
 use super::palette::{RigPalettes, RigSkin};
 use super::pose::RigPose;
 use crate::billboard::{billboard_basis, parent_arm_matrix};
@@ -16,7 +17,7 @@ pub struct PosePost;
 pub struct RigFinalize;
 
 fn compose_rig_models(
-    mut rigs: Query<'_, '_, &mut RigPose>,
+    mut rigs: Query<'_, '_, &mut RigPose, Without<AnimParked>>,
     mut anchors: Query<'_, '_, &mut Transform>,
 ) {
     for rig in &mut rigs {
@@ -91,10 +92,26 @@ fn rig_worlds(
     (worlds, in_replaced_subtree)
 }
 
+fn at_origin(root: GlobalTransform) -> GlobalTransform {
+    let mut a = root.affine();
+    a.translation = Vec3A::ZERO;
+    GlobalTransform::from(a)
+}
+
+pub(crate) fn seed_rig_rows(
+    rig: &RigPose,
+    root: GlobalTransform,
+    skin: &RigSkin,
+    palettes: &mut RigPalettes,
+) {
+    let (worlds, _) = rig_worlds(rig, at_origin(root), None);
+    palettes.write_rig_worlds(skin, &worlds, root.translation());
+}
+
 #[allow(clippy::type_complexity)]
 fn finalize_rig_worlds(
     cam: Query<'_, '_, &GlobalTransform, With<WorldCamera>>,
-    mut rigs: Query<'_, '_, (Entity, &mut RigPose, Option<&RigSkin>)>,
+    mut rigs: Query<'_, '_, (Entity, &mut RigPose, Option<&RigSkin>, Has<AnimParked>)>,
     mut worlds_params: ParamSet<
         '_,
         '_,
@@ -113,15 +130,18 @@ fn finalize_rig_worlds(
     let refresh: Vec<Entity> = {
         let roots_changed = worlds_params.p0();
         rigs.iter()
-            .filter(|(_, rig, _)| {
-                rig.pose_dirty || roots_changed.contains(rig.joints_root) || rig.has_billboard
+            .filter(|(_, rig, _, parked)| {
+                !parked
+                    && (rig.pose_dirty
+                        || roots_changed.contains(rig.joints_root)
+                        || rig.has_billboard)
             })
             .map(|(holder, ..)| holder)
             .collect()
     };
     let mut globals = worlds_params.p1();
     for holder in refresh {
-        let Ok((_, rig, skin)) = rigs.get_mut(holder) else {
+        let Ok((_, rig, skin, _)) = rigs.get_mut(holder) else {
             continue;
         };
         let rig = rig.into_inner();
@@ -133,12 +153,7 @@ fn finalize_rig_worlds(
             continue;
         };
         let origin = root_g.translation();
-        let root_rel = GlobalTransform::from({
-            let mut a = root_g.affine();
-            a.translation = Vec3A::ZERO;
-            a
-        });
-        let (worlds, in_replaced_subtree) = rig_worlds(rig, root_rel, cam_basis);
+        let (worlds, in_replaced_subtree) = rig_worlds(rig, at_origin(root_g), cam_basis);
         if let Some(skin) = skin {
             palettes.write_rig_worlds(skin, &worlds, origin);
         }

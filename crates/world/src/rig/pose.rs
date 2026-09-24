@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use model::{BillboardKind, ParentArm};
 
+use super::AnimParked;
 use super::anims::ModelAnimations;
 use super::bake::ModelSkeleton;
 use super::source::PoseSource;
@@ -128,10 +129,17 @@ struct PlayingClip {
     cursor: usize,
 }
 
-/// Samples every rig's playing animations into its bone locals, reproducing what Bevy's own
-/// evaluation would write: per bone and property, the nodes with a nonzero weight whose mask spares
-/// the bone fold in node order; a property no playing clip keys keeps its value.
-fn evaluate_rig_poses(mut rigs: Query<'_, '_, (&AnimationPlayer, &ModelAnimations, &mut RigPose)>) {
+/// Samples every unparked rig's playing animations into its bone locals, reproducing what Bevy's
+/// own evaluation would write: per bone and property, the nodes with a nonzero weight whose mask
+/// spares the bone fold in node order; a property no playing clip keys keeps its value.
+fn evaluate_rig_poses(
+    mut rigs: Query<
+        '_,
+        '_,
+        (&AnimationPlayer, &ModelAnimations, &mut RigPose),
+        Without<AnimParked>,
+    >,
+) {
     rigs.par_iter_mut().for_each(|(player, anims, mut rig)| {
         let src = &anims.pose;
         let mut active: Vec<PlayingClip> = player
