@@ -8,7 +8,7 @@ use crate::region::{Rng, Scenario};
 
 pub const RUN: f32 = 7.0;
 pub const WALK: f32 = 2.5;
-/// Height a walk may gain per yard of ground, between samples this far apart.
+/// Height a walk may gain or lose per yard of ground, between samples this far apart.
 const SLOPE: f32 = 1.2;
 const SAMPLE_YD: f32 = 2.0;
 
@@ -299,7 +299,8 @@ impl Planner<'_> {
         self.climbable(&leg).then_some(leg)
     }
 
-    /// Whether every stretch of the leg stays in the region, on ground a player could climb.
+    /// Whether every stretch of the leg stays in the region, on ground a player could climb or
+    /// walk down without falling.
     fn climbable(&self, leg: &Leg) -> bool {
         let (Motion::Run { speed, .. } | Motion::Arc { speed, .. }) = leg.motion else {
             return true;
@@ -315,7 +316,7 @@ impl Planner<'_> {
                     return false;
                 };
                 let ok = self.s.region.contains(self.ground, p)
-                    && last.is_none_or(|l| z - l <= SLOPE * SAMPLE_YD);
+                    && last.is_none_or(|l| (z - l).abs() <= SLOPE * SAMPLE_YD);
                 last = Some(z);
                 ok
             })
