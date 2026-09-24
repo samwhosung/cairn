@@ -1,5 +1,6 @@
 //! A headless client driven by scripted keys at a fixed step.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,7 @@ use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install};
 
+use crate::net::{Net, NetPlugin};
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerPlugin};
 use crate::view::Pose;
@@ -32,13 +34,16 @@ pub struct Frame {
 pub struct Walker {
     pub app: App,
     step: Duration,
+    /// For a walker that has joined a server: the wall-clock time of its first paced frame and
+    /// how many it has run, so the server's clock and its own keep in step.
+    paced: Option<(Instant, u32)>,
 }
 
 impl Walker {
     /// A client on `map` whose body starts with its feet at `feet` (WoW), facing `heading_deg`
     /// (0 north, 90 west), stepped at `hz`. `None` without `WOW_DATA`.
     pub fn new(map: &str, feet: [f32; 3], heading_deg: f32, hz: f32) -> Option<Self> {
-        Self::build(map, feet, heading_deg, hz, None)
+        Self::build(map, feet, heading_deg, hz, None, None)
     }
 
     pub fn dressed(
@@ -48,7 +53,23 @@ impl Walker {
         hz: f32,
         look: CharacterLook,
     ) -> Option<Self> {
-        Self::build(map, feet, heading_deg, hz, Some(look))
+        Self::build(map, feet, heading_deg, hz, Some(look), None)
+    }
+
+    /// A client on Azeroth that joins the server at `server` as `look` and stands where its
+    /// welcome places it, stepped at `hz` and paced to the wall clock.
+    pub fn joined(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
+        let hello = crate::net::hello(name.to_owned(), &look);
+        let mut walker = Self::build(
+            "Azeroth",
+            [0.0, 0.0, 0.0],
+            0.0,
+            hz,
+            None,
+            Some(Net::connect(server, hello)),
+        )?;
+        walker.paced = Some((Instant::now(), 0));
+        Some(walker)
     }
 
     fn build(
@@ -57,6 +78,7 @@ impl Walker {
         heading_deg: f32,
         hz: f32,
         dressed: Option<CharacterLook>,
+        net: Option<Net>,
     ) -> Option<Self> {
         let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
             eprintln!("skipped: WOW_DATA is not set");
@@ -89,11 +111,36 @@ impl Walker {
         if let Some(tables) = tables {
             app.insert_resource(tables);
         }
+        let joining = net.is_some();
+        if let Some(net) = net {
+            app.insert_resource(net).add_plugins(NetPlugin);
+        }
         app.finish();
         app.cleanup();
-        let mut walker = Self { app, step };
+        let mut walker = Self {
+            app,
+            step,
+            paced: None,
+        };
+        if joining {
+            walker.welcome();
+        }
         walker.settle();
         Some(walker)
+    }
+
+    /// Updates until the server's welcome has placed the body.
+    fn welcome(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.net().is_none_or(|n| n.welcome().is_none()) {
+            assert!(Instant::now() < deadline, "no welcome from the server");
+            self.app.update();
+            std::thread::sleep(self.step);
+        }
+    }
+
+    pub fn net(&self) -> Option<&Net> {
+        self.app.world().get_resource::<Net>()
     }
 
     /// On `Azeroth`, with the feet placed on the ground under `xy`.
@@ -191,6 +238,11 @@ impl Walker {
     pub fn run(&mut self, n: usize) -> Vec<Frame> {
         (0..n)
             .map(|_| {
+                if let Some((first, frames)) = &mut self.paced {
+                    let due = *first + self.step * *frames;
+                    std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                    *frames += 1;
+                }
                 self.app.update();
                 let p = self.player();
                 Frame {

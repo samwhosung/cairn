@@ -32,6 +32,7 @@ const SEEN_EVERY: Duration = Duration::from_millis(500);
 pub struct Net {
     link: Link,
     hosted: Option<server::Running>,
+    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     welcomed: Option<Welcome>,
     claims: Option<Claims>,
     latest_tick: Option<u32>,
@@ -78,6 +79,23 @@ impl Net {
     /// Where the hosted server listens.
     pub fn hosting(&self) -> Option<SocketAddr> {
         self.hosted.as_ref().map(server::Running::addr)
+    }
+
+    #[cfg(test)]
+    pub fn welcome(&self) -> Option<&Welcome> {
+        self.welcomed.as_ref()
+    }
+
+    /// How often the server has put the player back.
+    #[cfg(test)]
+    pub fn corrections(&self) -> u32 {
+        self.claims.as_ref().map_or(0, |c| c.corrections)
+    }
+
+    /// Claims sent so far.
+    #[cfg(test)]
+    pub fn claims_sent(&self) -> u32 {
+        self.claims.as_ref().map_or(0, |c| c.sent)
     }
 }
 
@@ -171,8 +189,11 @@ fn receive(
                     match record {
                         Ok(Record::Correct { seq, movement }) => {
                             if let Some(claims) = &mut net.claims {
-                                warn!("the server put the player back at {:?}", movement.pos);
                                 claims.correct(&mut player, seq, &movement);
+                                warn!(
+                                    "the server put the player back at {:?}, {} times now",
+                                    movement.pos, claims.corrections
+                                );
                             }
                         }
                         Ok(_) => {}

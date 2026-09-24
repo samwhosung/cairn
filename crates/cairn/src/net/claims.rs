@@ -18,6 +18,9 @@ pub struct Claims {
     ack: u32,
     /// When the arc under way began, seconds: a landing claims how long it lasted.
     arc_began: Option<f32>,
+    pub corrections: u32,
+    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
+    pub sent: u32,
 }
 
 impl Claims {
@@ -26,6 +29,8 @@ impl Claims {
             cadence: Cadence::new(spawn),
             ack: 0,
             arc_began: None,
+            corrections: 0,
+            sent: 0,
         }
     }
 
@@ -39,6 +44,7 @@ impl Claims {
         player.airborne_since = None;
         self.ack = seq;
         self.cadence.report_now();
+        self.corrections += 1;
     }
 }
 
@@ -105,6 +111,7 @@ pub(super) fn claim(
     });
     for _ in 0..claims.cadence.claims(&movement) {
         link.send(&claim);
+        claims.sent += 1;
     }
 }
 

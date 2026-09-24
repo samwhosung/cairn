@@ -2,6 +2,7 @@
 //! plugins and keys the window uses. Every scenario skips without `WOW_DATA`.
 
 mod heard;
+mod honest;
 mod pictures;
 mod walker;
 
