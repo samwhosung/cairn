@@ -1,6 +1,6 @@
 [package]
 name = "sound"
-description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables"
+description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, mixed by kira on the device or offline"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,41 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow = "1"
+assert_no_alloc = "1.1"
 bevy.workspace = true
 dbc = { path = "../dbc" }
+# The mixer, pinned with symphonia below: its later 0.12 releases decode through symphonia 0.6.
+# Its own `cpal` backend stays off: `output` is the device layer.
+kira = { version = "=0.12.1", default-features = false, features = [
+  "mp3",
+  "wav",
+  "pcm",
+  "adpcm",
+] }
+libc = "0.2"
+mint = "0.5"
 mpq = { path = "../mpq" }
+rtrb = "0.3"
+# kira's version, for the `MediaSource` a decode stream reads through.
+symphonia = { version = "0.5", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-rs = { version = "0.13", default-features = false, features = [
+  "audio_unit",
+  "core_audio",
+] }
+objc2-core-audio = { version = "0.3", default-features = false, features = [
+  "std",
+  "AudioHardware",
+] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = [
+  "std",
+  "CoreAudioBaseTypes",
+] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cpal = "0.17"
 
 [lints]
 workspace = true

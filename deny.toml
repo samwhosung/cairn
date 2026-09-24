@@ -26,6 +26,39 @@ allow = [
   # `encase`, which Bevy lays out GPU buffers with: MIT without the attribution clause.
   "MIT-0",
 ]
+exceptions = [
+  # kira's decoders and its parameter buffer. MPL-2.0 binds changes to their own files only, and
+  # cairn uses them as published.
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-bundle-mp3" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-codec-adpcm" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-codec-pcm" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-core" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-format-riff" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "symphonia-metadata" },
+  { allow = [
+    "MPL-2.0",
+  ], crate = "triple_buffer" },
+  # `assert_no_alloc`, which aborts a debug build that allocates on the audio thread: BSD with
+  # only the notice clause.
+  { allow = [
+    "BSD-1-Clause",
+  ], crate = "assert_no_alloc" },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -16,6 +16,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: Swatinem/rust-cache@v2
+      # Off macOS the sound plays through cpal, which builds against ALSA on Linux.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,typos-cli,taplo-cli,cargo-machete
