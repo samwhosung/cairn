@@ -7,17 +7,25 @@ use protocol::{ClientMessage, Frames, VERSION};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use crate::world::{Input, Stamped};
 
 const READ_BUF: usize = 16 << 10;
 const UNREPORTED: u32 = u32::MAX;
+const AFTER_EVERY_INPUT: u32 = u32::MAX;
 
 pub struct Outbox {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     queued_bytes: Arc<AtomicUsize>,
     behind: Arc<AtomicU32>,
+    hung_up: Arc<Notify>,
+}
+
+impl Drop for Outbox {
+    fn drop(&mut self) {
+        self.hung_up.notify_one();
+    }
 }
 
 impl Outbox {
@@ -29,8 +37,14 @@ impl Outbox {
             tx,
             queued_bytes,
             behind,
+            hung_up: Arc::new(Notify::new()),
         };
         (outbox, rx)
+    }
+
+    pub fn hung_up(&self) -> impl Future<Output = ()> + Send + use<> {
+        let hung_up = self.hung_up.clone();
+        async move { hung_up.notified().await }
     }
 
     #[cfg(test)]
@@ -119,6 +133,16 @@ impl Shared {
             .remove(&conn)
     }
 
+    pub fn leave_next_tick(&self, conn: u32) {
+        let mut leave = vec![Stamped {
+            conn,
+            nth: AFTER_EVERY_INPUT,
+            received_ms: self.ms_since_start(),
+            input: Input::Leave,
+        }];
+        self.push(&mut leave);
+    }
+
     fn push(&self, batch: &mut Vec<Stamped>) {
         if !batch.is_empty() {
             let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
@@ -138,9 +162,15 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
         let (reader, writer) = socket.into_split();
         let (outbox, rx) = Outbox::channel();
         let (on_written, behind) = (outbox.on_written(), outbox.behind.clone());
+        let hung_up = outbox.hung_up();
         shared.hold_outbox(conn, outbox);
-        tokio::spawn(write(writer, rx, on_written));
-        tokio::spawn(read(conn, reader, behind, shared.clone()));
+        let writer = tokio::spawn(write(writer, rx, on_written));
+        let reader = tokio::spawn(read(conn, reader, behind, shared.clone()));
+        tokio::spawn(async move {
+            hung_up.await;
+            reader.abort();
+            writer.abort();
+        });
     }
 }
 

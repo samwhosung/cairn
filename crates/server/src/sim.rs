@@ -111,7 +111,7 @@ impl Sim {
                 .write(&mut bytes);
                 outbox.send(bytes);
             }
-            observers.push(Observer::new(joined.id, outbox));
+            observers.push(Observer::new(joined.id, joined.conn, outbox));
         }
         st.wall_ns[0] = lap_ns(&mut clock);
         let acts = phases[1].time(|| world.route(inputs, order));
@@ -127,12 +127,13 @@ impl Sim {
         st.wall_ns[3] = lap_ns(&mut clock);
         let bodies = world.stepped();
         observers.retain(|o| bodies[o.id as usize].alive);
-        let built = if sending {
+        let built = if let Batches::Send(clients) = batches {
             let scene = Scene {
                 world,
                 grid,
                 view,
                 relays,
+                clients,
             };
             let phase = &phases[4];
             observers

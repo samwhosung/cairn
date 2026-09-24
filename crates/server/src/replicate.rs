@@ -4,7 +4,7 @@ use protocol::{
 };
 
 use crate::grid::Grid;
-use crate::net::Outbox;
+use crate::net::{Outbox, Shared};
 use crate::relays::{Hot, Relays};
 use crate::world::World;
 
@@ -25,11 +25,11 @@ pub struct View {
     /// A client that says it is more than this many ticks behind gets no refreshes until it
     /// catches up.
     pub shed_ticks: u32,
-    /// A client with more than this many bytes queued is sent nothing more; its player stays in
-    /// the world until the client hangs up.
+    /// A client with more than this many bytes queued is dropped: its connection closes and its
+    /// player leaves at the next tick.
     pub kick_bytes: usize,
-    /// A client that says it is more than this many ticks behind is sent nothing more; its
-    /// player stays in the world until the client hangs up.
+    /// A client that says it is more than this many ticks behind is dropped as for
+    /// [`View::kick_bytes`].
     pub kick_ticks: u32,
 }
 
@@ -105,6 +105,7 @@ impl Slots {
 
 pub struct Observer {
     pub id: u32,
+    conn: u32,
     seen: Vec<Seen>,
     slots: Slots,
     fresh: bool,
@@ -113,9 +114,10 @@ pub struct Observer {
 }
 
 impl Observer {
-    pub fn new(id: u32, outbox: Option<Outbox>) -> Self {
+    pub fn new(id: u32, conn: u32, outbox: Option<Outbox>) -> Self {
         Self {
             id,
+            conn,
             seen: Vec::new(),
             slots: Slots::default(),
             fresh: true,
@@ -180,6 +182,7 @@ pub struct Scene<'a> {
     pub grid: &'a Grid,
     pub view: &'a View,
     pub relays: &'a Relays,
+    pub clients: &'a Shared,
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -195,6 +198,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         .unwrap_or(0);
     if queued > view.kick_bytes || behind > view.kick_ticks {
         o.outbox = None;
+        scene.clients.leave_next_tick(o.conn);
         built.kicked = 1;
     }
     let bodies = world.stepped();

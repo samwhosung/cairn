@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, InputOrder, Replay, Replicate, Spawn, Window};
+use server::{Config, InputOrder, Replay, Replicate, Spawn, View, Window};
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -21,6 +21,7 @@ struct Client {
     stream: TcpStream,
     frames: Frames,
     id: u32,
+    welcomed_at: u32,
     at: [f32; 3],
     slots: HashMap<u16, u32>,
 }
@@ -43,6 +44,7 @@ impl Client {
             stream,
             frames: Frames::default(),
             id: 0,
+            welcomed_at: 0,
             at: [0.0; 3],
             slots: HashMap::new(),
         };
@@ -51,8 +53,31 @@ impl Client {
             panic!("no welcome");
         };
         client.id = w.id;
+        client.welcomed_at = w.tick;
         client.at = w.spawn.pos;
         client
+    }
+
+    fn seen(&mut self, tick: u32) -> std::io::Result<()> {
+        let mut bytes = Vec::new();
+        ClientMessage::Seen(tick).write(&mut bytes);
+        self.stream.write_all(&bytes)
+    }
+
+    fn cut_off(&mut self) -> bool {
+        let refused = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            self.seen(0).is_err()
+        });
+        let mut buf = [0u8; 4096];
+        let ran_out = loop {
+            match self.stream.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(_) => {}
+                Err(e) => break !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+            }
+        };
+        refused && ran_out
     }
 
     fn frame(&mut self) -> Vec<u8> {
@@ -171,6 +196,45 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
         summary.refused,
         [0, 0, 1, 0, 0, 0],
         "one refusal, for speed"
+    );
+}
+
+#[test]
+fn a_client_that_stops_reading_is_dropped_and_the_others_see_it_vanish() {
+    let running = server::start(Config {
+        tick_threads: 1,
+        tick_ms: 10,
+        view: View {
+            kick_ticks: 5,
+            ..View::default()
+        },
+        ..Config::default()
+    })
+    .expect("a server");
+    let mut ada = Client::join(running.addr(), "Ada");
+    let mut bo = Client::join(running.addr(), "Bo");
+    ada.records_until(40, |g| *g == Got::Appear(bo.id));
+    let stalled = bo.welcomed_at;
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        let _ = bo.seen(stalled);
+        let batch = ada.batch();
+        let gone = batch.contains(&Got::Vanish(bo.id));
+        seen.extend(batch);
+        if gone {
+            break;
+        }
+    }
+    assert!(
+        seen.contains(&Got::Vanish(bo.id)),
+        "Bo stopped reading at tick {stalled} and Ada never saw it vanish: {seen:?}"
+    );
+    assert!(bo.cut_off(), "the server still holds Bo's connection");
+    let summary = running.stop().expect("a clean stop");
+    assert_eq!(summary.kicked, 1);
+    assert!(
+        ada.cut_off(),
+        "the server stopped and left Ada's connection open"
     );
 }
 

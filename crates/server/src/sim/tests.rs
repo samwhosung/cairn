@@ -286,6 +286,50 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
 }
 
 #[test]
+fn a_client_the_server_gives_up_on_leaves_at_the_next_tick() {
+    let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
+    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let shared = Shared::new();
+    let (outbox, rx) = Outbox::channel();
+    let mut ada = Client::new(rx);
+    shared.hold_outbox(0, outbox);
+    let (outbox, mut bo) = Outbox::channel();
+    let behind_by = outbox.behind_by();
+    shared.hold_outbox(1, outbox);
+    let pool = pool(1);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
+    run((0..2).map(join).collect());
+    ada.welcome();
+    assert_eq!(ada.next_batch(0), [Got::Appear(1)]);
+    behind_by(View::default().kick_ticks + 1);
+    assert_eq!(run(Vec::new()).built.kicked, 1);
+    assert_eq!(ada.next_batch(1), []);
+    let hung_up = shared.take_inputs();
+    assert!(
+        matches!(
+            hung_up[..],
+            [Stamped {
+                conn: 1,
+                input: Input::Leave,
+                ..
+            }]
+        ),
+        "{hung_up:?}"
+    );
+    run(hung_up);
+    assert_eq!(ada.next_batch(2), [Got::Vanish(1)]);
+    while bo.try_recv().is_ok() {}
+    assert!(bo.is_closed(), "the server still holds Bo's outbox");
+}
+
+#[test]
 fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
     let xs = [0.0, 150.0, 20.0, 40.0, 60.0, 80.0, 160.0];
     let spawns = xs.iter().map(|&x| spawn(x, 0.0)).collect();
