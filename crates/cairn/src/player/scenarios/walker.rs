@@ -12,7 +12,7 @@ use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use bevy::transform::TransformPlugin;
-use world::collision::{CollisionPlugin, Liquids, WorldCollision};
+use world::collision::{CollisionPlugin, CollisionResidency, Liquids, WorldCollision};
 use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install};
@@ -118,11 +118,13 @@ impl Walker {
         self
     }
 
-    /// Updates until the body is let go, the collision around it resident. The settle's stall
-    /// clock is the game's, so each update waits out its own step on the wall clock.
+    /// Updates until the body is let go and the collision around it is resident: under load the
+    /// body's own settle can give up on its stall clock first. That clock is the game's, so each
+    /// update waits out its own step on the wall clock.
     pub fn settle(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(300);
-        while self.player().settling {
+        while self.player().settling || !self.app.world().resource::<CollisionResidency>().settled()
+        {
             assert!(Instant::now() < deadline, "the collision never settled");
             self.app.update();
             std::thread::sleep(self.step);
