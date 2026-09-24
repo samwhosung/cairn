@@ -8,9 +8,9 @@ use crate::fixture::Fixture;
 use crate::view::{HUMAN_START, Pose};
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly] [LOOK]
+usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [LOOK]
          walk the install at $WOW_DATA, starting where the camera looks
-       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] --out FILE.png
+       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] --out FILE.png
          render one frame without a window, once everything in it has loaded
        cairn shot --display ID [--age S] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
          stand a CreatureDisplayInfo display on the ground below AT and shoot it S seconds
@@ -18,7 +18,8 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--fly] [LOOK]
          feet; without a camera, a Northshire hillside from 5 yd south, 10 degrees up
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
-of day the world is lit for, 12:00 by default.
+of day the world is lit for, 12:00 by default. --no-glow leaves out the client's
+full-screen glow.
 
 CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
   --eye X,Y,Z --look X,Y,Z                stand at the eye, look at the point
@@ -77,6 +78,7 @@ pub struct Args {
     pub time: TimeOfDay,
     pub mode: Mode,
     pub start_flying: bool,
+    pub glow: bool,
     pub display: Option<Fixture>,
     pub look: Look,
 }
@@ -129,9 +131,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let shot = args.next_if(|arg| arg == "shot").is_some();
     let mut given = BTreeMap::new();
     let mut start_flying = false;
+    let mut glow = true;
     while let Some(arg) = args.next() {
         if arg == "--fly" && !start_flying {
             start_flying = true;
+            continue;
+        }
+        if arg == "--no-glow" && glow {
+            glow = false;
             continue;
         }
         let flag = arg
@@ -179,6 +186,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         time,
         mode: out.map_or(Mode::Window, Mode::Shot),
         start_flying,
+        glow,
         display,
         look,
     })
@@ -387,6 +395,14 @@ mod tests {
         assert_eq!(orbit.mode, Mode::Shot(PathBuf::from("a/b.png")));
         let look = parsed("shot --out x.PNG --look 1,0,0 --eye 0,0,0").expect("parses");
         assert_eq!(look.pose, Pose::look(Vec3::ZERO, Vec3::X));
+    }
+
+    #[test]
+    fn the_glow_is_on_unless_left_out() {
+        assert!(parsed("").expect("parses").glow);
+        assert!(!parsed("--no-glow --map 1").expect("parses").glow);
+        assert!(!parsed("shot --no-glow --out a.png").expect("parses").glow);
+        assert!(parsed("--no-glow --no-glow").is_err());
     }
 
     #[test]

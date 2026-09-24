@@ -105,6 +105,7 @@ fn main() -> AppExit {
     };
     app.insert_resource(map)
         .insert_resource(args.time)
+        .insert_resource(world::FullScreenGlow(args.glow))
         .add_plugins((world::LoadersPlugin, world::WorldPlugin))
         .run()
 }

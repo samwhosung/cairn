@@ -9,7 +9,7 @@ mod atmosphere;
 mod billboard;
 pub mod collision;
 pub mod coords;
-mod decode;
+mod glow;
 mod ground;
 mod horizon;
 mod layers;
@@ -40,6 +40,7 @@ use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
 use bevy::prelude::*;
 
 pub use adt::AdtTile;
+pub use glow::FullScreenGlow;
 pub use light::SceneLight;
 pub use m2::M2Model;
 pub use map::CurrentMap;
@@ -88,7 +89,7 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            decode::DecodePlugin,
+            glow::GlowPlugin,
             light::LightBufferPlugin,
             terrain::TerrainMaterialPlugin,
             model_material::ModelMaterialPlugin,

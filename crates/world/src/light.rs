@@ -67,6 +67,8 @@ pub struct SceneLight {
     pub visible_sun: Vec3,
     /// How much of a window's night glow shows: 1 overnight, 0 by day.
     pub night_glow: f32,
+    /// The full-screen glow's weight, a byte fraction.
+    pub glow: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq)]

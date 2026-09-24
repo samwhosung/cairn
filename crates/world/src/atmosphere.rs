@@ -66,6 +66,7 @@ fn scene_light(atmosphere: &Atmosphere, minute: u32) -> SceneLight {
         sky_warp: daynight::sky_warp(minute, atmosphere.highlight_sky),
         visible_sun: wow_to_bevy(daynight::celestial_sun_direction(minute)).normalize(),
         night_glow: daynight::sidn_night_fraction(minute),
+        glow: (atmosphere.glow * 255.0).floor() / 255.0,
     }
 }
 
