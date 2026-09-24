@@ -7,7 +7,7 @@ mod relay;
 mod remote;
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bevy::math::ops;
 use bevy::prelude::*;
@@ -186,8 +186,8 @@ fn receive(
         commands.remove_resource::<Net>();
     };
     for arrival in net.link.arrivals() {
-        let frame = match arrival {
-            Arrival::Frame(frame) => frame,
+        let (frame, arrived) = match arrival {
+            Arrival::Frame { bytes, at } => (bytes, at),
             Arrival::Gone { reason } => return alone(&mut commands, &mut net, reason),
         };
         match ServerMessage::read(&frame) {
@@ -216,7 +216,8 @@ fn receive(
                 let at = BatchContext {
                     server_ms: batch.tick.wrapping_mul(tick_ms),
                     own_pos: bevy_to_wow(player.pos),
-                    real_ms: real.elapsed_secs_f64() * 1000.0,
+                    arrived_ms: real_ms_at(&real, arrived),
+                    now_ms: real.elapsed_secs_f64() * 1000.0,
                     frame_secs: time.elapsed_secs(),
                 };
                 for record in batch {
@@ -251,6 +252,17 @@ fn receive(
         net.seen_at = now;
         net.link.send(&ClientMessage::Seen(tick));
     }
+}
+
+/// Where `instant` falls on the real clock, in ms: bytes that waited for this frame fall before
+/// it.
+fn real_ms_at(real: &Time<Real>, instant: Instant) -> f64 {
+    let now_ms = real.elapsed_secs_f64() * 1000.0;
+    let Some(now) = real.last_update() else {
+        return now_ms;
+    };
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    now_ms + ms(instant.saturating_duration_since(now)) - ms(now.saturating_duration_since(instant))
 }
 
 fn place(player: &mut Player, welcome: &Welcome) {
@@ -302,5 +314,16 @@ mod tests {
                 .iter()
                 .all(|s| s.facing.abs() < 1e-6 && (s.pos[2] - 10.0).abs() < 1e-4)
         );
+    }
+
+    #[test]
+    fn bytes_that_waited_for_the_frame_fall_on_the_clock_when_they_came() {
+        let start = Instant::now();
+        let mut real = Time::<Real>::new(start);
+        real.update_with_instant(start);
+        real.update_with_instant(start + Duration::from_secs(3));
+        let at = |ms: u64| real_ms_at(&real, start + Duration::from_millis(ms));
+        assert!((at(2500) - 2500.0).abs() < 1e-6, "{}", at(2500));
+        assert!((at(3100) - 3100.0).abs() < 1e-6, "{}", at(3100));
     }
 }

@@ -18,13 +18,19 @@ pub struct ReplayTiming {
 
 impl ReplayTiming {
     /// The time on this window's clock to apply a move stamped `server_ms` that arrived at
-    /// `now_ms`, given the player's flags and whether nothing of theirs waits, both from before
-    /// the move applies.
-    pub fn schedule(&mut self, server_ms: u32, now_ms: f64, flags: u32, queue_empty: bool) -> f64 {
+    /// `arrived_ms`, given the player's flags and whether nothing of theirs waits, both from
+    /// before the move applies.
+    pub fn schedule(
+        &mut self,
+        server_ms: u32,
+        arrived_ms: f64,
+        flags: u32,
+        queue_empty: bool,
+    ) -> f64 {
         if !self.seeded {
             self.seeded = true;
             self.last_server_ms = server_ms;
-            self.last_fire_ms = now_ms;
+            self.last_fire_ms = arrived_ms;
         }
         let step = server_ms.wrapping_sub(self.last_server_ms) as i32;
         let server_delta = if step > 0 {
@@ -33,17 +39,17 @@ impl ReplayTiming {
         } else {
             0.0
         };
-        let arrival_delta = now_ms - self.last_fire_ms;
+        let arrival_delta = arrived_ms - self.last_fire_ms;
         let mut skew = server_delta - arrival_delta;
         let widest = self.widest_need(arrival_delta - server_delta);
         if flags & flags::UNDER_WAY == 0 && queue_empty {
             skew = (skew + widest - self.buffer_ms).clamp(SKEW_MIN_MS, SKEW_MAX_MS);
-            if now_ms + skew < self.last_fire_ms {
-                skew = self.last_fire_ms - now_ms;
+            if arrived_ms + skew < self.last_fire_ms {
+                skew = self.last_fire_ms - arrived_ms;
             }
             self.buffer_ms = widest;
         }
-        let fire_ms = now_ms + skew.clamp(SKEW_MIN_MS, SKEW_MAX_MS);
+        let fire_ms = arrived_ms + skew.clamp(SKEW_MIN_MS, SKEW_MAX_MS);
         self.last_fire_ms = fire_ms;
         fire_ms
     }

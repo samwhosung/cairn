@@ -6,7 +6,7 @@ use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::{ClientMessage, Frames, Hello};
 
@@ -14,8 +14,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUF: usize = 64 << 10;
 
 pub enum Arrival {
-    Frame(Vec<u8>),
-    Gone { reason: String },
+    /// A frame, and when its bytes came off the socket.
+    Frame {
+        bytes: Vec<u8>,
+        at: Instant,
+    },
+    Gone {
+        reason: String,
+    },
 }
 
 pub struct Link {
@@ -105,11 +111,13 @@ fn run(
             Ok(n) => n,
             Err(e) => return format!("the connection to {addr}: {e}"),
         };
+        let at = Instant::now();
         frames.extend(&buf[..n]);
         loop {
             match frames.next_frame() {
                 Ok(Some(frame)) => {
-                    if arrived.send(Arrival::Frame(frame.to_vec())).is_err() {
+                    let bytes = frame.to_vec();
+                    if arrived.send(Arrival::Frame { bytes, at }).is_err() {
                         return "the client stopped listening".into();
                     }
                 }

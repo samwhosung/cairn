@@ -75,9 +75,9 @@ struct Airborne {
 }
 
 impl RemoteMotion {
-    /// A player first seen doing `mv`, arriving at `now_ms`: the timing seeds on it and it
+    /// A player first seen doing `mv`, arriving at `arrived_ms`: the timing seeds on it and it
     /// applies at once.
-    pub fn seeded(mv: &RelayMove, now_ms: f64) -> Self {
+    pub fn seeded(mv: &RelayMove, arrived_ms: f64) -> Self {
         let mut rm = Self {
             wow_pos: mv.wow_pos,
             orientation: mv.orientation,
@@ -89,17 +89,20 @@ impl RemoteMotion {
             pending: VecDeque::new(),
             timing: ReplayTiming::default(),
         };
-        rm.timing.schedule(mv.server_ms, now_ms, 0, true);
+        rm.timing.schedule(mv.server_ms, arrived_ms, 0, true);
         rm.apply(mv);
         rm
     }
 
-    /// Schedules a move that arrived at `now_ms`: it applies now if it is due and nothing waits
-    /// before it, and waits otherwise.
-    pub fn relayed(&mut self, mv: RelayMove, now_ms: f64) {
-        let fire_ms =
-            self.timing
-                .schedule(mv.server_ms, now_ms, self.flags, self.pending.is_empty());
+    /// Schedules a move that arrived at `arrived_ms`: it applies now, at `now_ms`, if it is due
+    /// and nothing waits before it, and waits otherwise.
+    pub fn relayed(&mut self, mv: RelayMove, arrived_ms: f64, now_ms: f64) {
+        let fire_ms = self.timing.schedule(
+            mv.server_ms,
+            arrived_ms,
+            self.flags,
+            self.pending.is_empty(),
+        );
         if self.pending.is_empty() && fire_ms <= now_ms {
             self.apply(&mv);
         } else {

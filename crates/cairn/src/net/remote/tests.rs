@@ -97,3 +97,35 @@ fn a_blend_lands_on_the_waiting_move_as_its_time_comes() {
     let turned = facing_lerp(0.1, 2.0 * PI - 0.1, 0.05, 0.05);
     assert!(turned.abs() < 1e-5, "the short way round: {turned}");
 }
+
+#[test]
+fn a_frame_that_ran_late_is_not_taken_for_a_late_network() {
+    let at = |server_ms: u32, flags: u32, x: f32| RelayMove {
+        server_ms,
+        wow_pos: [x, 0.0, 0.0],
+        orientation: 0.0,
+        flags,
+        pitch: 0.0,
+        fall_time: 0,
+        jump: None,
+    };
+    let mut rm = RemoteMotion::seeded(&at(0, 0, 0.0), 0.0);
+    for i in 1..=20u16 {
+        let ms = u32::from(i) * 50;
+        rm.relayed(
+            at(ms, flags::FORWARD, f32::from(i) * 0.35),
+            f64::from(ms),
+            3000.0,
+        );
+    }
+    rm.relayed(at(1050, 0, 7.5), 1050.0, 3000.0);
+    assert!(
+        rm.pending.is_empty() && rm.flags == 0 && (rm.wow_pos[0] - 7.5).abs() < 1e-6,
+        "on time off the socket and taken three seconds on, every move was due"
+    );
+    rm.relayed(at(5000, flags::FORWARD, 7.5), 5000.0, 5000.0);
+    assert!(
+        rm.pending.is_empty() && rm.flags == flags::FORWARD,
+        "the late frame sized no buffer, so a start from rest applies as it arrives"
+    );
+}

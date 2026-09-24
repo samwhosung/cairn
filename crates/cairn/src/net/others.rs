@@ -95,10 +95,13 @@ pub struct Faults {
 }
 
 /// What every record of a batch is read with; relayed positions are unwrapped around `own_pos`.
+/// `arrived_ms` and `now_ms` are on the real clock: when the batch came off the socket, and this
+/// frame.
 pub struct BatchContext {
     pub server_ms: u32,
     pub own_pos: [f32; 3],
-    pub real_ms: f64,
+    pub arrived_ms: f64,
+    pub now_ms: f64,
     pub frame_secs: f32,
 }
 
@@ -132,7 +135,7 @@ impl Others {
                     UnitShade::default(),
                     UnitMotion::default(),
                     UnitAlpha::default(),
-                    RemoteMotion::seeded(&mv, at.real_ms),
+                    RemoteMotion::seeded(&mv, at.arrived_ms),
                 ));
                 self.by_slot.insert(slot, relayed);
             }
@@ -167,7 +170,8 @@ impl Others {
         };
         change(r);
         #[cfg_attr(not(test), allow(unused_mut))]
-        let (mut mv, real_ms) = (r.relay_move(at.server_ms), at.real_ms);
+        let mut mv = r.relay_move(at.server_ms);
+        let (arrived_ms, now_ms) = (at.arrived_ms, at.now_ms);
         #[cfg(test)]
         {
             self.dropped = self.faults.drop_every_other && !self.dropped;
@@ -182,7 +186,7 @@ impl Others {
             .entity(r.entity)
             .queue(move |mut entity: EntityWorldMut<'_>| {
                 if let Some(mut rm) = entity.get_mut::<RemoteMotion>() {
-                    rm.relayed(mv, real_ms);
+                    rm.relayed(mv, arrived_ms, now_ms);
                 }
             });
     }
