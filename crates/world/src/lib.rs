@@ -14,6 +14,7 @@ pub mod coords;
 mod doodad_anim;
 mod doodad_events;
 mod effect;
+pub mod effects;
 mod glow;
 mod ground;
 mod horizon;
@@ -123,6 +124,7 @@ impl Plugin for WorldPlugin {
             effect::EffectPlugin,
             liquid::LiquidPlugin,
         ))
+        .add_plugins(effects::EffectsPlugin)
         .init_resource::<Residency>()
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()

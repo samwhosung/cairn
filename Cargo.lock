@@ -5400,6 +5400,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "blp",
+ "bytemuck",
  "character",
  "dbc",
  "image",

@@ -11,6 +11,7 @@ publish.workspace = true
 avian3d.workspace = true
 bevy.workspace = true
 blp = { path = "../blp" }
+bytemuck = { version = "1", features = ["derive"] }
 character = { path = "../character" }
 dbc = { path = "../dbc" }
 image = { version = "0.25", default-features = false }
