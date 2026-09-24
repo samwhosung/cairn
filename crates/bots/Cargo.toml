@@ -1,0 +1,26 @@
+[package]
+name = "bots"
+description = "Bot clients for the server: a crowd walking Elwynn's terrain from one process, each checking what it is shown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dbc = { path = "../dbc" }
+mpq = { path = "../mpq" }
+protocol = { path = "../protocol" }
+server = { path = "../server" }
+terrain = { path = "../terrain" }
+wdt = { path = "../wdt" }
+tokio = { version = "1.53", features = [
+  "rt-multi-thread",
+  "net",
+  "io-util",
+  "sync",
+  "time",
+] }
+
+[lints]
+workspace = true

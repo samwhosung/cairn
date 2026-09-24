@@ -23,6 +23,7 @@ gates enforce the rest.
 <!-- crates:start -->
 - [`adt`](crates/adt) — Reads World of Warcraft 1.12.1 ADT terrain tiles: heights, textures, liquids and placements
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
+- [`bots`](crates/bots) — Bot clients for the server: a crowd walking Elwynn's terrain from one process, each checking what it is shown
 - [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, or renders one shot of it to a PNG
 - [`character`](crates/character) — World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns

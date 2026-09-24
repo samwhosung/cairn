@@ -1379,6 +1379,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bots"
+version = "0.0.0"
+dependencies = [
+ "dbc",
+ "mpq",
+ "protocol",
+ "server",
+ "terrain",
+ "tokio",
+ "wdt",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
