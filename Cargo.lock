@@ -3828,6 +3828,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sound"
+version = "0.0.0"
+dependencies = [
+ "bevy",
+ "dbc",
+ "mpq",
+]
+
+[[package]]
 name = "spade"
 version = "2.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

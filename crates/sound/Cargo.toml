@@ -1,0 +1,16 @@
+[package]
+name = "sound"
+description = "World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy.workspace = true
+dbc = { path = "../dbc" }
+mpq = { path = "../mpq" }
+
+[lints]
+workspace = true
