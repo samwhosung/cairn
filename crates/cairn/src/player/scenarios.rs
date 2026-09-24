@@ -309,6 +309,55 @@ fn deep_water_is_swum_into_and_out_of() {
     assert!(depth[frames.len() - 1].is_none() && end.flags & (SWIMMING | FALLING) == 0);
 }
 
+/// The top of a stone ramp beside a pier on Stormwind's canals; south-west runs down it into
+/// the building's own water, which no terrain liquid covers.
+const CANAL_RAMP: [f32; 2] = [-8761.44, 527.36];
+/// The canal's surface, WoW Z.
+const CANAL_SURFACE: f32 = 95.474;
+
+/// Down the ramp for two seconds, then back to its top, steering at it. The swimmer grazes the
+/// ramp, so neither its depth nor its speed is the open water's.
+#[test]
+fn a_stormwind_canal_is_swum_into_and_out_of() {
+    let Some(mut w) = Walker::on_ground(CANAL_RAMP, 212.6, 60.0) else {
+        return;
+    };
+    let start = w.wow();
+    w.press(KeyCode::KeyW);
+    let mut frames = w.run(120);
+    for _ in 0..420 {
+        let [x, y, _] = w.wow();
+        w.aim((start[1] - y).atan2(start[0] - x).to_degrees());
+        frames.extend(w.run(1));
+    }
+    let surface: Vec<Option<f32>> = frames.iter().map(|f| w.water(f.wow)).collect();
+    let depth = |i: usize| surface[i].expect("in the canal") - frames[i].wow[2];
+    let swims = |i: usize| frames[i].flags & SWIMMING != 0;
+    let (enter, exit) = (
+        swim_enter_depth(CAPSULE_HEIGHT),
+        swim_exit_depth(CAPSULE_HEIGHT),
+    );
+    let first = (0..frames.len()).find(|&i| swims(i)).expect("a swim");
+    let last = (first..frames.len())
+        .find(|&i| !swims(i))
+        .expect("out again")
+        - 1;
+    eprintln!(
+        "canal swim: frames {first} to {last}, begun at depth {:.3} (over {enter:.3}), ended at \
+         {:.3} (under {exit:.3})",
+        depth(first - 1),
+        depth(last)
+    );
+    assert!(depth(first - 1) > enter && depth(first - 2) <= enter);
+    assert!(depth(last) < exit && depth(last - 1) >= exit);
+    assert!(
+        (first..=last).all(|i| surface[i].is_some_and(|z| (z - CANAL_SURFACE).abs() < 1e-3)),
+        "the building's water"
+    );
+    let end = frames[frames.len() - 1];
+    assert!(end.flags & (SWIMMING | FALLING) == 0, "{:?}", end.wow);
+}
+
 /// The Goldshire inn's north wall, a WMO face leaning 1.5° back from its base: its outward normal
 /// and its plane a yard above the ground, `n · (x, y) = c`. It runs flat from y = 26 to y = 20.
 const INN_WALL: ([f32; 2], f32) = ([0.992_55, -0.121_91], -9383.97);
