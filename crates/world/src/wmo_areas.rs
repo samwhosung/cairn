@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::io::Cursor;
 
 use bevy::prelude::*;
-use dbc::{DbcParser, FieldType, Record, RecordSet, Schema, SchemaField, Value};
 use mpq::Chain;
+
+use crate::dbc_table::{read_table, str_at, u32_at};
 
 const TABLE: &str = "DBFilesClient\\WMOAreaTable.dbc";
 
@@ -30,22 +30,7 @@ pub struct WmoAreas {
 
 impl WmoAreas {
     pub fn load(chain: &Chain) -> Result<Self, String> {
-        let bytes = chain
-            .read(TABLE)
-            .map_err(|e| format!("reading {TABLE}: {e}"))?;
-        let mut schema = Schema::new(TABLE);
-        for i in 0..20 {
-            let ty = if i == 11 {
-                FieldType::String
-            } else {
-                FieldType::UInt32
-            };
-            schema.add_field(SchemaField::new("", ty));
-        }
-        let rs = DbcParser::parse(&mut Cursor::new(bytes.as_slice()))
-            .and_then(|p| p.with_schema(schema))
-            .and_then(|p| p.parse_records())
-            .map_err(|e| format!("parsing {TABLE}: {e}"))?;
+        let rs = read_table(chain, TABLE, 20, &[11])?;
         let mut areas = Self::default();
         for r in rs.records() {
             let g = |i| u32_at(r, i).unwrap_or(0);
@@ -108,23 +93,6 @@ impl WmoAreas {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-}
-
-fn u32_at(r: &Record, i: usize) -> Option<u32> {
-    match r.get_value(i)? {
-        Value::UInt32(v) => Some(*v),
-        _ => None,
-    }
-}
-
-fn str_at(rs: &RecordSet, r: &Record, i: usize) -> String {
-    match r.get_value(i) {
-        Some(Value::StringRef(at)) => rs
-            .get_string(*at)
-            .map(std::borrow::Cow::into_owned)
-            .unwrap_or_default(),
-        _ => String::new(),
     }
 }
 

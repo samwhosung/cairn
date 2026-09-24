@@ -479,3 +479,22 @@ fn creature_displays_resolve_models_scales_and_appearances() {
     }
     assert!(cat.model(0).is_none() && cat.collision_height(0).is_none());
 }
+
+#[test]
+fn a_display_prints_with_the_ink_and_size_its_model_names() {
+    let Some(chain) = chain() else { return };
+    let cat = CreatureCatalog::load(chain).expect("load the creatures");
+    let human = cat.footprint(49).expect("a human male prints");
+    assert_eq!(human.texture, 1);
+    assert!((human.length - 12.0 / 36.0).abs() < 1e-6);
+    assert!((human.width - 10.0 / 36.0).abs() < 1e-6);
+    assert_eq!(
+        cat.footprint(59).map(|f| f.texture),
+        Some(3),
+        "a tauren's hoof"
+    );
+    assert!(
+        cat.footprint(11686).is_none(),
+        "the invisible stalker leaves none"
+    );
+}

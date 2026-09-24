@@ -106,6 +106,7 @@ impl CharacterTables {
             .as_ref()
             .map(|npc| self.dress(&CharacterLook::of_npc(npc), chain, images, server));
         Some(UnitBody {
+            display: display_id,
             model: m.model_path,
             skins: m.textures,
             character,
@@ -124,6 +125,7 @@ impl CharacterTables {
         let display = self.create.body_display(look.race, look.sex)?;
         let m = self.creatures.model(display)?;
         Some(UnitBody {
+            display,
             model: m.model_path,
             skins: m.textures,
             character: Some(self.dress(look, chain, images, server)),

@@ -11,7 +11,7 @@ mod sections;
 mod table;
 mod texture;
 
-pub use creatures::{CreatureCatalog, CreatureModel, NpcAppearance};
+pub use creatures::{CreatureCatalog, CreatureModel, Footprint, NpcAppearance};
 pub use customization::{CharCreateCatalog, DialRanges, StartOutfitItem};
 pub use emblem::{EmblemLayer, GuildEmblem};
 pub use equipment::{

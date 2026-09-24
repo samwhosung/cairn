@@ -110,7 +110,21 @@ struct ModelRow {
     path: String,
     scale: f32,
     collision_height: f32,
+    footprint_texture: u32,
+    footprint_length_inches: f32,
+    footprint_width_inches: f32,
 }
+
+/// The print a model's feet leave: its `FootprintTextures` id, and its length along the facing and
+/// width across in yards, before the unit's scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Footprint {
+    pub texture: u32,
+    pub length: f32,
+    pub width: f32,
+}
+
+const INCHES_PER_YARD: f32 = 36.0;
 
 /// Creature displays by id, resolved through their models. The default is empty: every lookup
 /// misses.
@@ -133,6 +147,9 @@ impl CreatureCatalog {
                     path,
                     scale: f32_at(r, 4).unwrap_or(1.0),
                     collision_height: f32_at(r, 15).unwrap_or(0.0),
+                    footprint_texture: u32_at(r, 6).unwrap_or(u32::MAX),
+                    footprint_length_inches: f32_at(r, 7).unwrap_or(0.0),
+                    footprint_width_inches: f32_at(r, 8).unwrap_or(0.0),
                 };
                 models.insert(id, row);
             }
@@ -191,6 +208,22 @@ impl CreatureCatalog {
     pub fn collision_height(&self, display_id: u32) -> Option<f32> {
         let row = self.display.get(&display_id)?;
         Some(self.models.get(&row.model_id)?.collision_height)
+    }
+
+    /// The print a display's feet leave; `None` for an unknown display or model, and for a model
+    /// that leaves none, whose texture is `-1` or whose print has no size.
+    pub fn footprint(&self, display_id: u32) -> Option<Footprint> {
+        let row = self.display.get(&display_id)?;
+        let model = self.models.get(&row.model_id)?;
+        let (length, width) = (
+            model.footprint_length_inches / INCHES_PER_YARD,
+            model.footprint_width_inches / INCHES_PER_YARD,
+        );
+        (model.footprint_texture != u32::MAX && length > 0.0 && width > 0.0).then_some(Footprint {
+            texture: model.footprint_texture,
+            length,
+            width,
+        })
     }
 
     /// How many displays the catalog holds.

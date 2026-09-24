@@ -95,6 +95,7 @@ fn unit(app: &mut App, at: Vec3, clips: Vec<AnimClip>) -> Entity {
             Transform::from_translation(at),
             anims(clips),
             UnitBody {
+                display: 0,
                 model: String::new(),
                 skins: [None, None, None],
                 character: None,

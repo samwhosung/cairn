@@ -33,6 +33,8 @@ use super::shadow::BlobShadow;
 #[derive(Component, Clone, Debug)]
 #[require(BlobShadow)]
 pub struct UnitBody {
+    /// The `CreatureDisplayInfo` id it was resolved from.
+    pub display: u32,
     /// The model's path as the tables name it.
     pub model: String,
     /// The `Monster1..3` skin names, found beside the model.
