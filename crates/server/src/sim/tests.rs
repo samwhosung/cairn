@@ -207,7 +207,7 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
     let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
     let shared = Shared::new();
     let (slow, mut rx) = Outbox::channel();
-    let saw = slow.seen_by();
+    let behind_by = slow.behind_by();
     shared.hold_outbox(0, slow);
     shared.hold_outbox(1, Outbox::channel().0);
     let pool = pool(1);
@@ -216,11 +216,13 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
     run((0..2).map(join).collect());
     assert!(rx.try_recv().is_ok(), "a welcome");
     assert_eq!(next_batch(&mut rx, 0), [Got::Appear(1)]);
-    saw(0);
+    behind_by(0);
     let mut moved = Vec::new();
     for t in 1..=30 {
-        if t == 26 {
-            saw(25);
+        match t {
+            11 => behind_by(11),
+            26 => behind_by(1),
+            _ => {}
         }
         let flags = if (20..25).contains(&t) {
             0

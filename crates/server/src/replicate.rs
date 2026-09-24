@@ -140,7 +140,11 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     let tick = world.tick();
     let view = scene.view;
     let queued = o.outbox.as_ref().map_or(0, Outbox::queued_bytes);
-    let behind = o.outbox.as_ref().and_then(|b| b.behind(tick)).unwrap_or(0);
+    let behind = o
+        .outbox
+        .as_ref()
+        .and_then(Outbox::behind_ticks)
+        .unwrap_or(0);
     if queued > view.kick_bytes || behind > view.kick_ticks {
         o.outbox = None;
         built.kicked = 1;

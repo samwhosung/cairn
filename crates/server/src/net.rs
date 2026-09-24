@@ -16,36 +16,34 @@ const READ_BUF: usize = 16 << 10;
 pub struct Outbox {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     queued_bytes: Arc<AtomicUsize>,
-    /// One more than the latest tick the client has seen; 0 until it says.
-    seen: Arc<AtomicU32>,
+    /// How many ticks behind the client was when it last said which it had seen; `u32::MAX`
+    /// until it says.
+    behind: Arc<AtomicU32>,
 }
 
 impl Outbox {
     pub fn channel() -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let queued_bytes = Arc::new(AtomicUsize::new(0));
-        let seen = Arc::new(AtomicU32::new(0));
+        let behind = Arc::new(AtomicU32::new(u32::MAX));
         let outbox = Self {
             tx,
             queued_bytes,
-            seen,
+            behind,
         };
         (outbox, rx)
     }
 
     #[cfg(test)]
-    pub fn seen_by(&self) -> impl Fn(u32) + use<> {
-        let seen = self.seen.clone();
-        move |tick| {
-            seen.fetch_max(tick + 1, Ordering::Relaxed);
-        }
+    pub fn behind_by(&self) -> impl Fn(u32) + use<> {
+        let behind = self.behind.clone();
+        move |ticks| behind.store(ticks, Ordering::Relaxed)
     }
 
-    /// How many ticks behind `tick` the client says it is, once it has said.
-    pub fn behind(&self, tick: u32) -> Option<u32> {
-        match self.seen.load(Ordering::Relaxed) {
-            0 => None,
-            seen => Some((tick + 1).saturating_sub(seen)),
+    pub fn behind_ticks(&self) -> Option<u32> {
+        match self.behind.load(Ordering::Relaxed) {
+            u32::MAX => None,
+            ticks => Some(ticks),
         }
     }
 
@@ -65,6 +63,8 @@ pub struct Shared {
     inbox: Mutex<Vec<Stamped>>,
     unadmitted: Mutex<HashMap<u32, Outbox>>,
     next_conn: AtomicU32,
+    /// The tick being run.
+    pub tick: AtomicU32,
     pub bytes_in: AtomicU64,
     pub stop: AtomicBool,
     started: Instant,
@@ -82,6 +82,7 @@ impl Shared {
             inbox: Mutex::new(Vec::new()),
             unadmitted: Mutex::new(HashMap::new()),
             next_conn: AtomicU32::new(0),
+            tick: AtomicU32::new(0),
             bytes_in: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             started: Instant::now(),
@@ -132,10 +133,10 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
         let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
         let (reader, writer) = socket.into_split();
         let (outbox, rx) = Outbox::channel();
-        let (queued, seen) = (outbox.queued_bytes.clone(), outbox.seen.clone());
+        let (queued, behind) = (outbox.queued_bytes.clone(), outbox.behind.clone());
         shared.hold_outbox(conn, outbox);
         tokio::spawn(write(writer, rx, queued));
-        tokio::spawn(read(conn, reader, seen, shared.clone()));
+        tokio::spawn(read(conn, reader, behind, shared.clone()));
     }
 }
 
@@ -152,7 +153,7 @@ async fn write(
     }
 }
 
-async fn read(conn: u32, mut r: OwnedReadHalf, seen: Arc<AtomicU32>, shared: Arc<Shared>) {
+async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: Arc<Shared>) {
     let mut frames = Frames::default();
     let mut buf = vec![0u8; READ_BUF];
     let (mut seq, mut joined, mut batch) = (0u32, false, Vec::new());
@@ -173,7 +174,8 @@ async fn read(conn: u32, mut r: OwnedReadHalf, seen: Arc<AtomicU32>, shared: Arc
                 }
                 Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
                 Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
-                    seen.fetch_max(tick.saturating_add(1), Ordering::Relaxed);
+                    let now = shared.tick.load(Ordering::Relaxed);
+                    behind.store(now.saturating_sub(tick), Ordering::Relaxed);
                     continue;
                 }
                 _ => {
