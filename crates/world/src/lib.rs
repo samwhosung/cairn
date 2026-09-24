@@ -11,6 +11,7 @@ mod celestial;
 mod clouds;
 pub mod collision;
 pub mod coords;
+pub mod doodad_sound;
 mod glow;
 mod ground;
 mod horizon;
@@ -128,6 +129,7 @@ impl Plugin for WorldPlugin {
                     models::furnish,
                     portal::compute_wmo_pvs,
                     visibility::apply_model_visibility,
+                    doodad_sound::fire_sound_host_events,
                 )
                     .chain()
                     .after(stream::stream_terrain),
@@ -142,9 +144,16 @@ impl Plugin for WorldPlugin {
         )
         .add_systems(
             PostUpdate,
-            billboard::face_billboards
-                .after(bevy::transform::TransformSystems::Propagate)
-                .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+            (
+                billboard::face_billboards
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+                (
+                    doodad_sound::reroll_sound_hosts,
+                    doodad_sound::gate_sound_hosts,
+                )
+                    .chain(),
+            ),
         );
     }
 }

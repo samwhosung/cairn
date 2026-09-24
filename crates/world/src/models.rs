@@ -13,6 +13,7 @@ use crate::Residency;
 use crate::adt::AdtTile;
 use crate::billboard::BillboardCard;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
+use crate::doodad_sound::{SoundHost, arms_for_sound};
 use crate::ground::{Ground, ground_under};
 use crate::light::{LightBuffer, LightRooms, point_light};
 use crate::m2::M2Model;
@@ -162,10 +163,9 @@ pub(crate) fn furnish(
                 };
                 let shade =
                     ground_shade(&streamer, &adts, &f.transform).unwrap_or(GroundShade::Lit);
-                let id = h.id().untyped();
-                let form = spawner.forms(id, &m.submeshes);
-                f.entities = spawner.doodad(m, id, &form, &f.transform, DoodadLight::Sky(shade));
-                spawner.doodad_lights(m, &f.transform, None, &mut f.entities);
+                let (entities, form) =
+                    spawner.placed_doodad(m, h.id().untyped(), &f.transform, shade);
+                f.entities = entities;
                 f.forms.push(form);
             }
             ModelHandle::Wmo { handle, props, .. } => {
@@ -311,6 +311,22 @@ impl Spawner<'_, '_, '_> {
         form
     }
 
+    /// A map's own doodad: its parts, a sound clock when it sounds, its lights.
+    fn placed_doodad(
+        &mut self,
+        m: &M2Model,
+        model: UntypedAssetId,
+        transform: &Transform,
+        shade: GroundShade,
+    ) -> (Vec<Entity>, Arc<[Handle<Mesh>]>) {
+        let form = self.forms(model, &m.submeshes);
+        let mut entities = self.doodad(m, model, &form, transform, DoodadLight::Sky(shade));
+        let parts = entities.clone();
+        entities.extend(self.sound_host(m, transform, None, parts));
+        self.doodad_lights(m, transform, None, &mut entities);
+        (entities, form)
+    }
+
     fn doodad(
         &mut self,
         m: &M2Model,
@@ -361,6 +377,7 @@ impl Spawner<'_, '_, '_> {
         };
         let model = prop.handle.id().untyped();
         let mut ents = self.doodad(m, model, form, &prop.transform, light);
+        let parts = ents.clone();
         if let DoodadLight::Probe(slot) = light {
             let owner = if let Some(&e) = ents.first() {
                 e
@@ -380,8 +397,24 @@ impl Spawner<'_, '_, '_> {
                 self.commands.entity(e).insert(room.clone());
             }
         }
+        ents.extend(self.sound_host(m, &prop.transform, room.clone(), parts));
         self.doodad_lights(m, &prop.transform, room.as_ref(), &mut ents);
         ents
+    }
+
+    /// A clock for a doodad whose idle sequences carry sound keys, over its drawn `parts`.
+    fn sound_host(
+        &mut self,
+        m: &M2Model,
+        transform: &Transform,
+        room: Option<WmoGroupVis>,
+        parts: Vec<Entity>,
+    ) -> Option<Entity> {
+        let anims = m.animations.as_ref().filter(|a| arms_for_sound(a))?;
+        let (radius, center) = m.fade_sphere(transform.scale.x);
+        let fade = (transform.transform_point(center), radius);
+        let host = SoundHost::new(anims, parts, fade, room)?;
+        Some(self.commands.spawn((host, anims.clone(), *transform)).id())
     }
 
     fn doodad_lights(
