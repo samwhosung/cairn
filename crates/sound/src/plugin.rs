@@ -121,9 +121,17 @@ impl Plugin for SoundPlugin {
         .init_resource::<ListenerCharacter>()
         .init_resource::<crate::interior::CurrentInterior>()
         .init_resource::<crate::reverb::AppliedPreset>()
+        .init_resource::<crate::emitter_pool::AmbientEmitterPool>()
+        .init_resource::<crate::liquid_loop::LiquidLoopState>()
         .add_systems(
             Startup,
-            (load_kits, crate::zone::load_area_sounds, load_providers),
+            (
+                load_kits,
+                crate::zone::load_area_sounds,
+                load_providers,
+                crate::footsteps::load_footsteps,
+                crate::liquid_loop::load_water_sounds,
+            ),
         )
         .add_systems(PreUpdate, stamp_clock)
         .configure_sets(
@@ -143,6 +151,12 @@ impl Plugin for SoundPlugin {
                 crate::zone::zone_audio,
                 crate::zone::report_stream_voices,
                 crate::reverb::zone_reverb,
+                crate::anim_events::route_anim_events,
+                crate::emitter_pool::release_on_despawn,
+                crate::emitter_pool::pump_emitters,
+                crate::footsteps::footstep_sounds,
+                crate::water::water_splashes,
+                crate::liquid_loop::drive_liquid_loops,
                 kit::pump_channels,
                 crate::health::poll_mix_health,
             )

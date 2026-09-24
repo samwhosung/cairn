@@ -66,3 +66,44 @@ pub fn pump_channels(
         true
     });
 }
+
+/// Whether `source` holds a channel playing `kit_id`.
+pub(crate) fn source_kit_playing(out: &SoundOutput, source: Entity, kit_id: u32) -> bool {
+    out.channels
+        .iter()
+        .any(|c| c.source == Some(source) && c.kit == kit_id)
+}
+
+/// The pump multiplies this in from the next frame on.
+pub(crate) fn set_source_kit_gain(out: &mut SoundOutput, source: Entity, kit_id: u32, gain: f32) {
+    for c in &mut out.channels {
+        if c.source == Some(source) && c.kit == kit_id {
+            c.gain = gain.clamp(0.0, 1.0);
+        }
+    }
+}
+
+pub(crate) fn stop_source_kit(out: &mut SoundOutput, source: Entity, kit_id: u32) {
+    out.channels.retain_mut(|c| {
+        if c.source == Some(source) && c.kit == kit_id {
+            c.handle.stop(mixer::declick());
+            false
+        } else {
+            true
+        }
+    });
+}
+
+/// Stops every channel of `source`, returning how many there were.
+pub(crate) fn stop_source(out: &mut SoundOutput, source: Entity) -> usize {
+    let before = out.channels.len();
+    out.channels.retain_mut(|c| {
+        if c.source == Some(source) {
+            c.handle.stop(mixer::declick());
+            false
+        } else {
+            true
+        }
+    });
+    before - out.channels.len()
+}

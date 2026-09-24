@@ -4,11 +4,15 @@
     reason = "Bevy hands systems their parameters by value"
 )]
 
+mod anim_events;
 mod config;
+mod emitter_pool;
+mod footsteps;
 mod health;
 mod interior;
 pub mod kit;
 mod limiter;
+mod liquid_loop;
 mod log;
 pub mod math;
 mod meter;
@@ -18,11 +22,14 @@ mod output;
 mod plugin;
 mod reverb;
 pub mod tables;
+mod water;
 mod zone;
 
 pub use config::SoundConfig;
+pub use footsteps::SoundBody;
 pub use interior::{CurrentInterior, InteriorAudio};
 pub use kit::{KitRef, Played, SoundCategory, SoundKits, play_kit};
+pub use liquid_loop::Listening;
 pub use mixer::{Mixer, MixerSettings};
 pub use output::{OFFLINE_SAMPLE_RATE, Output};
 pub use plugin::{AudioListener, ListenerCharacter, SoundOutput, SoundPlugin, SoundSystems};

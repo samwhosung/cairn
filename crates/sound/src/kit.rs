@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use mpq::Chain;
 
 pub use pump::pump_channels;
+pub(crate) use pump::{set_source_kit_gain, source_kit_playing, stop_source, stop_source_kit};
 pub use voice::Bus;
 
 use crate::config::SoundConfig;
@@ -368,4 +369,9 @@ fn near_field(d_sq: f32, cutoff: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+/// The kit's name, `None` when no row has this id.
+pub(crate) fn kit_name(kits: &SoundKits, id: u32) -> Option<&str> {
+    kits.catalog.get(id).map(|k| k.name.as_str())
 }
