@@ -13,6 +13,7 @@ use crate::m2::M2Model;
 use crate::model_material::{BatchLook, GroundShade, ModelMaterial, ModelMaterials, Variant};
 use crate::portal::{WmoPortalInstance, compute_wmo_pvs};
 use crate::room::RoomCrossfade;
+use crate::submersion::Underwater;
 use crate::view::WorldCamera;
 use crate::visibility::alpha_bits;
 use crate::wmo::WmoModel;
@@ -242,11 +243,13 @@ fn show(
     }
 }
 
+/// Under a liquid the client skips the whole sky pass, as it does for a painted sky.
 fn stand_down_sky(
     skybox: Res<'_, Skybox>,
+    underwater: Res<'_, Underwater>,
     mut sky: Query<'_, '_, &mut Visibility, With<ReplacedByPaintedSky>>,
 ) {
-    let want = if skybox.weight > REPLACES_SKY {
+    let want = if skybox.weight > REPLACES_SKY || underwater.0.any() {
         Visibility::Hidden
     } else {
         Visibility::Inherited

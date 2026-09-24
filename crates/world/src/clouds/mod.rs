@@ -9,6 +9,7 @@ use bevy::transform::TransformSystems;
 
 use crate::celestial::SPRITE_SPHERE_YARDS;
 use crate::light::SceneLight;
+use crate::submersion::Underwater;
 use crate::view::WorldCamera;
 
 pub(crate) use kernel::{moon_halo, sun_clearance};
@@ -63,12 +64,19 @@ fn tick_clouds(
     time: Res<'_, Time>,
     camera: Query<'_, '_, (), With<WorldCamera>>,
     layer: Option<Res<'_, layer::CloudImage>>,
+    underwater: Res<'_, Underwater>,
+    mut was_submerged: Local<'_, bool>,
     mut images: ResMut<'_, Assets<Image>>,
     mut materials: ResMut<'_, Assets<CloudMaterial>>,
 ) {
     if camera.is_empty() {
         return;
     }
+    // The client rebuilds the whole field the frame the eye leaves a liquid, rather than letting
+    // its band-by-band regeneration bring the clouds back.
+    let submerged = underwater.0.any();
+    let surfaced = *was_submerged && !submerged;
+    *was_submerged = submerged;
     let [glow, slope, base] = light.cloud_colors;
     let frame = kernel::CloudFrame {
         glow,
@@ -80,7 +88,8 @@ fn tick_clouds(
     let density = light.cloud_density;
     let held = *clock == CloudClock::Held;
     let cov = &mut *coverage;
-    let changed = if !cov.primed || (held && density.to_bits() != cov.density.to_bits()) {
+    let changed = if !cov.primed || surfaced || (held && density.to_bits() != cov.density.to_bits())
+    {
         cov.primed = true;
         cov.density = density;
         cov.frame = Some(frame);

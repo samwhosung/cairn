@@ -7,6 +7,7 @@ use crate::ground::terrain_wow_z_under;
 use crate::horizon::Horizon;
 use crate::room::CameraRoom;
 use crate::stream::Streamer;
+use crate::submersion::SubmergedEye;
 
 const RAY_SAMPLES: u32 = 48;
 const RAY_RANGE: f32 = 2800.0;
@@ -33,6 +34,7 @@ pub(super) struct FlareGate<'w> {
     adts: Res<'w, Assets<AdtTile>>,
     horizon: Res<'w, Horizon>,
     room: Res<'w, CameraRoom>,
+    submerged: Res<'w, SubmergedEye>,
     pub(super) clouds: Res<'w, CloudCoverage>,
 }
 
@@ -45,7 +47,10 @@ pub(super) struct Allowance {
 
 impl FlareGate<'_> {
     pub(super) fn ease(&self, glare: &mut Glare, eye: Vec3, dir: Vec3, allow: &Allowance) -> f32 {
-        let base = allow.hour * horizon_fade(dir) * allow.cloud_clearance;
+        let base = allow.hour
+            * horizon_fade(dir)
+            * allow.cloud_clearance
+            * submersion_fade(self.submerged.depth);
         let target = if base > 0.0 && !self.room.indoors {
             let (streamer, adts, horizon) = (&*self.streamer, &*self.adts, &*self.horizon);
             let height_under = |p: Vec3| {
@@ -71,6 +76,11 @@ impl FlareGate<'_> {
         );
         glare.brightness
     }
+}
+
+/// The client fades the glare out over the first ten yards of water over the eye.
+fn submersion_fade(depth: f32) -> f32 {
+    1.0 - (depth * 0.1).clamp(0.0, 1.0)
 }
 
 fn horizon_fade(dir: Vec3) -> f32 {
