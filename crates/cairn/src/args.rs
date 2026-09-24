@@ -11,7 +11,8 @@ pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [LOOK]
          walk the install at $WOW_DATA, starting where the camera looks
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] --out FILE.png
-         render one frame without a window, once everything in it has loaded
+         render one frame without a window, once everything in it has loaded and the
+         world has run 2.5 seconds
        cairn shot --display ID [--age S] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
          stand a CreatureDisplayInfo display on the ground below AT and shoot it S seconds
          (1 by default) after it appears, from the orbit around the point a yard above its

@@ -11,6 +11,8 @@ use world::coords::wow_to_bevy;
 use world::unit::{CharacterTables, UnitBody, UnitShade, UnitSystems};
 use world::{Install, M2Model, Residency, WorldCamera, WorldSystems};
 
+use crate::shot::ReadyToShoot;
+
 pub const FRAME_STEP: Duration = Duration::from_nanos(16_666_667);
 const SEAT_REACH: f32 = 500.0;
 
@@ -45,10 +47,6 @@ struct Stage {
     clock_released: bool,
 }
 
-/// Whether the shot may be taken: the subject has stood its age.
-#[derive(Resource, Default)]
-pub struct FixtureAged(pub bool);
-
 pub struct FixturePlugin(pub Fixture);
 
 impl Plugin for FixturePlugin {
@@ -56,7 +54,6 @@ impl Plugin for FixturePlugin {
         app.insert_resource(self.0)
             .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))
             .init_resource::<Stage>()
-            .init_resource::<FixtureAged>()
             .add_systems(Startup, hold_clock)
             .add_systems(
                 Update,
@@ -190,15 +187,15 @@ fn gate_clock(
     time: Res<'_, Time>,
     mut clock: ResMut<'_, Time<Virtual>>,
     mut stage: ResMut<'_, Stage>,
-    mut aged: ResMut<'_, FixtureAged>,
+    mut ready: ResMut<'_, ReadyToShoot>,
 ) {
-    if aged.0 {
+    if ready.0 {
         return;
     }
     if let Some(born) = stage.born {
         if time.elapsed_secs() - born >= fixture.age {
             clock.pause();
-            aged.0 = true;
+            ready.0 = true;
         }
         return;
     }

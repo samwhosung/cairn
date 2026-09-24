@@ -10,16 +10,18 @@ use bevy::render::render_resource::{CachedPipelineState, PipelineCache, TextureF
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::render::{Render, RenderApp, RenderPlugin, RenderSystems};
 use bevy::shader::PipelineCacheError;
+use bevy::time::TimeUpdateStrategy;
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 
 use world::Residency;
 
-use crate::fixture::FixtureAged;
+use crate::fixture::FRAME_STEP;
 use crate::view::{Pose, camera};
 
 const IDENTICAL_CAPTURES: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(120);
+const WORLD_AGE: Duration = Duration::from_millis(2500);
 
 pub fn headless_plugins() -> PluginGroupBuilder {
     DefaultPlugins
@@ -41,6 +43,25 @@ pub struct ShotPlugin {
     pub pose: Pose,
     pub size: UVec2,
     pub out: PathBuf,
+    pub aged_by: AgedBy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgedBy {
+    World,
+    Subject,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ReadyToShoot(pub bool);
+
+#[derive(Resource, Default)]
+enum WorldAge {
+    #[default]
+    Loading,
+    Running {
+        steps: u32,
+    },
 }
 
 #[derive(Resource)]
@@ -95,8 +116,44 @@ impl Plugin for ShotPlugin {
                     RenderTarget::Image(view_target.clone().into()),
                 ));
             })
+            .init_resource::<ReadyToShoot>()
             .add_systems(Update, capture);
+        if self.aged_by == AgedBy::World {
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))
+                .init_resource::<WorldAge>()
+                .add_systems(Startup, |mut clock: ResMut<'_, Time<Virtual>>| {
+                    clock.pause();
+                })
+                .add_systems(Last, age_world);
+        }
     }
+}
+
+fn age_world(
+    residency: Res<'_, Residency>,
+    pipelines: Res<'_, Pipelines>,
+    mut age: ResMut<'_, WorldAge>,
+    mut clock: ResMut<'_, Time<Virtual>>,
+    mut ready: ResMut<'_, ReadyToShoot>,
+) {
+    if ready.0 {
+        return;
+    }
+    let age_steps = WORLD_AGE.div_duration_f32(FRAME_STEP).round() as u32;
+    *age = match *age {
+        WorldAge::Loading if residency.settled() && pipelines.built.load(Ordering::Relaxed) => {
+            clock.unpause();
+            WorldAge::Running { steps: 0 }
+        }
+        WorldAge::Loading => WorldAge::Loading,
+        WorldAge::Running { steps } => {
+            if steps + 1 >= age_steps {
+                clock.pause();
+                ready.0 = true;
+            }
+            WorldAge::Running { steps: steps + 1 }
+        }
+    };
 }
 
 fn update_pipelines(cache: Res<'_, PipelineCache>, pipelines: Res<'_, Pipelines>) {
@@ -118,7 +175,7 @@ fn capture(
     mut commands: Commands<'_, '_>,
     residency: Res<'_, Residency>,
     pipelines: Res<'_, Pipelines>,
-    aged: Option<Res<'_, FixtureAged>>,
+    ready: Res<'_, ReadyToShoot>,
     mut shot: ResMut<'_, Shot>,
     mut exit: MessageWriter<'_, AppExit>,
 ) {
@@ -139,7 +196,7 @@ fn capture(
     if shot.capturing
         || !residency.settled()
         || !pipelines.built.load(Ordering::Relaxed)
-        || aged.is_some_and(|a| !a.0)
+        || !ready.0
     {
         return;
     }

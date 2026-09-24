@@ -92,6 +92,11 @@ fn main() -> AppExit {
                     pose: args.pose,
                     size: args.size,
                     out,
+                    aged_by: if args.display.is_some() {
+                        shot::AgedBy::Subject
+                    } else {
+                        shot::AgedBy::World
+                    },
                 },
             ));
             if let Some(display) = args.display {
