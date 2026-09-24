@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn the_step_constants_are_the_clients() {
         assert!((STEP_UP_ADVANCE - STEP_UP_HEIGHT * 50f32.to_radians().tan()).abs() < 1e-4);
-        assert!((GROUND_COS - 50f32.to_radians().cos()).abs() < 1e-6);
+        assert!((GROUND_COS - ops::cos(50f32.to_radians())).abs() < 1e-6);
         assert!((STEP_SLOPE_RATIO.atan().to_degrees() - 61.6).abs() < 0.05);
         let apex = JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY);
         assert!((apex - 1.640).abs() < 1e-3);

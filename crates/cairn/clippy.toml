@@ -1,0 +1,10 @@
+# Clippy reads only the nearest clippy.toml, so the workspace's settings are repeated here.
+doc-valid-idents = ["WoW", ".."]
+disallowed-methods = [
+  { path = "f32::sin", reason = "use bevy::math::ops, which rounds alike in every build" },
+  { path = "f32::cos", reason = "use bevy::math::ops, which rounds alike in every build" },
+  { path = "f32::sin_cos", reason = "use bevy::math::ops, which rounds alike in every build" },
+  { path = "f64::sin", reason = "use bevy::math::ops, which rounds alike in every build" },
+  { path = "f64::cos", reason = "use bevy::math::ops, which rounds alike in every build" },
+  { path = "f64::sin_cos", reason = "use bevy::math::ops, which rounds alike in every build" },
+]

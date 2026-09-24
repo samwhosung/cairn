@@ -1,5 +1,7 @@
 //! The camera's return to behind the body, on the client's follow styles.
 
+use bevy::math::ops;
+
 use super::super::gait::wrap_pi;
 
 /// The return's average rate, deg/s.
@@ -152,7 +154,7 @@ impl FollowRig {
             self.arm = None;
             to
         } else {
-            let e = (1.0 - (std::f32::consts::PI * s).cos()) * 0.5;
+            let e = (1.0 - ops::cos(std::f32::consts::PI * s)) * 0.5;
             arm.from + (arm.to - arm.from) * e
         };
         Some(wrap_pi(input.face_yaw + offset))

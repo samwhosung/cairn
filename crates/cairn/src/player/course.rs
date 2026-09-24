@@ -20,7 +20,7 @@ use super::{PlayerCapsule, body, controller};
 
 const HZ: f32 = 60.0;
 const START: Vec3 = Vec3::new(0.0, 0.0, 16.0);
-const RECORDED_PATH: u64 = 0xe339_1864_c3fc_66ae;
+const RECORDED_PATH: u64 = 0xfe3d_1d94_20d7_76e6;
 
 #[derive(Clone, Copy)]
 enum Act {

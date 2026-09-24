@@ -5,7 +5,7 @@ use super::*;
 /// Outward normal of a face rising toward +x, tilted `deg` from horizontal.
 fn face(deg: f32) -> Vec3 {
     let r = deg.to_radians();
-    Vec3::new(-r.sin(), r.cos(), 0.0)
+    Vec3::new(-ops::sin(r), ops::cos(r), 0.0)
 }
 
 #[test]

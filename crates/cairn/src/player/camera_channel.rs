@@ -1,6 +1,8 @@
 //! The camera's smoothed scalar: one template the client uses for the pitch bias, the ground tilt
 //! and the pivot height.
 
+use bevy::math::ops;
+
 pub const CHANNEL_EPS: f32 = 0.001;
 
 /// `rate` is in the live value's units per second.
@@ -123,7 +125,7 @@ impl SmoothChannel {
                     self.live = self.to;
                     self.flight = None;
                 } else {
-                    let e = (1.0 - (std::f32::consts::PI * s).cos()) * 0.5;
+                    let e = (1.0 - ops::cos(std::f32::consts::PI * s)) * 0.5;
                     self.live = self.from + (self.to - self.from) * e;
                 }
             }

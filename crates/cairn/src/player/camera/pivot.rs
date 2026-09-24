@@ -88,7 +88,7 @@ pub fn self_model_fade_alpha(dist: f32, nearclip: f32, window: f32) -> f32 {
     if d >= window {
         return 1.0;
     }
-    0.5 * (1.0 - (std::f32::consts::PI * d / window).cos())
+    0.5 * (1.0 - ops::cos(std::f32::consts::PI * d / window))
 }
 
 #[cfg(test)]

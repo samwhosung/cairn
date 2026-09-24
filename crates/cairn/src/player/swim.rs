@@ -197,7 +197,7 @@ pub fn drive_step(
     (forward, right): (Vec3, Vec3),
     (swim_fwd, swim_side): (f32, f32),
 ) -> (Outcome, f32) {
-    let (sp, cp) = player.mover_pitch.sin_cos();
+    let (sp, cp) = ops::sin_cos(player.mover_pitch);
     let v = (forward * cp + Vec3::Y * sp) * swim_fwd + right * swim_side;
     let dir = v.normalize_or_zero();
     let speed = if swim_fwd < 0.0 {

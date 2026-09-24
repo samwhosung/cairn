@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 # Bevy's defaults would also build audio, UI, glTF, gamepads, picking and more that nothing here uses.
+# `libm` takes glam's maths and `bevy::math::ops` from the libm crate. A release build can fuse the
+# platform's sine and cosine of one angle into one call that rounds apart from the two a debug build
+# makes, and movement would part between the two builds.
 [workspace.dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
   "async_executor",
@@ -21,6 +24,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
   "bevy_pbr",
   "bevy_animation",
   "png",
+  "libm",
 ] }
 # Collision queries only: the scene, picking, gizmo and mesh-collider features would pull in Bevy
 # features nothing here uses.

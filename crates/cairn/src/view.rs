@@ -29,7 +29,11 @@ impl Pose {
     /// `el_deg` above it.
     pub fn orbit(at: Vec3, az_deg: f32, el_deg: f32, dist: f32) -> Self {
         let (az, el) = (az_deg.to_radians(), el_deg.to_radians());
-        let back = Vec3::new(-el.cos() * az.cos(), -el.cos() * az.sin(), el.sin());
+        let back = Vec3::new(
+            -ops::cos(el) * ops::cos(az),
+            -ops::cos(el) * ops::sin(az),
+            ops::sin(el),
+        );
         Self {
             eye: at + dist * back,
             heading: az,
@@ -71,8 +75,8 @@ mod tests {
     fn heading_ninety_looks_west_and_elevation_looks_down() {
         let pose = Pose::orbit(Vec3::ZERO, 90.0, 30.0, 10.0);
         let el = 30f32.to_radians();
-        assert!(close(pose.eye, Vec3::new(0.0, -10.0 * el.cos(), 5.0)));
-        let down_west = [0.0, el.cos(), -el.sin()];
+        assert!(close(pose.eye, Vec3::new(0.0, -10.0 * ops::cos(el), 5.0)));
+        let down_west = [0.0, ops::cos(el), -ops::sin(el)];
         assert!(close(*pose.transform().forward(), wow_to_bevy(down_west)));
     }
 

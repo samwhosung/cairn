@@ -364,14 +364,14 @@ impl HeadBob {
                 * (subject.speed / BOB_SPEED_DIVISOR).clamp(BOB_SPEED_CLAMP.0, BOB_SPEED_CLAMP.1);
             let phase = std::f32::consts::TAU * rate * self.since_transition;
             let left = Quat::from_rotation_y(subject.facing) * Vec3::NEG_X;
-            self.offset = left * (cfg.bob_lr_amplitude * YARDS_PER_INCH * phase.sin())
-                + Vec3::Y * (cfg.bob_ud_amplitude * YARDS_PER_INCH * (2.0 * phase).sin());
+            self.offset = left * (cfg.bob_lr_amplitude * YARDS_PER_INCH * ops::sin(phase))
+                + Vec3::Y * (cfg.bob_ud_amplitude * YARDS_PER_INCH * ops::sin(2.0 * phase));
         } else if (self.offset.x + self.offset.y + self.offset.z).abs() >= CHANNEL_EPS {
             let s = self.since_transition / self.ramp_duration.max(f32::EPSILON);
             self.offset = if s >= 1.0 {
                 Vec3::ZERO
             } else {
-                self.ramp_from * (1.0 - (1.0 - (std::f32::consts::PI * s).cos()) * 0.5)
+                self.ramp_from * (1.0 - (1.0 - ops::cos(std::f32::consts::PI * s)) * 0.5)
             };
         } else {
             self.offset = Vec3::ZERO;
