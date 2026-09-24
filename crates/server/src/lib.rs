@@ -10,7 +10,8 @@ mod sim;
 mod stats;
 mod world;
 
-use std::io;
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ pub use stats::{PHASES, Summary, load_average, process_cpu_ns, thread_cpu_ns};
 pub use world::{InputOrder, Refusal, Spawn};
 
 use crate::log::LogReader;
-use crate::net::Shared;
+use crate::net::{Outbox, Shared};
 use crate::sim::{Batches, Sim};
 
 /// A server running on its own threads.
@@ -90,19 +91,35 @@ pub struct Replayed {
     pub first_mismatch: Option<u32>,
     /// Every refused claim, when the replay was asked to keep them.
     pub refusals: Vec<Refusal>,
+    /// Every replayed tick summarized over the time it stands for, one tick's length each.
+    /// Nothing counts as received, and batches count as sent when they are built.
+    pub summary: Summary,
 }
 
-/// Replays the inputs recorded at `path` on `threads` threads, applying each entity's inputs in
-/// `order`, and compares the world hash after every tick with the recorded one.
-pub fn replay(
-    path: &Path,
-    threads: usize,
-    order: InputOrder,
-    keep_refusals: bool,
-) -> io::Result<Replayed> {
+#[derive(Clone, Copy, Debug)]
+pub struct Replay<'a> {
+    pub threads: usize,
+    pub order: InputOrder,
+    pub keep_refusals: bool,
+    pub replicate: Replicate<'a>,
+}
+
+/// Whether a replay builds every client's batch, as a server with the default [`View`] builds
+/// them for clients that keep up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replicate<'a> {
+    No,
+    Yes,
+    /// Yes, and write the frames the first connection received to this file.
+    Dumping(&'a Path),
+}
+
+/// Replays the inputs recorded at `path` and compares the world hash after every tick with the
+/// recorded one.
+pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     let mut log = LogReader::open(path)?;
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
+        .num_threads(how.threads)
         .build()
         .map_err(io::Error::other)?;
     let rules = Rules {
@@ -116,18 +133,45 @@ pub fn replay(
         0,
         log.header.tick_ms,
     );
-    if keep_refusals {
+    if how.keep_refusals {
         sim.keep_refusals();
     }
-    let mut out = Replayed::default();
+    let clients = Shared::new();
+    let mut dump = match how.replicate {
+        Replicate::Dumping(path) => {
+            let (outbox, rx) = Outbox::channel();
+            let on_written = outbox.on_written();
+            clients.hold_outbox(0, outbox);
+            Some((BufWriter::new(File::create(path)?), rx, on_written))
+        }
+        Replicate::No | Replicate::Yes => None,
+    };
+    let batches = match how.replicate {
+        Replicate::No => Batches::Skip,
+        Replicate::Yes | Replicate::Dumping(_) => Batches::Send(&clients),
+    };
+    let (mut out, mut ticks) = (Replayed::default(), Vec::new());
+    let cpu = process_cpu_ns();
     while let Some(logged) = log.next_tick()? {
-        let st = sim.tick(&pool, &logged.inputs, order, Batches::Skip);
+        let st = sim.tick(&pool, &logged.inputs, how.order, batches);
         if (st.tick != logged.tick || st.hash != logged.hash) && out.first_mismatch.is_none() {
             out.first_mismatch = Some(logged.tick);
         }
         out.ticks += 1;
         out.hash = st.hash;
         out.refusals.append(&mut sim.take_refusals());
+        ticks.push(st);
+        if let Some((file, rx, on_written)) = &mut dump {
+            while let Ok(frame) = rx.try_recv() {
+                file.write_all(&frame)?;
+                on_written(frame.len());
+            }
+        }
     }
+    if let Some((mut file, ..)) = dump {
+        file.flush()?;
+    }
+    let secs = f64::from(out.ticks) * f64::from(log.header.tick_ms) / 1000.0;
+    out.summary = Summary::of(&ticks, how.threads, secs, 0, process_cpu_ns() - cpu);
     Ok(out)
 }

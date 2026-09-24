@@ -56,6 +56,13 @@ impl Outbox {
     pub fn queued_bytes(&self) -> usize {
         self.queued_bytes.load(Ordering::Relaxed)
     }
+
+    pub fn on_written(&self) -> impl Fn(usize) + Send + use<> {
+        let queued = self.queued_bytes.clone();
+        move |n| {
+            queued.fetch_sub(n, Ordering::Relaxed);
+        }
+    }
 }
 
 pub struct Shared {
@@ -130,9 +137,9 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
         let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
         let (reader, writer) = socket.into_split();
         let (outbox, rx) = Outbox::channel();
-        let (queued, behind) = (outbox.queued_bytes.clone(), outbox.behind.clone());
+        let (on_written, behind) = (outbox.on_written(), outbox.behind.clone());
         shared.hold_outbox(conn, outbox);
-        tokio::spawn(write(writer, rx, queued));
+        tokio::spawn(write(writer, rx, on_written));
         tokio::spawn(read(conn, reader, behind, shared.clone()));
     }
 }
@@ -140,13 +147,13 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
 async fn write(
     mut w: OwnedWriteHalf,
     mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    queued: Arc<AtomicUsize>,
+    on_written: impl Fn(usize),
 ) {
     while let Some(bytes) = rx.recv().await {
         if w.write_all(&bytes).await.is_err() {
             break;
         }
-        queued.fetch_sub(bytes.len(), Ordering::Relaxed);
+        on_written(bytes.len());
     }
 }
 

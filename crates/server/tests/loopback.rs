@@ -6,7 +6,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, Spawn, Window};
+use server::{Config, InputOrder, Replay, Replicate, Spawn, Window};
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -175,4 +175,62 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
         .expect("the server stops")
         .expect("a clean stop");
     assert_eq!(measured, 0, "the window never opened");
+}
+
+#[test]
+fn a_recorded_run_replays_with_every_batch_and_dumps_the_first_clients_frames() {
+    let dir = std::env::temp_dir().join(format!("server-replay-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let (log, dump) = (dir.join("inputs.log"), dir.join("frames.bin"));
+    let spawns = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]
+        .map(|pos| Spawn { pos, facing: 0.0 })
+        .to_vec();
+    let running = server::start(Config {
+        spawns,
+        tick_threads: 2,
+        record: Some(log.clone()),
+        ..Config::default()
+    })
+    .expect("a server");
+    let mut a = Client::join(running.addr(), "Ada");
+    let mut b = Client::join(running.addr(), "Bo");
+    a.records_until(40, |g| *g == Got::Appear(b.id));
+    b.claim(0, 1000, [10.0, 0.0, 0.0]);
+    let seen = a.records_until(40, |g| matches!(g, Got::Move(..)));
+    assert!(seen.iter().any(|g| matches!(g, Got::Move(..))), "{seen:?}");
+    running.stop().expect("a clean stop");
+
+    let how = Replay {
+        threads: 2,
+        order: InputOrder::Canonical,
+        keep_refusals: false,
+        replicate: Replicate::Dumping(&dump),
+    };
+    let r = server::replay(&log, &how).expect("a replay");
+    assert_eq!(r.first_mismatch, None);
+    assert!(r.summary.moves_per_client > 0.0);
+    let mut frames = Frames::default();
+    frames.extend(&std::fs::read(&dump).expect("a dump"));
+    let first = frames
+        .next_frame()
+        .expect("framed")
+        .expect("a welcome")
+        .to_vec();
+    assert!(matches!(
+        ServerMessage::read(&first),
+        Ok(ServerMessage::Welcome(_))
+    ));
+    let mut ticks = Vec::new();
+    while let Some(frame) = frames.next_frame().expect("framed") {
+        let Ok(ServerMessage::Batch(batch)) = ServerMessage::read(frame) else {
+            panic!("not a batch");
+        };
+        ticks.push(batch.tick);
+    }
+    assert!(!ticks.is_empty() && ticks.len() <= r.ticks as usize);
+    assert!(
+        ticks.windows(2).all(|w| w[1] == w[0] + 1),
+        "one batch a tick"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

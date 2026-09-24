@@ -5,7 +5,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use server::{Config, InputOrder, Refusal, Rules, Spawn, Summary, Window, ground_between};
+use server::{
+    Config, InputOrder, Refusal, Replay, Replicate, Rules, Spawn, Summary, Window, ground_between,
+};
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
@@ -17,10 +19,12 @@ usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unche
          and world hash to FILE.
        server header
          print the header of the summary row's table.
-       server replay FILE [--threads N] [--racy] [--refusals]
+       server replay FILE [--threads N] [--racy] [--refusals] [--replicate] [--dump OUT]
          replay a recorded run and compare the world after every tick; --racy applies
          each entity's inputs in the order worker threads hand them over; --refusals
-         prints every refused claim and what it was judged against.
+         prints every refused claim and what it was judged against; --replicate also
+         builds every client's batch as if all kept up and prints the summary row;
+         --dump writes the first connection's frames to OUT, and implies --replicate.
 
 FILE of spawns: one `x y z facing` per line, WoW world coordinates and radians.";
 
@@ -111,16 +115,23 @@ fn serve(args: &[String]) -> Result<(), String> {
 
 fn replay(args: &[String]) -> Result<(), String> {
     let (path, rest) = args.split_first().ok_or("replay needs a FILE")?;
-    let f = flags(rest, &["racy", "refusals"])?;
-    let threads = num(&f, "threads", 1)?;
-    let order = if f.contains_key("racy") {
-        InputOrder::Racy
-    } else {
-        InputOrder::Canonical
+    let f = flags(rest, &["racy", "refusals", "replicate"])?;
+    let dump = f.get("dump").map(PathBuf::from);
+    let how = Replay {
+        threads: num(&f, "threads", 1)?,
+        order: if f.contains_key("racy") {
+            InputOrder::Racy
+        } else {
+            InputOrder::Canonical
+        },
+        keep_refusals: f.contains_key("refusals"),
+        replicate: match &dump {
+            Some(path) => Replicate::Dumping(path),
+            None if f.contains_key("replicate") => Replicate::Yes,
+            None => Replicate::No,
+        },
     };
-    let keep_refusals = f.contains_key("refusals");
-    let r = server::replay(Path::new(path), threads, order, keep_refusals)
-        .map_err(|e| format!("{path}: {e}"))?;
+    let r = server::replay(Path::new(path), &how).map_err(|e| format!("{path}: {e}"))?;
     let rules = Rules::default();
     for refusal in &r.refusals {
         println!("{}", refusal_line(refusal, &rules));
@@ -131,9 +142,12 @@ fn replay(args: &[String]) -> Result<(), String> {
             format!("differs from tick {t}")
         });
     println!(
-        "replay threads={threads} order={order:?} ticks={} hash={:016x} {verdict}",
-        r.ticks, r.hash
+        "replay threads={} order={:?} ticks={} hash={:016x} {verdict}",
+        how.threads, how.order, r.ticks, r.hash
     );
+    if how.replicate != Replicate::No {
+        println!("{}", r.summary.row(&format!("replay {path}")));
+    }
     Ok(())
 }
 
