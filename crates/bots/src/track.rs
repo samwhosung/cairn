@@ -4,7 +4,7 @@ use protocol::flags;
 use server::Spawn;
 
 use crate::ground::Ground;
-use crate::region::{Around, Scenario, XorShift64Star};
+use crate::region::{Scenario, Square, XorShift64Star};
 
 pub const RUN: f32 = 7.0;
 pub const WALK: f32 = 2.5;
@@ -14,24 +14,21 @@ const FAST_LIE_FACTOR: u32 = 3;
 #[derive(Clone, Copy, Debug)]
 pub enum Motion {
     Stand,
-    /// Mouse-looking in place: the facing swings `swing` radians either way, `hz` times a second.
-    Look {
-        swing: f32,
+    MouseLook {
+        amplitude: f32,
         hz: f32,
     },
-    /// Turning in place on the keyboard at `rate` radians a second, left when positive.
-    Turn {
-        rate: f32,
+    KeyTurn {
+        left_rad_per_s: f32,
     },
     Run {
         speed: f32,
         walk: bool,
         jump_at: Option<u32>,
     },
-    /// Running while mouse-turning at `rate` radians a second, left when positive.
     Arc {
         speed: f32,
-        rate: f32,
+        left_rad_per_s: f32,
     },
 }
 
@@ -56,13 +53,18 @@ impl Leg {
         let (f, [x, y]) = (self.facing, self.from);
         let (xy, facing) = match self.motion {
             Motion::Stand => (self.from, f),
-            Motion::Look { swing, hz } => (self.from, f + swing * (TAU * hz * dt).sin()),
-            Motion::Turn { rate } => (self.from, f + rate * dt),
+            Motion::MouseLook { amplitude, hz } => {
+                (self.from, f + amplitude * (TAU * hz * dt).sin())
+            }
+            Motion::KeyTurn { left_rad_per_s } => (self.from, f + left_rad_per_s * dt),
             Motion::Run { speed, .. } => {
                 let d = speed * dt;
                 ([x + d * f.cos(), y + d * f.sin()], f)
             }
-            Motion::Arc { speed, rate } => {
+            Motion::Arc {
+                speed,
+                left_rad_per_s: rate,
+            } => {
                 let (r, side) = (speed / rate.abs(), rate.signum() * FRAC_PI_2);
                 let centre = [x + r * (f + side).cos(), y + r * (f + side).sin()];
                 let a = f - side + rate * dt;
@@ -77,9 +79,9 @@ impl Leg {
 
     fn flags(&self) -> u32 {
         match self.motion {
-            Motion::Stand | Motion::Look { .. } => 0,
-            Motion::Turn { rate } if rate > 0.0 => flags::TURN_LEFT,
-            Motion::Turn { .. } => flags::TURN_RIGHT,
+            Motion::Stand | Motion::MouseLook { .. } => 0,
+            Motion::KeyTurn { left_rad_per_s } if left_rad_per_s > 0.0 => flags::TURN_LEFT,
+            Motion::KeyTurn { .. } => flags::TURN_RIGHT,
             Motion::Run { walk: true, .. } => flags::FORWARD | flags::WALK_MODE,
             Motion::Run { .. } | Motion::Arc { .. } => flags::FORWARD,
         }
@@ -217,15 +219,15 @@ impl Planner<'_> {
         let (motion, secs) = match rng.range(0.0, 3.0) as u32 {
             0 => (Motion::Stand, rng.range(1.0, 4.0)),
             1 => (
-                Motion::Look {
-                    swing: rng.range(0.3, 1.0),
+                Motion::MouseLook {
+                    amplitude: rng.range(0.3, 1.0),
                     hz: rng.range(0.3, 0.8),
                 },
                 rng.range(1.5, 4.0),
             ),
             _ => (
-                Motion::Turn {
-                    rate: if rng.chance(0.5) { PI } else { -PI },
+                Motion::KeyTurn {
+                    left_rad_per_s: if rng.chance(0.5) { PI } else { -PI },
                 },
                 rng.range(0.5, 1.5),
             ),
@@ -258,9 +260,9 @@ impl Planner<'_> {
         walk: bool,
         min_yd: f32,
     ) -> Option<Leg> {
-        let around = Around {
+        let around = Square {
             centre: from,
-            reach: self.s.leg_reach,
+            half_side: self.s.leg_reach,
         };
         let to = self
             .s
@@ -297,7 +299,7 @@ impl Planner<'_> {
             facing: from.facing,
             motion: Motion::Arc {
                 speed: RUN,
-                rate: self.rng.range(0.5, 1.2) * side,
+                left_rad_per_s: self.rng.range(0.5, 1.2) * side,
             },
         };
         self.walkable(&leg).then_some(leg)
@@ -370,7 +372,7 @@ mod tests {
         assert!((p.xy[0] - 7.0).abs() < 1e-5 && p.xy[1].abs() < 1e-5 && p.facing == 0.0);
         let arc = Motion::Arc {
             speed: RUN,
-            rate: 1.0,
+            left_rad_per_s: 1.0,
         };
         let arc = leg(0, 4000, arc);
         let centre = [0.0, 7.0];

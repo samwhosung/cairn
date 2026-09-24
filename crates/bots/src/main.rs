@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::bot::{Crowd, Roles, now_ms};
-use crate::check::{Counters, Percentiles};
+use crate::check::{Counters, PercentilesMs};
 use crate::ground::Ground;
 use crate::region::Scenario;
 
@@ -168,7 +168,7 @@ fn load(args: &[String]) -> Result<(), String> {
 
 struct Measured {
     counters: Counters,
-    jitter: Percentiles,
+    jitter: PercentilesMs,
     secs: f64,
     cpu_ns: u64,
 }

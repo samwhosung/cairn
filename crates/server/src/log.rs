@@ -49,7 +49,7 @@ impl LogWriter {
         self.buf
             .extend_from_slice(&(applied.len() as u32).to_le_bytes());
         for s in applied {
-            for v in [s.conn, s.seq, s.received_ms] {
+            for v in [s.conn, s.nth, s.received_ms] {
                 self.buf.extend_from_slice(&v.to_le_bytes());
             }
             match &s.input {
@@ -119,7 +119,6 @@ impl LogReader {
         })
     }
 
-    /// The next tick, or `None` at the end of the log.
     pub fn next_tick(&mut self) -> io::Result<Option<LoggedTick>> {
         let tick = match read_u32(&mut self.input) {
             Ok(t) => t,
@@ -129,7 +128,7 @@ impl LogReader {
         let n = read_u32(&mut self.input)?;
         let mut inputs = Vec::with_capacity(n.min(1 << 20) as usize);
         for _ in 0..n {
-            let (conn, seq, received_ms) = (
+            let (conn, nth, received_ms) = (
                 read_u32(&mut self.input)?,
                 read_u32(&mut self.input)?,
                 read_u32(&mut self.input)?,
@@ -147,7 +146,7 @@ impl LogReader {
             };
             inputs.push(Stamped {
                 conn,
-                seq,
+                nth,
                 received_ms,
                 input,
             });

@@ -5,7 +5,6 @@ use protocol::{Jump, Movement, flags};
 use crate::ground::Ground;
 use crate::track::Track;
 
-/// How often a moving client reports its movement when nothing else has gone out, ms.
 pub const HEARTBEAT_MS: u32 = 500;
 const JUMP_SPEED: f32 = 7.955_547;
 const GRAVITY: f32 = 19.291_105;
@@ -212,8 +211,8 @@ mod tests {
 
     #[test]
     fn looking_about_reports_every_frame_and_a_keyboard_turn_only_its_ends() {
-        let look = Motion::Look {
-            swing: 0.5,
+        let look = Motion::MouseLook {
+            amplitude: 0.5,
             hz: 0.5,
         };
         let track = Track::of(vec![leg(0, 1000, look)], None);
@@ -222,7 +221,13 @@ mod tests {
             facing: 3.0,
             ..leg(1000, 2000, Motion::Stand)
         };
-        let turn = leg(0, 1000, Motion::Turn { rate: 3.0 });
+        let turn = leg(
+            0,
+            1000,
+            Motion::KeyTurn {
+                left_rad_per_s: 3.0,
+            },
+        );
         let track = Track::of(vec![turn, turned], None);
         let sent = claims(&track, 2000);
         let times: Vec<u32> = sent.iter().map(|c| c.0).collect();

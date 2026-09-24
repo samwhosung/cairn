@@ -1,6 +1,4 @@
 //! The world server: a 20 Hz bulk-synchronous tick that checks and relays movement.
-//!
-//! The same inputs give the same world on any number of threads.
 
 mod grid;
 mod log;
@@ -28,7 +26,7 @@ pub use world::{InputOrder, Refusal, Spawn};
 
 use crate::log::LogReader;
 use crate::net::Shared;
-use crate::sim::Sim;
+use crate::sim::{Batches, Sim};
 
 /// A server running on its own threads.
 pub struct Running {
@@ -123,7 +121,7 @@ pub fn replay(
     }
     let mut out = Replayed::default();
     while let Some(logged) = log.next_tick()? {
-        let st = sim.tick(&pool, &logged.inputs, order, None, false);
+        let st = sim.tick(&pool, &logged.inputs, order, Batches::Skip);
         if (st.tick != logged.tick || st.hash != logged.hash) && out.first_mismatch.is_none() {
             out.first_mismatch = Some(logged.tick);
         }

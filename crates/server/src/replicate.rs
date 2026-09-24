@@ -21,9 +21,11 @@ pub struct View {
     /// A client that says it is more than this many ticks behind gets no refreshes until it
     /// catches up.
     pub shed_ticks: u32,
-    /// A client with more than this many bytes queued is dropped.
+    /// A client with more than this many bytes queued is sent nothing more; its player stays in
+    /// the world until the client hangs up.
     pub kick_bytes: usize,
-    /// A client that says it is more than this many ticks behind is dropped.
+    /// A client that says it is more than this many ticks behind is sent nothing more; its
+    /// player stays in the world until the client hangs up.
     pub kick_ticks: u32,
 }
 
@@ -73,12 +75,12 @@ impl View {
 
 #[derive(Clone, Copy, Debug)]
 struct Seen {
-    slot: u32,
+    id: u32,
     sent_tick: u32,
 }
 
 pub struct Observer {
-    pub slot: u32,
+    pub id: u32,
     seen: Vec<Seen>,
     fresh: bool,
     size_hint: usize,
@@ -86,9 +88,9 @@ pub struct Observer {
 }
 
 impl Observer {
-    pub fn new(slot: u32, outbox: Option<Outbox>) -> Self {
+    pub fn new(id: u32, outbox: Option<Outbox>) -> Self {
         Self {
-            slot,
+            id,
             seen: Vec::new(),
             fresh: true,
             size_hint: 64,
@@ -149,8 +151,8 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         o.outbox = None;
         built.kicked = 1;
     }
-    let bodies = world.bodies();
-    let me = bodies[o.slot as usize];
+    let bodies = world.stepped();
+    let me = bodies[o.id as usize];
     let mut out = Vec::with_capacity(o.size_hint);
     let start = begin_batch(&mut out, tick);
     if me.corrected_at == Some(tick) {
@@ -167,15 +169,15 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         out: &mut out,
         built: &mut built,
     };
-    if o.fresh || (tick + o.slot).is_multiple_of(view.aoi_every.max(1)) {
+    if o.fresh || (tick + o.id).is_multiple_of(view.aoi_every.max(1)) {
         s.near.clear();
-        scene.grid.query(
+        scene.grid.living_within(
             bodies,
             me.movement.pos,
             view.radius + view.grey,
             &mut s.near,
         );
-        s.near.retain(|&n| n != o.slot);
+        s.near.retain(|&n| n != o.id);
         s.near.sort_unstable();
         pass.recheck(&o.seen, &s.near, &mut s.seen);
         std::mem::swap(&mut o.seen, &mut s.seen);
@@ -210,21 +212,21 @@ impl Pass<'_> {
     }
 
     fn recheck(&mut self, seen: &[Seen], near: &[u32], next: &mut Vec<Seen>) {
-        debug_assert!(seen.is_sorted_by_key(|e| e.slot) && near.is_sorted());
+        debug_assert!(seen.is_sorted_by_key(|e| e.id) && near.is_sorted());
         next.clear();
         let r2 = self.view.radius * self.view.radius;
         let (mut i, mut j) = (0, 0);
         loop {
             match (seen.get(i), near.get(j)) {
-                (Some(&e), Some(&n)) if e.slot == n => {
+                (Some(&e), Some(&n)) if e.id == n => {
                     let mut e = e;
                     self.refresh(&mut e);
                     next.push(e);
                     i += 1;
                     j += 1;
                 }
-                (Some(&e), n) if n.is_none_or(|&n| e.slot < n) => {
-                    write_vanish(self.out, e.slot);
+                (Some(&e), n) if n.is_none_or(|&n| e.id < n) => {
+                    write_vanish(self.out, e.id);
                     self.built.vanished += 1;
                     i += 1;
                 }
@@ -232,7 +234,7 @@ impl Pass<'_> {
                     if self.dist2(&self.bodies[n as usize]) <= r2 {
                         self.appear(n);
                         next.push(Seen {
-                            slot: n,
+                            id: n,
                             sent_tick: self.tick,
                         });
                     }
@@ -243,16 +245,16 @@ impl Pass<'_> {
         }
     }
 
-    fn appear(&mut self, slot: u32) {
-        let b = &self.bodies[slot as usize];
-        let (name, look) = (self.world.name(slot), self.world.look(slot));
-        write_appear(self.out, slot, name, look, &b.movement);
+    fn appear(&mut self, id: u32) {
+        let b = &self.bodies[id as usize];
+        let (name, look) = (self.world.name(id), self.world.look(id));
+        write_appear(self.out, id, name, look, &b.movement);
         self.built.appeared += 1;
     }
 
     fn keep(&mut self, e: &mut Seen) -> bool {
-        if !self.bodies[e.slot as usize].alive {
-            write_vanish(self.out, e.slot);
+        if !self.bodies[e.id as usize].alive {
+            write_vanish(self.out, e.id);
             self.built.vanished += 1;
             return false;
         }
@@ -261,7 +263,7 @@ impl Pass<'_> {
     }
 
     fn refresh(&mut self, e: &mut Seen) {
-        let b = &self.bodies[e.slot as usize];
+        let b = &self.bodies[e.id as usize];
         if b.moved_at <= e.sent_tick {
             return;
         }
@@ -274,7 +276,7 @@ impl Pass<'_> {
                 return;
             }
         }
-        write_move(self.out, e.slot, &b.movement);
+        write_move(self.out, e.id, &b.movement);
         e.sent_tick = self.tick;
         self.built.moves += 1;
     }

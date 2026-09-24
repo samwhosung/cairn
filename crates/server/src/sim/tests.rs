@@ -15,7 +15,7 @@ fn pool(threads: usize) -> rayon::ThreadPool {
 fn join(conn: u32) -> Stamped {
     Stamped {
         conn,
-        seq: 0,
+        nth: 0,
         received_ms: 0,
         input: Input::Join(Hello {
             version: VERSION,
@@ -25,10 +25,10 @@ fn join(conn: u32) -> Stamped {
     }
 }
 
-fn claim(conn: u32, seq: u32, received_ms: u32, ack: u32, movement: Movement) -> Stamped {
+fn claim(conn: u32, nth: u32, received_ms: u32, ack: u32, movement: Movement) -> Stamped {
     Stamped {
         conn,
-        seq,
+        nth,
         received_ms,
         input: Input::Claim(Claim { ack, movement }),
     }
@@ -50,8 +50,6 @@ fn spawn(x: f32, y: f32) -> Spawn {
     }
 }
 
-/// Each player walks straight out from its spawn, some claiming several times a tick, and every
-/// eleventh teleports once and then takes its correction.
 fn crowd_inputs(players: u32, ticks: u32) -> Vec<Vec<Stamped>> {
     let mut all = vec![(0..players).map(join).collect::<Vec<_>>()];
     for t in 1..ticks {
@@ -80,11 +78,12 @@ fn hashes(threads: usize, order: InputOrder, inputs: &[Vec<Stamped>]) -> (Vec<u6
     let spawns = (0..60).map(|p| spawn(p as f32 * 3.0, 0.0)).collect();
     let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
     let pool = pool(threads);
+    let nobody = Shared::new();
     let mut refused = 0;
     let hashes = inputs
         .iter()
         .map(|tick| {
-            let st = sim.tick(&pool, tick, order, None, true);
+            let st = sim.tick(&pool, tick, order, Batches::Send(&nobody));
             refused += st.refused.iter().sum::<u32>();
             st.hash
         })
@@ -117,7 +116,6 @@ enum Got {
     Correct(u32),
 }
 
-/// The records of tick `tick`'s batch, the next message unadmitted on `rx`.
 fn next_batch(rx: &mut UnboundedReceiver<Vec<u8>>, tick: u32) -> Vec<Got> {
     let bytes = rx.try_recv().expect("a batch every tick");
     let Ok(ServerMessage::Batch(b)) = ServerMessage::read(&bytes[protocol::LEN_BYTES..]) else {
@@ -154,8 +152,14 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
         rx.push(r);
     }
     let pool = pool(2);
-    let mut run =
-        |inputs: Vec<Stamped>| sim.tick(&pool, &inputs, InputOrder::Canonical, Some(&shared), true);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
     run((0..4).map(join).collect());
     let first: Vec<Vec<Got>> = rx
         .iter_mut()
@@ -194,7 +198,7 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
     );
     run(vec![Stamped {
         conn: 1,
-        seq: 2,
+        nth: 2,
         received_ms: 1100,
         input: Input::Leave,
     }]);
@@ -211,8 +215,14 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
     shared.hold_outbox(0, slow);
     shared.hold_outbox(1, Outbox::channel().0);
     let pool = pool(1);
-    let mut run =
-        |inputs: Vec<Stamped>| sim.tick(&pool, &inputs, InputOrder::Canonical, Some(&shared), true);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
     run((0..2).map(join).collect());
     assert!(rx.try_recv().is_ok(), "a welcome");
     assert_eq!(next_batch(&mut rx, 0), [Got::Appear(1)]);

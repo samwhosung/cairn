@@ -3,17 +3,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::mover::HEARTBEAT_MS;
 use crate::track::RUN;
 
-/// Allowed for a claim to wait for its tick, the tick to run, and its batch to arrive, ms.
 pub const CLAIM_TO_BATCH_MS: f32 = 150.0;
 pub const RELAYED_EPSILON_YD: f32 = 0.01;
 
-/// What a view is held to, from the server's own replication settings.
 pub struct Limits {
     tiers: [server::Tier; 3],
     tick_ms: f32,
     pub view_yd: f32,
-    /// How far inside or outside the view distance presence goes unjudged: the server rechecks
-    /// who is in view from positions a heartbeat old, while both sides move.
     pub presence_slack_yd: f32,
     tier_slack_yd: f32,
 }
@@ -34,7 +30,6 @@ impl Limits {
         }
     }
 
-    /// The tier of a bot `yd` away, taking the farther one near a border.
     pub fn tier(&self, yd: f32) -> usize {
         self.tiers
             .iter()
@@ -48,7 +43,6 @@ impl Limits {
     }
 }
 
-/// A running maximum of a non-negative float.
 #[derive(Default)]
 pub struct Worst(AtomicU32);
 
@@ -164,8 +158,7 @@ pub struct JitterHistogram {
     buckets: Box<[AtomicU64]>,
 }
 
-/// Milliseconds.
-pub struct Percentiles {
+pub struct PercentilesMs {
     pub p50: u32,
     pub p99: u32,
     pub max: u32,
@@ -188,7 +181,7 @@ impl JitterHistogram {
         self.buckets[b].fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn percentiles(&self) -> Percentiles {
+    pub fn percentiles(&self) -> PercentilesMs {
         let counts: Vec<u64> = self
             .buckets
             .iter()
@@ -206,7 +199,7 @@ impl JitterHistogram {
                 })
                 .map_or(0, |b| b as u32 * Self::BUCKET_MS)
         };
-        Percentiles {
+        PercentilesMs {
             p50: at(0.5),
             p99: at(0.99),
             max: at(1.0),

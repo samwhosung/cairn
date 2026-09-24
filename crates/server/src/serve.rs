@@ -8,7 +8,7 @@ use crate::log::{Header, LogWriter};
 use crate::net::Shared;
 use crate::replicate::View;
 use crate::rules::Rules;
-use crate::sim::Sim;
+use crate::sim::{Batches, Sim};
 use crate::stats::{Summary, TickStats, process_cpu_ns};
 use crate::world::{InputOrder, Spawn};
 
@@ -117,8 +117,10 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         due = (due + period).max(Instant::now());
         std::thread::sleep(due.saturating_duration_since(Instant::now()));
         let inputs = shared.take_inputs();
-        shared.tick.store(sim.world().tick(), Ordering::Relaxed);
-        let st = sim.tick(&pool, &inputs, InputOrder::Canonical, Some(shared), true);
+        shared
+            .latest_tick
+            .store(sim.world().tick(), Ordering::Relaxed);
+        let st = sim.tick(&pool, &inputs, InputOrder::Canonical, Batches::Send(shared));
         if let Some(log) = &mut log {
             log.tick(st.tick, &inputs, st.hash)?;
         }

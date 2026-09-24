@@ -44,7 +44,6 @@ struct Member {
     gone: AtomicBool,
 }
 
-/// Bots below `liars` lie; the next `checkers` check what they are shown.
 #[derive(Clone, Copy, Debug)]
 pub struct Roles {
     pub liars: usize,
@@ -98,7 +97,6 @@ impl Crowd {
         self.by_id.get(id as usize)?.track.get()
     }
 
-    /// The walk of a bot that is in the world and has been long enough to be seen.
     fn settled(&self, id: u32, now: u32) -> Option<&Track> {
         let m = self.by_id.get(id as usize)?;
         let joined = m.joined_ms.load(Ordering::Relaxed);

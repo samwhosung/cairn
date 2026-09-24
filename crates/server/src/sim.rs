@@ -13,6 +13,14 @@ use crate::world::{InputOrder, Refusal, Spawn, Stamped, World};
 
 const OBSERVERS_PER_TASK: usize = 16;
 
+/// What a tick does with its observers' batches.
+#[derive(Clone, Copy)]
+pub enum Batches<'a> {
+    Skip,
+    /// Build them, and send each to its connection when `Shared` held it as the player joined.
+    Send(&'a Shared),
+}
+
 pub struct Sim {
     world: World,
     grid: Grid,
@@ -50,25 +58,21 @@ impl Sim {
         &self.world
     }
 
-    /// Runs one tick on `pool`. Batches are built only when `replicate` is set, and sent only
-    /// to connections `shared` holds.
     pub fn tick(
         &mut self,
         pool: &ThreadPool,
         inputs: &[Stamped],
         order: InputOrder,
-        shared: Option<&Shared>,
-        replicate: bool,
+        batches: Batches<'_>,
     ) -> TickStats {
-        pool.install(|| self.run_tick(inputs, order, shared, replicate))
+        pool.install(|| self.run_tick(inputs, order, batches))
     }
 
     fn run_tick(
         &mut self,
         inputs: &[Stamped],
         order: InputOrder,
-        shared: Option<&Shared>,
-        replicate: bool,
+        batches: Batches<'_>,
     ) -> TickStats {
         let Self {
             world,
@@ -86,32 +90,35 @@ impl Sim {
         };
         let mut clock = Instant::now();
         for joined in phases[0].time(|| world.admit(inputs)) {
-            let outbox = shared.and_then(|s| s.take_outbox(joined.conn));
+            let outbox = match batches {
+                Batches::Send(shared) => shared.take_outbox(joined.conn),
+                Batches::Skip => None,
+            };
             if let Some(outbox) = &outbox {
                 let mut bytes = Vec::new();
                 Welcome {
                     version: VERSION,
-                    id: joined.slot,
+                    id: joined.id,
                     map: *map,
                     tick: world.tick(),
                     tick_ms: *tick_ms,
-                    spawn: world.bodies()[joined.slot as usize].movement,
+                    spawn: joined.spawn,
                 }
                 .write(&mut bytes);
                 outbox.send(bytes);
             }
-            observers.push(Observer::new(joined.slot, outbox));
+            observers.push(Observer::new(joined.id, outbox));
         }
         st.wall_ns[0] = lap_ns(&mut clock);
         let acts = phases[1].time(|| world.route(inputs, order));
         let mut stepped = world.step(&acts, &phases[1]);
         refusals.append(&mut stepped.refusals);
         st.wall_ns[1] = lap_ns(&mut clock);
-        phases[2].time(|| grid.rebuild(world.bodies()));
+        phases[2].time(|| grid.rebuild(world.stepped()));
         st.wall_ns[2] = lap_ns(&mut clock);
-        let bodies = world.bodies();
-        observers.retain(|o| bodies[o.slot as usize].alive);
-        let built = if replicate {
+        let bodies = world.stepped();
+        observers.retain(|o| bodies[o.id as usize].alive);
+        let built = if matches!(batches, Batches::Send(_)) {
             let scene = Scene { world, grid, view };
             let phase = &phases[3];
             observers

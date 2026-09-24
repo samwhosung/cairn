@@ -22,7 +22,6 @@ impl XorShift64Star {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    /// Uniform in `[lo, hi)`.
     pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * ((self.next_u64() >> 40) as f32 / (1u64 << 24) as f32)
     }
@@ -38,11 +37,10 @@ pub enum Region {
         centre: [f32; 2],
         radius: f32,
     },
-    /// Anywhere in the zone `area_id`, which must lie inside the box `lo..hi`.
     Zone {
         area_id: u32,
-        lo: [f32; 2],
-        hi: [f32; 2],
+        bounds_lo: [f32; 2],
+        bounds_hi: [f32; 2],
     },
 }
 
@@ -55,11 +53,10 @@ pub struct Scenario {
     pub leg_reach: f32,
 }
 
-/// The square within `reach` yards of `centre` on each axis.
 #[derive(Clone, Copy, Debug)]
-pub struct Around {
+pub struct Square {
     pub centre: [f32; 2],
-    pub reach: f32,
+    pub half_side: f32,
 }
 
 pub fn scenario(name: &str) -> Option<Scenario> {
@@ -78,8 +75,8 @@ pub fn scenario(name: &str) -> Option<Scenario> {
             name: "elwynn",
             region: Region::Zone {
                 area_id: ELWYNN_AREA_ID,
-                lo: [-10_200.0, -1734.0],
-                hi: [-8000.0, 1067.0],
+                bounds_lo: [-10_200.0, -1734.0],
+                bounds_hi: [-8000.0, 1067.0],
             },
             tiles_x: (30, 35),
             tiles_y: (47, 51),
@@ -102,21 +99,28 @@ impl Region {
         &self,
         ground: &Ground,
         rng: &mut XorShift64Star,
-        around: Option<Around>,
+        around: Option<Square>,
     ) -> Option<[f32; 2]> {
         let (lo, hi) = match (*self, around) {
             (
                 _,
-                Some(Around {
+                Some(Square {
                     centre: c,
-                    reach: r,
+                    half_side: r,
                 }),
             ) => ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r]),
             (Self::Disk { centre, radius }, None) => (
                 [centre[0] - radius, centre[1] - radius],
                 [centre[0] + radius, centre[1] + radius],
             ),
-            (Self::Zone { lo, hi, .. }, None) => (lo, hi),
+            (
+                Self::Zone {
+                    bounds_lo,
+                    bounds_hi,
+                    ..
+                },
+                None,
+            ) => (bounds_lo, bounds_hi),
         };
         (0..200).find_map(|_| {
             let p = [rng.range(lo[0], hi[0]), rng.range(lo[1], hi[1])];

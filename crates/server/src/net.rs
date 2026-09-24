@@ -12,12 +12,11 @@ use tokio::sync::mpsc;
 use crate::world::{Input, Stamped};
 
 const READ_BUF: usize = 16 << 10;
+const UNREPORTED: u32 = u32::MAX;
 
 pub struct Outbox {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     queued_bytes: Arc<AtomicUsize>,
-    /// How many ticks behind the client was when it last said which it had seen; `u32::MAX`
-    /// until it says.
     behind: Arc<AtomicU32>,
 }
 
@@ -25,7 +24,7 @@ impl Outbox {
     pub fn channel() -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let queued_bytes = Arc::new(AtomicUsize::new(0));
-        let behind = Arc::new(AtomicU32::new(u32::MAX));
+        let behind = Arc::new(AtomicU32::new(UNREPORTED));
         let outbox = Self {
             tx,
             queued_bytes,
@@ -42,7 +41,7 @@ impl Outbox {
 
     pub fn behind_ticks(&self) -> Option<u32> {
         match self.behind.load(Ordering::Relaxed) {
-            u32::MAX => None,
+            UNREPORTED => None,
             ticks => Some(ticks),
         }
     }
@@ -63,8 +62,7 @@ pub struct Shared {
     inbox: Mutex<Vec<Stamped>>,
     unadmitted: Mutex<HashMap<u32, Outbox>>,
     next_conn: AtomicU32,
-    /// The tick being run.
-    pub tick: AtomicU32,
+    pub latest_tick: AtomicU32,
     pub bytes_in: AtomicU64,
     pub stop: AtomicBool,
     started: Instant,
@@ -82,7 +80,7 @@ impl Shared {
             inbox: Mutex::new(Vec::new()),
             unadmitted: Mutex::new(HashMap::new()),
             next_conn: AtomicU32::new(0),
-            tick: AtomicU32::new(0),
+            latest_tick: AtomicU32::new(0),
             bytes_in: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             started: Instant::now(),
@@ -93,11 +91,10 @@ impl Shared {
         self.started.elapsed().as_millis() as u32
     }
 
-    /// Everything that arrived since the last call, in each connection's own order.
     pub fn take_inputs(&self) -> Vec<Stamped> {
         let mut inputs =
             std::mem::take(&mut *self.inbox.lock().unwrap_or_else(PoisonError::into_inner));
-        inputs.sort_unstable_by_key(|s| (s.conn, s.seq));
+        inputs.sort_unstable_by_key(|s| (s.conn, s.nth));
         inputs
     }
 
@@ -156,7 +153,7 @@ async fn write(
 async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: Arc<Shared>) {
     let mut frames = Frames::default();
     let mut buf = vec![0u8; READ_BUF];
-    let (mut seq, mut joined, mut batch) = (0u32, false, Vec::new());
+    let (mut nth, mut joined, mut batch) = (0u32, false, Vec::new());
     'conn: loop {
         let n = match r.read(&mut buf).await {
             Ok(0) | Err(_) => break,
@@ -174,7 +171,7 @@ async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: A
                 }
                 Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
                 Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
-                    let now = shared.tick.load(Ordering::Relaxed);
+                    let now = shared.latest_tick.load(Ordering::Relaxed);
                     behind.store(now.saturating_sub(tick), Ordering::Relaxed);
                     continue;
                 }
@@ -185,11 +182,11 @@ async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: A
             };
             batch.push(Stamped {
                 conn,
-                seq,
+                nth,
                 received_ms,
                 input,
             });
-            seq += 1;
+            nth += 1;
         }
         shared.push(&mut batch);
     }
@@ -197,7 +194,7 @@ async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: A
         let received_ms = shared.ms_since_start();
         batch.push(Stamped {
             conn,
-            seq,
+            nth,
             received_ms,
             input: Input::Leave,
         });

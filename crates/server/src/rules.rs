@@ -20,15 +20,14 @@ pub struct Rules {
     pub rise: f32,
     /// The fastest fall, yards per second.
     pub fall: f32,
-    /// How far a claim's time may run ahead of the server's clock since the client's clock was
-    /// pinned, ms.
+    /// How far a claim may lead the client's pinned clock without spending budget, ms.
     pub clock_slack_ms: u32,
-    /// How far, in all, the pin may move forward to claims that arrived less delayed than the
-    /// one it was pinned by, ms.
+    /// How far in all the pin may follow claims that lead it by more than the slack, ms.
     pub clock_budget_ms: u32,
     /// Coordinates past this many yards from the map's centre are malformed.
     pub bound: f32,
-    /// When false every well-formed claim is accepted.
+    /// When false, a well-formed claim that acknowledges the latest correction is accepted
+    /// unchecked.
     pub check: bool,
 }
 
@@ -63,7 +62,8 @@ pub enum Verdict {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Why {
     Malformed,
-    /// Earlier than the last claim, or ahead of the server's clock.
+    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
+    /// slack and the budget left allow.
     Clock,
     /// Further over the ground than the speed allows.
     Speed,
@@ -84,30 +84,16 @@ impl Why {
     ];
 }
 
-/// A client's clock tied to the server's receive clock by one accepted claim, and how far the
-/// tie has since been moved forward, all in milliseconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ClockPin {
-    pub client: u32,
-    pub server: u32,
-    pub moved: u32,
+    pub client_ms: u32,
+    pub server_ms: u32,
 }
 
 impl ClockPin {
-    /// How far a claim stamped `client_ms` and received at `server_ms` runs ahead of the pin.
-    pub fn lead_ms(&self, client_ms: u32, server_ms: u32) -> i64 {
-        let client = i64::from(client_ms) - i64::from(self.client);
-        client - (i64::from(server_ms) - i64::from(self.server))
-    }
-
-    /// The pin moved forward to an accepted claim that led it by more than `slack_ms`.
-    pub fn follow(self, client_ms: u32, server_ms: u32, slack_ms: u32) -> Self {
-        let excess = (self.lead_ms(client_ms, server_ms) - i64::from(slack_ms)).max(0) as u32;
-        Self {
-            client: self.client + excess,
-            moved: self.moved + excess,
-            ..self
-        }
+    pub fn lead_ms(self, client_ms: u32, server_ms: u32) -> i64 {
+        let client = i64::from(client_ms) - i64::from(self.client_ms);
+        client - (i64::from(server_ms) - i64::from(self.server_ms))
     }
 }
 
@@ -143,13 +129,11 @@ impl Rules {
             return Verdict::Accept;
         }
         let last = &body.movement;
-        let lead_allowed = |pin: &ClockPin| {
-            let budget = self.clock_budget_ms.saturating_sub(pin.moved);
-            i64::from(self.clock_slack_ms) + i64::from(budget)
-        };
+        let budget = self.clock_budget_ms.saturating_sub(body.clock_spent_ms);
+        let lead_allowed = i64::from(self.clock_slack_ms) + i64::from(budget);
         let ahead = body
             .clock
-            .is_some_and(|pin| pin.lead_ms(m.time, received_ms) > lead_allowed(&pin));
+            .is_some_and(|pin| pin.lead_ms(m.time, received_ms) > lead_allowed);
         if m.time < last.time || ahead {
             return Verdict::Refuse(Why::Clock);
         }
@@ -170,6 +154,27 @@ impl Rules {
             return Verdict::Refuse(Why::Fall);
         }
         Verdict::Accept
+    }
+
+    /// Pins `body`'s clock to an accepted claim, or moves the pin forward by as much as the
+    /// claim led it past the slack, spending that from the budget.
+    pub fn pin_clock(&self, body: &mut Body, client_ms: u32, received_ms: u32) {
+        let pin = match body.clock {
+            None => ClockPin {
+                client_ms,
+                server_ms: received_ms,
+            },
+            Some(pin) => {
+                let lead = pin.lead_ms(client_ms, received_ms);
+                let excess = (lead - i64::from(self.clock_slack_ms)).max(0) as u32;
+                body.clock_spent_ms += excess;
+                ClockPin {
+                    client_ms: pin.client_ms + excess,
+                    ..pin
+                }
+            }
+        };
+        body.clock = Some(pin);
     }
 
     /// How far over the ground a mover may go from `last` to `m`, yards. The flags may have
@@ -267,16 +272,13 @@ mod tests {
         let rules = Rules::default();
         let mut body = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD);
         body.clock = Some(ClockPin {
-            client: 1000,
-            server: 6000,
-            moved: 0,
+            client_ms: 1000,
+            server_ms: 6000,
         });
         let prompt = claim(7000, flags::FORWARD, [40.0, 0.0, 0.0]);
         assert_eq!(rules.judge(&body, &prompt, 7000), Verdict::Accept);
-        let pin = body
-            .clock
-            .map(|p| p.follow(7000, 7000, rules.clock_slack_ms));
-        assert_eq!(pin.map(|p| p.lead_ms(8000, 8000)), Some(1000));
+        rules.pin_clock(&mut body, 7000, 7000);
+        assert_eq!(body.clock.map(|p| p.lead_ms(8000, 8000)), Some(1000));
 
         let mut body = last_at([0.0, 0.0, 0.0], 0, flags::FORWARD);
         let refused_at = (1..200u32).find(|&k| {
@@ -284,9 +286,7 @@ mod tests {
             let c = claim(client, flags::FORWARD, [0.0, 0.0, 0.0]);
             match rules.judge(&body, &c, server) {
                 Verdict::Accept => {
-                    body.clock = body
-                        .clock
-                        .map(|p| p.follow(client, server, rules.clock_slack_ms));
+                    rules.pin_clock(&mut body, client, server);
                     body.movement.time = client;
                     false
                 }

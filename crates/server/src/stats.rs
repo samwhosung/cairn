@@ -26,7 +26,6 @@ pub struct PhaseTaken {
 }
 
 impl Phase {
-    /// Runs `f` and counts the CPU this thread spent on it as one task of the phase.
     pub fn time<R>(&self, f: impl FnOnce() -> R) -> R {
         let started = thread_cpu_ns();
         let out = f();
@@ -68,7 +67,6 @@ pub struct TickStats {
 }
 
 impl TickStats {
-    /// The tick an idle machine with `threads` cores would take, ns.
     pub fn ideal_ns(&self, threads: usize) -> u64 {
         (0..PHASES.len())
             .map(|p| (self.cpu_ns[p] / threads.max(1) as u64).max(self.largest_task_ns[p]))
@@ -90,7 +88,8 @@ pub struct Summary {
     pub threads: usize,
     pub ticks: usize,
     pub players: u32,
-    /// Percentiles 50, 99 and 100 of the ideal tick, ms.
+    /// Percentiles 50, 99 and 100 of the ideal tick: the tick an idle machine with `threads`
+    /// cores would take, each phase its CPU spread over them or its largest task, ms.
     pub ideal: [f64; 3],
     /// Percentiles 50, 99 and 100 of the CPU a tick took over all threads, ms.
     pub cpu: [f64; 3],

@@ -6,7 +6,7 @@ pub struct Grid {
     w: usize,
     h: usize,
     cell_offsets: Vec<u32>,
-    slots: Vec<u32>,
+    ids: Vec<u32>,
     cell_of: Vec<u32>,
 }
 
@@ -18,7 +18,7 @@ impl Grid {
             w: 0,
             h: 0,
             cell_offsets: vec![0],
-            slots: Vec::new(),
+            ids: Vec::new(),
             cell_of: Vec::new(),
         }
     }
@@ -40,7 +40,7 @@ impl Grid {
         self.cell_offsets.clear();
         self.cell_offsets.resize(self.w * self.h + 1, 0);
         self.cell_of.clear();
-        self.slots.clear();
+        self.ids.clear();
         for b in bodies {
             let c = if b.alive {
                 self.cell_index(b.movement.pos)
@@ -55,12 +55,12 @@ impl Grid {
         for i in 0..self.w * self.h {
             self.cell_offsets[i + 1] += self.cell_offsets[i];
         }
-        self.slots
+        self.ids
             .resize(self.cell_offsets[self.w * self.h] as usize, 0);
         let mut fill = self.cell_offsets.clone();
-        for (slot, &c) in self.cell_of.iter().enumerate() {
+        for (id, &c) in self.cell_of.iter().enumerate() {
             if c != u32::MAX {
-                self.slots[fill[c as usize] as usize] = slot as u32;
+                self.ids[fill[c as usize] as usize] = id as u32;
                 fill[c as usize] += 1;
             }
         }
@@ -77,8 +77,7 @@ impl Grid {
         (y * self.w + x) as u32
     }
 
-    /// Pushes every living slot whose ground position lies within `r` of `at`'s.
-    pub fn query(&self, bodies: &[Body], at: [f32; 3], r: f32, out: &mut Vec<u32>) {
+    pub fn living_within(&self, bodies: &[Body], at: [f32; 3], r: f32, out: &mut Vec<u32>) {
         let (x0, y0) = self.cell_xy([at[0] - r, at[1] - r, 0.0]);
         let (x1, y1) = self.cell_xy([at[0] + r, at[1] + r, 0.0]);
         let r2 = r * r;
@@ -86,11 +85,11 @@ impl Grid {
             let row = y * self.w;
             let cells =
                 self.cell_offsets[row + x0] as usize..self.cell_offsets[row + x1 + 1] as usize;
-            for &slot in &self.slots[cells] {
-                let p = bodies[slot as usize].movement.pos;
+            for &id in &self.ids[cells] {
+                let p = bodies[id as usize].movement.pos;
                 let (dx, dy) = (p[0] - at[0], p[1] - at[1]);
                 if dx * dx + dy * dy <= r2 {
-                    out.push(slot);
+                    out.push(id);
                 }
             }
         }
@@ -122,7 +121,7 @@ mod tests {
         grid.rebuild(&bodies);
         for (centre, r) in [([0.0, 0.0, 0.0], 30.0), ([120.0, 100.0, 9.0], 101.0)] {
             let mut got = Vec::new();
-            grid.query(&bodies, centre, r, &mut got);
+            grid.living_within(&bodies, centre, r, &mut got);
             got.sort_unstable();
             let want: Vec<u32> = (0..bodies.len() as u32)
                 .filter(|&i| {
@@ -140,7 +139,7 @@ mod tests {
         let mut grid = Grid::new(50.0);
         grid.rebuild(&[at(5.0, 5.0, false)]);
         let mut got = Vec::new();
-        grid.query(&[at(5.0, 5.0, false)], [5.0, 5.0, 0.0], 100.0, &mut got);
+        grid.living_within(&[at(5.0, 5.0, false)], [5.0, 5.0, 0.0], 100.0, &mut got);
         assert!(got.is_empty());
     }
 }
