@@ -18,7 +18,7 @@ pub mod flags {
     pub const SWIMMING: u32 = 0x20_0000;
     pub const ANY_MOVE: u32 = FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT;
     pub const TURNING: u32 = TURN_LEFT | TURN_RIGHT;
-    /// Set while a body's pose changes of itself: it moves, turns or falls.
+    /// Set while a body's pose changes of itself.
     pub const UNDER_WAY: u32 = ANY_MOVE | TURNING | FALLING;
 }
 

@@ -1,7 +1,6 @@
 use crate::{Jump, Movement, flags};
 
-/// How long a client with any movement flag set goes without a claim before it claims anyway,
-/// milliseconds.
+/// How long a client with any movement flag set goes without a claim before it claims anyway.
 pub const HEARTBEAT_MS: u32 = 500;
 
 const IN_MOTION: u32 = flags::ANY_MOVE | flags::FALLING | flags::FALLING_FAR | flags::SWIMMING;
