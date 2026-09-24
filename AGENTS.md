@@ -8,7 +8,9 @@ install. No game data is ever stored in this repo.
 
 - `cargo xtask setup` once per clone, then `cargo xtask check` before every commit. It runs
   every gate CI runs; `--fast` runs the quick ones.
-- Small commits straight to `main`, with conventional messages: `feat(mpq): read the patch chain`.
+- Small commits on a branch, with conventional messages: `feat(mpq): read the patch chain`. A branch
+  lands on `main` by fast-forward once CI passes on its pull request: CI is the only check on
+  Windows and Linux.
 - Prove it works: run the real thing and read the real output. "It compiles" is not done.
 
 ## What the gates enforce
