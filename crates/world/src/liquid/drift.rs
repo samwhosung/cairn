@@ -1,13 +1,12 @@
-use bevy::asset::RenderAssetUsages;
 use bevy::camera::Projection;
-use bevy::camera::visibility::NoFrustumCulling;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use light::Submersion;
 
 use super::Underwater;
-use crate::effect::{EffectLook, EffectMaterial, effect_material};
-use crate::light::LightBuffer;
+use crate::effects::{
+    EffectBlend, EffectDrawSpec, EffectFog, EffectLighting, EffectQuads, EffectVertex,
+    begin_effect_frame,
+};
 use crate::sky_order::DRIFT_SORT_RUNG;
 use crate::source::{Repeat, texture_url};
 use crate::view::WorldCamera;
@@ -96,6 +95,13 @@ impl DriftMode {
         match self {
             DriftMode::Water => &CELLS_WATER,
             DriftMode::Magma => &CELLS_MAGMA,
+        }
+    }
+
+    fn fog(self) -> EffectFog {
+        match self {
+            DriftMode::Water => EffectFog::Off,
+            DriftMode::Magma => EffectFog::Scene,
         }
     }
 }
@@ -201,49 +207,11 @@ impl DriftCloud {
 }
 
 #[derive(Resource)]
-struct DriftDraw {
-    entity: Entity,
-    mesh: Handle<Mesh>,
-    water: Handle<EffectMaterial>,
-    magma: Handle<EffectMaterial>,
-}
+struct DriftTexture(Handle<Image>);
 
-fn setup_drift(
-    mut commands: Commands<'_, '_>,
-    server: Res<'_, AssetServer>,
-    light: Option<Res<'_, LightBuffer>>,
-    mut meshes: ResMut<'_, Assets<Mesh>>,
-    mut materials: ResMut<'_, Assets<EffectMaterial>>,
-) {
-    let Some(light) = light else {
-        return;
-    };
+fn setup_drift(mut commands: Commands<'_, '_>, server: Res<'_, AssetServer>) {
     let texture = server.load(texture_url(TEXTURE, Repeat { u: false, v: false }));
-    let look = |fogged| EffectLook {
-        additive: false,
-        fogged,
-        camera_relative: true,
-        sort_offset: DRIFT_SORT_RUNG,
-        raster_bias: 0,
-    };
-    let water = materials.add(effect_material(look(false), texture.clone(), &light.0));
-    let magma = materials.add(effect_material(look(true), texture, &light.0));
-    let mesh = meshes.add(quad_mesh(&[]));
-    let entity = commands
-        .spawn((
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(water.clone()),
-            Transform::default(),
-            Visibility::Hidden,
-            NoFrustumCulling,
-        ))
-        .id();
-    commands.insert_resource(DriftDraw {
-        entity,
-        mesh,
-        water,
-        magma,
-    });
+    commands.insert_resource(DriftTexture(texture));
 }
 
 fn simulate_drift(
@@ -281,91 +249,63 @@ fn simulate_drift(
     cloud.advect(mode, eye, time.delta_secs());
 }
 
-struct Quad {
-    corners: [Vec3; 4],
-    uvs: [[f32; 2]; 4],
+struct CameraAxes {
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
 }
 
-fn quads(cloud: &DriftCloud, mode: DriftMode, cam: &Transform, cone: ViewCone) -> Mesh {
-    let (fwd, right, up) = (*cam.forward(), *cam.right(), *cam.up());
+fn push_quads(
+    cloud: &DriftCloud,
+    mode: DriftMode,
+    cam: &CameraAxes,
+    cone: ViewCone,
+    verts: &mut Vec<EffectVertex>,
+) {
     let cells = mode.cells();
-    let mut out = Vec::new();
+    let mut submitted = 0;
     for (i, m) in cloud.motes.iter().enumerate() {
-        if out.len() == SUBMIT_CAP {
+        if submitted == SUBMIT_CAP {
             break;
         }
         let rel = m.from_camera;
-        let vz = rel.dot(fwd);
+        let vz = rel.dot(cam.forward);
         if vz <= 0.0
-            || rel.dot(right).abs() >= vz * cone.right_tan
-            || rel.dot(up).abs() >= vz * cone.up_tan
+            || rel.dot(cam.right).abs() >= vz * cone.right_tan
+            || rel.dot(cam.up).abs() >= vz * cone.up_tan
         {
             continue;
         }
         let (col, row) = ATLAS[cells[i & 7]];
         let (u0, v0) = (col * CELL, row * CELL);
-        let (r, u) = (right * (m.edge * 0.5), up * (m.edge * 0.5));
-        out.push(Quad {
-            corners: [rel - r - u, rel + r - u, rel + r + u, rel - r + u],
-            uvs: [
-                [u0, v0 + CELL],
-                [u0 + CELL, v0 + CELL],
-                [u0 + CELL, v0],
-                [u0, v0],
-            ],
-        });
+        let (r, u) = (cam.right * (m.edge * 0.5), cam.up * (m.edge * 0.5));
+        for (pos, uv) in [
+            (rel - r - u, [u0, v0 + CELL]),
+            (rel + r - u, [u0 + CELL, v0 + CELL]),
+            (rel + r + u, [u0 + CELL, v0]),
+            (rel - r + u, [u0, v0]),
+        ] {
+            verts.push(EffectVertex {
+                pos: pos.to_array(),
+                uv,
+                color: [1.0; 4],
+            });
+        }
+        submitted += 1;
     }
-    quad_mesh(&out)
 }
 
-fn quad_mesh(quads: &[Quad]) -> Mesh {
-    let n = quads.len() as u32 * 4;
-    let positions: Vec<[f32; 3]> = quads
-        .iter()
-        .flat_map(|q| q.corners.map(|c| c.to_array()))
-        .collect();
-    let uvs: Vec<[f32; 2]> = quads.iter().flat_map(|q| q.uvs).collect();
-    let indices = (0..n / 4)
-        .flat_map(|q| [0, 1, 2, 0, 2, 3].map(|k| q * 4 + k))
-        .collect();
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; n as usize]);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
-#[allow(clippy::type_complexity)]
-fn draw_drift(
+fn push_drift(
     cloud: Res<'_, DriftCloud>,
     underwater: Res<'_, Underwater>,
-    draw: Option<Res<'_, DriftDraw>>,
-    camera: Query<'_, '_, (&Transform, &Projection), With<WorldCamera>>,
-    mut meshes: ResMut<'_, Assets<Mesh>>,
-    mut field: Query<
-        '_,
-        '_,
-        (
-            &mut Transform,
-            &mut Visibility,
-            &mut MeshMaterial3d<EffectMaterial>,
-        ),
-        Without<WorldCamera>,
-    >,
+    texture: Option<Res<'_, DriftTexture>>,
+    camera: Query<'_, '_, (Entity, &GlobalTransform, &Projection), With<WorldCamera>>,
+    mut effects: ResMut<'_, EffectQuads>,
 ) {
-    let (Some(draw), Ok((cam, projection))) = (draw, camera.single()) else {
+    let (Some(texture), Ok((cam, at, projection))) = (texture, camera.single()) else {
         return;
     };
-    let Ok((mut at, mut vis, mut material)) = field.get_mut(draw.entity) else {
-        return;
-    };
-    let mode = cloud.mode.filter(|_| underwater.0.any());
-    let Some(mode) = mode else {
-        vis.set_if_neq(Visibility::Hidden);
+    let Some(mode) = cloud.mode.filter(|_| underwater.0.any()) else {
         return;
     };
     let cone = match projection {
@@ -375,33 +315,37 @@ fn draw_drift(
             up_tan: MIN_HALF_ANGLE_TAN,
         },
     };
-    let field = quads(&cloud, mode, cam, cone);
-    if field.count_vertices() == 0 {
-        vis.set_if_neq(Visibility::Hidden);
-        return;
-    }
-    if let Some(mesh) = meshes.get_mut(&draw.mesh) {
-        *mesh = field;
-    }
-    at.translation = cam.translation;
-    let want = match mode {
-        DriftMode::Water => &draw.water,
-        DriftMode::Magma => &draw.magma,
+    let basis = CameraAxes {
+        forward: *at.forward(),
+        right: *at.right(),
+        up: *at.up(),
     };
-    if material.0 != *want {
-        material.0 = want.clone();
-    }
-    vis.set_if_neq(Visibility::Inherited);
+    let start = effects.begin();
+    push_quads(&cloud, mode, &basis, cone, &mut effects.verts);
+    effects.commit_quads(
+        start,
+        EffectDrawSpec {
+            cam,
+            texture: texture.0.id(),
+            blend: EffectBlend::Alpha,
+            fog: mode.fog(),
+            lighting: EffectLighting::None,
+            sort_anchor: at.translation(),
+            sort_bias: DRIFT_SORT_RUNG,
+            raster_bias: 0,
+            raster_slope: 0.0,
+            cam_relative: true,
+            no_depth_test: false,
+            main_entity: Entity::PLACEHOLDER,
+        },
+    );
 }
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<DriftCloud>()
         .add_systems(Startup, setup_drift)
         .add_systems(Update, simulate_drift.after(super::SubmersionVerdict))
-        .add_systems(
-            PostUpdate,
-            draw_drift.before(bevy::transform::TransformSystems::Propagate),
-        );
+        .add_systems(PostUpdate, push_drift.after(begin_effect_frame));
 }
 
 #[cfg(test)]

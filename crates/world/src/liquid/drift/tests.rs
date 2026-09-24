@@ -164,14 +164,26 @@ fn the_cone_never_drops_a_mote_on_screen() {
 }
 
 #[test]
-fn a_field_draws_whole_quads_within_the_cap() {
-    let c = cloud(DriftMode::Water);
-    let cam = Transform::default();
-    let cone = ViewCone {
-        right_tan: 1.0,
-        up_tan: 1.0,
-    };
-    let mesh = quads(&c, DriftMode::Water, &cam, cone);
-    let n = mesh.count_vertices();
+fn a_dry_eye_draws_no_motes_and_a_wet_one_whole_quads_within_the_cap() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = World::new();
+    world.insert_resource(EffectQuads::default());
+    world.insert_resource(DriftTexture(Handle::default()));
+    world.insert_resource(cloud(DriftMode::Water));
+    world.spawn((
+        WorldCamera,
+        GlobalTransform::default(),
+        Projection::default(),
+    ));
+    world.insert_resource(Underwater(Submersion::Dry));
+    world.run_system_once(push_drift).expect("runs");
+    let quads = world.resource::<EffectQuads>();
+    assert!(quads.draws.is_empty() && quads.verts.is_empty());
+    world.insert_resource(Underwater(Submersion::Water));
+    world.run_system_once(push_drift).expect("runs");
+    let quads = world.resource::<EffectQuads>();
+    let n = quads.verts.len();
+    assert_eq!(quads.draws.len(), 1);
     assert!(n > 0 && n.is_multiple_of(4) && n / 4 <= SUBMIT_CAP, "{n}");
 }

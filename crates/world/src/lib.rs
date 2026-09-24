@@ -13,7 +13,6 @@ pub mod collision;
 pub mod coords;
 mod doodad_anim;
 mod doodad_events;
-mod effect;
 pub mod effects;
 mod glow;
 mod ground;
@@ -121,7 +120,6 @@ impl Plugin for WorldPlugin {
             clouds::CloudsPlugin,
             celestial::CelestialPlugin,
             skybox::SkyboxPlugin,
-            effect::EffectPlugin,
             liquid::LiquidPlugin,
         ))
         .add_plugins(effects::EffectsPlugin)

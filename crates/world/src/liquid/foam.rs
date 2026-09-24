@@ -1,10 +1,9 @@
 mod params;
 
+use std::collections::BTreeMap;
+
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::primitives::Aabb;
-use bevy::camera::visibility::NoAutoAabb;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -13,10 +12,13 @@ use super::query::{CellCorners, LiquidGrid};
 use super::{FoamPatch, WaterIndex};
 use crate::Install;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
-use crate::effect::{EffectLook, EffectMaterial, effect_material};
+use crate::effects::{
+    EffectBlend, EffectDrawSpec, EffectFog, EffectLighting, EffectQuads, EffectVertex,
+    begin_effect_frame,
+};
 use crate::interior::Viewer;
-use crate::light::LightBuffer;
 use crate::sky_order::FOAM_SORT_RUNG;
+use crate::view::WorldCamera;
 use params::{
     RING_INTERVAL_SECS, WadeState, foam_params, foam_uv, record_alpha, record_size, wake_cooldown,
 };
@@ -86,9 +88,9 @@ impl Default for WaterFoam {
 }
 
 #[derive(Resource)]
-struct FoamDraws {
-    ring: (Entity, Handle<Mesh>),
-    wake: (Entity, Handle<Mesh>),
+struct FoamStencils {
+    ring: Handle<Image>,
+    wake: Handle<Image>,
 }
 
 /// A foam stencil's alpha is the shape, its dark colour the strength.
@@ -119,14 +121,8 @@ fn stencil(install: &Install, path: &str) -> Option<Image> {
 fn setup_foam(
     mut commands: Commands<'_, '_>,
     install: Res<'_, Install>,
-    light: Option<Res<'_, LightBuffer>>,
     mut images: ResMut<'_, Assets<Image>>,
-    mut meshes: ResMut<'_, Assets<Mesh>>,
-    mut materials: ResMut<'_, Assets<EffectMaterial>>,
 ) {
-    let Some(light) = light else {
-        return;
-    };
     let (Some(ring), Some(wake)) = (
         stencil(&install, RING_TEXTURE),
         stencil(&install, WAKE_TEXTURE),
@@ -134,33 +130,10 @@ fn setup_foam(
         warn!("no foam stencils: wading draws no foam");
         return;
     };
-    let look = EffectLook {
-        additive: true,
-        fogged: false,
-        camera_relative: false,
-        sort_offset: FOAM_SORT_RUNG,
-        raster_bias: FOAM_RASTER,
-    };
-    let mut draw = |image: Image| {
-        let material = materials.add(effect_material(look, images.add(image), &light.0));
-        let mesh = meshes.add(patch_mesh(Vec::new(), Vec::new(), Vec::new()));
-        let entity = commands
-            .spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material),
-                Transform::IDENTITY,
-                Visibility::Hidden,
-                Aabb::default(),
-                NoAutoAabb,
-            ))
-            .id();
-        (entity, mesh)
-    };
-    let draws = FoamDraws {
-        ring: draw(ring),
-        wake: draw(wake),
-    };
-    commands.insert_resource(draws);
+    commands.insert_resource(FoamStencils {
+        ring: images.add(ring),
+        wake: images.add(wake),
+    });
 }
 
 fn build_patch(
@@ -222,12 +195,12 @@ fn wade_state(wader: &Viewer, vel: Vec3) -> WadeState {
 fn emit_foam(
     time: Res<'_, Time>,
     wader: Option<Res<'_, Viewer>>,
-    draws: Option<Res<'_, FoamDraws>>,
+    stencils: Option<Res<'_, FoamStencils>>,
     index: Res<'_, WaterIndex>,
     grids: Query<'_, '_, &LiquidGrid, With<FoamPatch>>,
     mut foam: ResMut<'_, WaterFoam>,
 ) {
-    let (Some(wader), Some(_)) = (wader, draws) else {
+    let (Some(wader), Some(_)) = (wader, stencils) else {
         return;
     };
     let feet = wader.body.filter(|_| wader.settled && !grids.is_empty());
@@ -321,40 +294,15 @@ fn emit_foam(
     };
 }
 
-fn patch_mesh(positions: Vec<[f32; 3]>, uvs: Vec<[f32; 2]>, colors: Vec<[f32; 4]>) -> Mesh {
-    let n = positions.len() as u32;
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32((0..n).collect()));
-    mesh
-}
-
-/// Bevy sorts a transparent draw at its box's centre: the box is set about the vertices' centroid.
-fn sort_at_centroid(positions: &[[f32; 3]]) -> Aabb {
-    let centre = positions.iter().map(|&p| Vec3::from(p)).sum::<Vec3>() / positions.len() as f32;
-    let reach = positions
-        .iter()
-        .fold(Vec3::ZERO, |r, &p| r.max((Vec3::from(p) - centre).abs()));
-    Aabb {
-        center: centre.into(),
-        half_extents: reach.into(),
-    }
-}
-
-fn draw_foam(
+fn push_foam(
     time: Res<'_, Time>,
-    draws: Option<Res<'_, FoamDraws>>,
+    stencils: Option<Res<'_, FoamStencils>>,
+    camera: Query<'_, '_, Entity, With<WorldCamera>>,
     surfaces: Query<'_, '_, (), With<LiquidGrid>>,
     mut foam: ResMut<'_, WaterFoam>,
-    mut meshes: ResMut<'_, Assets<Mesh>>,
-    mut placed: Query<'_, '_, (&mut Visibility, &mut Aabb)>,
+    mut effects: ResMut<'_, EffectQuads>,
 ) {
-    let Some(draws) = draws else {
+    let (Some(stencils), Ok(cam)) = (stencils, camera.single()) else {
         return;
     };
     let now = time.elapsed_secs();
@@ -363,31 +311,53 @@ fn draw_foam(
             *slot = None;
         }
     }
-    for (ring, (entity, mesh)) in [(true, &draws.ring), (false, &draws.wake)] {
-        let (mut positions, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new());
-        let live = foam.pool.iter().flatten();
-        for rec in live.filter(|r| r.ring == ring && surfaces.contains(r.patch.surface)) {
+    let mut groups: BTreeMap<(Entity, bool), Vec<&FoamRecord>> = BTreeMap::new();
+    for rec in foam.pool.iter().flatten() {
+        if surfaces.contains(rec.patch.surface) {
+            groups
+                .entry((rec.patch.surface, rec.ring))
+                .or_default()
+                .push(rec);
+        }
+    }
+    for ((_, ring), records) in groups {
+        let start = effects.begin();
+        let mut centroid = Vec3::ZERO;
+        for rec in &records {
             let size = record_size(rec.size0, rec.growth, rec.born, now);
             let alpha = record_alpha(rec.peak, rec.lifetime, rec.born, now);
             for v in &rec.patch.triangles {
                 let wow = bevy_to_wow(*v);
-                positions.push(v.to_array());
-                uvs.push(foam_uv(rec.center, rec.heading, size, [wow[0], wow[1]]));
-                colors.push([1.0, 1.0, 1.0, alpha]);
+                effects.verts.push(EffectVertex {
+                    pos: v.to_array(),
+                    uv: foam_uv(rec.center, rec.heading, size, [wow[0], wow[1]]),
+                    color: [1.0, 1.0, 1.0, alpha],
+                });
+                centroid += *v;
             }
         }
-        let Ok((mut vis, mut aabb)) = placed.get_mut(*entity) else {
-            continue;
-        };
-        if positions.is_empty() {
-            vis.set_if_neq(Visibility::Hidden);
+        let n = effects.verts.len() as u32 - start;
+        if n == 0 {
             continue;
         }
-        *aabb = sort_at_centroid(&positions);
-        if let Some(m) = meshes.get_mut(mesh) {
-            *m = patch_mesh(positions, uvs, colors);
-        }
-        vis.set_if_neq(Visibility::Inherited);
+        let stencil = if ring { &stencils.ring } else { &stencils.wake };
+        effects.commit_tris(
+            start,
+            EffectDrawSpec {
+                cam,
+                texture: stencil.id(),
+                blend: EffectBlend::Add,
+                fog: EffectFog::Off,
+                lighting: EffectLighting::None,
+                sort_anchor: centroid / n as f32,
+                sort_bias: FOAM_SORT_RUNG,
+                raster_bias: FOAM_RASTER,
+                raster_slope: 0.0,
+                cam_relative: false,
+                no_depth_test: false,
+                main_entity: Entity::PLACEHOLDER,
+            },
+        );
     }
 }
 
@@ -395,10 +365,7 @@ pub(super) fn plugin(app: &mut App) {
     app.init_resource::<WaterFoam>()
         .add_systems(Startup, setup_foam)
         .add_systems(Update, emit_foam.in_set(crate::WorldSystems))
-        .add_systems(
-            PostUpdate,
-            draw_foam.before(bevy::transform::TransformSystems::Propagate),
-        );
+        .add_systems(PostUpdate, push_foam.after(begin_effect_frame));
 }
 
 #[cfg(test)]
@@ -450,9 +417,9 @@ mod tests {
                 turning: false,
                 collision_height: 2.0,
             })
-            .insert_resource(FoamDraws {
-                ring: (Entity::PLACEHOLDER, Handle::default()),
-                wake: (Entity::PLACEHOLDER, Handle::default()),
+            .insert_resource(FoamStencils {
+                ring: Handle::default(),
+                wake: Handle::default(),
             })
             .add_systems(
                 Update,
