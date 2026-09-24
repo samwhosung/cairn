@@ -27,6 +27,7 @@ pub fn spawn_body(mut commands: Commands<'_, '_>) {
     ));
 }
 
+/// The body is drawn at the scale the server gives a new character, its display's size.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn dress_body(
     mut commands: Commands<'_, '_>,
@@ -36,15 +37,26 @@ pub fn dress_body(
     server: Res<'_, AssetServer>,
     mut images: ResMut<'_, Assets<Image>>,
     mut player: ResMut<'_, Player>,
-    bodies: Query<'_, '_, Entity, (With<PlayerBody>, Without<UnitBody>, Without<CameraPivot>)>,
+    mut bodies: Query<
+        '_,
+        '_,
+        (Entity, &mut Transform),
+        (With<PlayerBody>, Without<UnitBody>, Without<CameraPivot>),
+    >,
 ) {
     let Some(tables) = tables else {
         return;
     };
-    for entity in &bodies {
+    for (entity, mut transform) in &mut bodies {
         if let Some(body) = tables.player_body(&look.0, &install.0, &mut images, &server) {
+            let display = tables.create.body_display(look.0.race, look.0.sex);
+            let scale = display
+                .and_then(|d| tables.creatures.model_scale(d))
+                .filter(|s| *s > 0.0)
+                .unwrap_or(1.0);
+            transform.scale = Vec3::splat(scale);
             commands.entity(entity).insert(body);
-            player.collision_height = collision_height(&tables, &look.0);
+            player.collision_height = collision_height(&tables, display, scale);
         } else {
             warn!("no body for {:?}: the player walks unseen", look.0);
             commands.entity(entity).insert(CameraPivot::FLOOR);
@@ -65,15 +77,13 @@ pub fn pivot_on_model(
     }
 }
 
-/// A display's own scale counts only where it is over the body's, 1.
-fn collision_height(tables: &CharacterTables, look: &CharacterLook) -> f32 {
-    let display = tables.create.body_display(look.race, look.sex);
+/// The model's height at the body's `scale`, or at the display's own where that is larger: the
+/// display's scale is a floor, never a second factor.
+fn collision_height(tables: &CharacterTables, display: Option<u32>, scale: f32) -> f32 {
     let raw = display
         .and_then(|d| tables.creatures.collision_height(d))
         .filter(|h| *h > 0.0)
         .unwrap_or(DEFAULT_COLLISION_HEIGHT);
-    let scale = display
-        .and_then(|d| tables.creatures.display_scale(d))
-        .map_or(1.0, |s| s.max(1.0));
-    raw * scale
+    let floor = display.and_then(|d| tables.creatures.display_scale(d));
+    raw * floor.map_or(scale, |s| scale.max(s)).max(f32::MIN_POSITIVE)
 }

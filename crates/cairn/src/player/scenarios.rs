@@ -8,8 +8,11 @@ mod walker;
 use avian3d::prelude::PhysicsLayer;
 use bevy::input::keyboard::KeyCode;
 use bevy::math::Vec3;
+use bevy::prelude::{Transform, With};
 use world::collision::CollisionLayer;
+use world::unit::CharacterLook;
 
+use super::PlayerBody;
 use super::flags::{FALLING, SWIMMING};
 use super::state::{
     CAPSULE_HEIGHT, CAPSULE_RADIUS, GRAVITY, JUMP_SPEED, RUN_SPEED, SKIN_WIDTH, TERMINAL_VELOCITY,
@@ -355,6 +358,71 @@ fn a_stormwind_canal_is_swum_into_and_out_of() {
     );
     let end = frames[frames.len() - 1];
     assert!(end.flags & (SWIMMING | FALLING) == 0, "{:?}", end.wow);
+}
+
+/// A tauren and a gnome stand at the scale the server gives a new character of theirs, their
+/// display's model scale, and collide at their model's height at that scale.
+#[test]
+fn a_tauren_and_a_gnome_are_drawn_and_collide_at_their_size() {
+    for (race, sex, scale, height) in [
+        (6, 0, 1.35, 1.653 * 1.35),
+        (6, 1, 1.25, 2.111 * 1.25),
+        (7, 0, 1.15, 1.056 * 1.15),
+        (7, 1, 1.15, 1.15),
+    ] {
+        let look = CharacterLook::naked(race, sex);
+        let Some(mut w) = Walker::dressed_on_ground(MEADOW, 0.0, 60.0, look) else {
+            return;
+        };
+        let world = w.app.world_mut();
+        let drawn = world
+            .query_filtered::<&Transform, With<PlayerBody>>()
+            .single(world)
+            .expect("the body")
+            .scale;
+        let h = w.player().collision_height;
+        eprintln!("race {race} sex {sex}: drawn at {drawn}, collides {h:.4} yd tall");
+        assert!((drawn - Vec3::splat(scale)).abs().max_element() < 1e-6);
+        assert!((h - height).abs() < 1e-5, "{h} against {height}");
+    }
+}
+
+/// Walks `look` from Crystal Lake's shore into the water until it swims: the height it collides
+/// at, and the water over its feet the two frames before the swim began.
+fn wade_in(look: CharacterLook) -> Option<(f32, f32, f32)> {
+    let mut w = Walker::dressed_on_ground(SHORE, 180.0, 60.0, look)?;
+    w.press(KeyCode::KeyW);
+    let frames = w.run(600);
+    let first = frames
+        .iter()
+        .position(|f| f.flags & SWIMMING != 0)
+        .expect("a swim");
+    let mut depth = |i: usize| {
+        let f: Frame = frames[i];
+        w.water(f.wow).expect("in the water") - f.wow[2]
+    };
+    let (before, at) = (depth(first - 2), depth(first - 1));
+    Some((w.player().collision_height, before, at))
+}
+
+/// Each swims once the water passes three-quarters of its own height: the tall tauren wades out
+/// past where the gnome has long been swimming.
+#[test]
+fn a_tauren_wades_out_deeper_than_a_gnome_before_it_swims() {
+    let mut depths = Vec::new();
+    for (race, sex) in [(6, 1), (7, 1)] {
+        let Some((h, before, at)) = wade_in(CharacterLook::naked(race, sex)) else {
+            return;
+        };
+        let enter = swim_enter_depth(h);
+        eprintln!("race {race} sex {sex}: {h:.4} yd tall swims at {at:.3} (over {enter:.3})");
+        assert!(
+            before <= enter && at > enter,
+            "{before} {at} against {enter}"
+        );
+        depths.push(at);
+    }
+    assert!(depths[0] > depths[1] + 1.0, "{depths:?}");
 }
 
 /// The Goldshire inn's north wall, a WMO face leaning 1.5° back from its base: its outward normal

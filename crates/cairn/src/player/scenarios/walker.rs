@@ -14,7 +14,7 @@ use bevy::time::TimeUpdateStrategy;
 use bevy::transform::TransformPlugin;
 use world::collision::{CollisionPlugin, Liquids, WorldCollision};
 use world::coords::{bevy_to_wow, wow_to_bevy};
-use world::unit::CharacterLook;
+use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install};
 
 use crate::player::state::Player;
@@ -38,11 +38,35 @@ impl Walker {
     /// A client on `map` whose body starts with its feet at `feet` (WoW), facing `heading_deg`
     /// (0 north, 90 west), stepped at `hz`. `None` without `WOW_DATA`.
     pub fn new(map: &str, feet: [f32; 3], heading_deg: f32, hz: f32) -> Option<Self> {
+        Self::build(map, feet, heading_deg, hz, None)
+    }
+
+    /// [`Self::new`], its body dressed as `look`: its scale and collision height are the look's.
+    pub fn dressed(
+        map: &str,
+        feet: [f32; 3],
+        heading_deg: f32,
+        hz: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
+        Self::build(map, feet, heading_deg, hz, Some(look))
+    }
+
+    fn build(
+        map: &str,
+        feet: [f32; 3],
+        heading_deg: f32,
+        hz: f32,
+        dressed: Option<CharacterLook>,
+    ) -> Option<Self> {
         let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
             eprintln!("skipped: WOW_DATA is not set");
             return None;
         };
         let install = Install::open(&data).expect("open the install");
+        let tables = dressed
+            .is_some()
+            .then(|| CharacterTables::load(&install).expect("the character tables"));
         let current = CurrentMap::find(&install.0, map).expect("the map");
         let step = Duration::from_secs_f64(1.0 / f64::from(hz));
         let mut app = App::new();
@@ -60,9 +84,12 @@ impl Walker {
                 PlayerPlugin {
                     pose: Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0),
                     mode: Mode::Walk,
-                    look: CharacterLook::naked(1, 0),
+                    look: dressed.unwrap_or_else(|| CharacterLook::naked(1, 0)),
                 },
             ));
+        if let Some(tables) = tables {
+            app.insert_resource(tables);
+        }
         app.finish();
         app.cleanup();
         let mut walker = Self { app, step };
@@ -72,12 +99,25 @@ impl Walker {
 
     /// On `Azeroth`, with the feet placed on the ground under `xy`.
     pub fn on_ground(xy: [f32; 2], heading_deg: f32, hz: f32) -> Option<Self> {
-        let mut w = Self::new("Azeroth", [xy[0], xy[1], 500.0], heading_deg, hz)?;
-        let ground = w
+        Some(Self::new("Azeroth", [xy[0], xy[1], 500.0], heading_deg, hz)?.grounded(xy))
+    }
+
+    /// [`Self::on_ground`], dressed as `look`.
+    pub fn dressed_on_ground(
+        xy: [f32; 2],
+        heading_deg: f32,
+        hz: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
+        Some(Self::dressed("Azeroth", [xy[0], xy[1], 500.0], heading_deg, hz, look)?.grounded(xy))
+    }
+
+    fn grounded(mut self, xy: [f32; 2]) -> Self {
+        let ground = self
             .ground_under(xy[0], xy[1], 500.0)
             .expect("ground under the point");
-        w.teleport(Vec3::new(xy[0], xy[1], ground));
-        Some(w)
+        self.teleport(Vec3::new(xy[0], xy[1], ground));
+        self
     }
 
     /// Updates until the body is let go, the collision around it resident. The settle's stall

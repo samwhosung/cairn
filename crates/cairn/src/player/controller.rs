@@ -234,11 +234,14 @@ pub fn control(
         TURN_RATE,
     );
 
-    let pivot = body.single().ok().and_then(|(.., pivot)| pivot.copied());
+    let (scale, pivot) = body
+        .single()
+        .ok()
+        .map_or((1.0, None), |(t, .., pivot)| (t.scale.x, pivot.copied()));
     let subject = Subject {
         feet: player.pos,
         head: player.pos + Vec3::Y * (CAPSULE_HEIGHT - CAPSULE_RADIUS),
-        pivot_target: pivot.map(|p| model_pivot_height(p, 1.0, frame.live & SWIMMING != 0)),
+        pivot_target: pivot.map(|p| model_pivot_height(p, scale, frame.live & SWIMMING != 0)),
         turn_delta,
     };
     let follow = FollowInput {
