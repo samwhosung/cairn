@@ -47,6 +47,15 @@ pub struct InView<'a> {
     pub idle: Option<u16>,
 }
 
+/// An attack as a client is told it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Attacked {
+    pub attacker: Whose,
+    /// The body attacked, if it attacked one the client sees.
+    pub target: Option<Whose>,
+    pub outcome: protocol::Outcome,
+}
+
 /// A client's end of its connection to a [`Stepper`]: the frames the server sent it, in order.
 pub struct Link {
     frames: UnboundedReceiver<Vec<u8>>,
@@ -199,13 +208,17 @@ impl Stepper {
     /// The attacks this tick made by the bodies in observer `id`'s view and by its own, by attacker
     /// and then in the order its rules made them, each with the one attacked as the observer sees
     /// it.
-    pub fn attacks_to(&self, id: u32) -> Vec<(Whose, Option<Whose>, protocol::Outcome)> {
+    pub fn attacks_to(&self, id: u32) -> Vec<Attacked> {
         self.told_to(id, |shows, whose| {
             shows
                 .attacked
                 .iter()
                 .filter_map(|&(n, target, outcome)| {
-                    Some((whose(n)?, target.and_then(whose), on_the_wire(outcome)))
+                    Some(Attacked {
+                        attacker: whose(n)?,
+                        target: target.and_then(whose),
+                        outcome: on_the_wire(outcome),
+                    })
                 })
                 .collect()
         })

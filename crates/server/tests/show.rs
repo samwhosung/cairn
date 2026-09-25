@@ -332,11 +332,11 @@ fn an_attack_is_told_to_whoever_sees_the_attacker_with_the_one_attacked_as_each_
     let stepped: Vec<(On, Option<On>, Outcome)> = stepper
         .attacks_to(b)
         .into_iter()
-        .map(|(w, t, o)| {
+        .map(|a| {
             (
-                clients[b as usize].on(w),
-                t.map(|t| clients[b as usize].on(t)),
-                o,
+                clients[b as usize].on(a.attacker),
+                a.target.map(|t| clients[b as usize].on(t)),
+                a.outcome,
             )
         })
         .collect();

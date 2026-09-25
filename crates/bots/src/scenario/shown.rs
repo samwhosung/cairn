@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use std::num::NonZeroU64;
 
-use protocol::{LEN_BYTES, Outcome, Record, ServerMessage, Show, Whose};
-use server::InView;
+use protocol::{LEN_BYTES, Record, ServerMessage, Show, Whose};
+use server::{Attacked, InView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Nth(pub NonZeroU64);
@@ -32,7 +32,7 @@ pub struct Shown {
     own_idle: Option<u16>,
     tick: Option<u32>,
     latest_plays: Vec<(Whose, u16)>,
-    latest_attacks: Vec<Attack>,
+    latest_attacks: Vec<Attacked>,
     told: [u64; 5],
     drops: Drops,
 }
@@ -42,10 +42,6 @@ const PLAYED: usize = 1;
 const HELD: usize = 2;
 const IDLED: usize = 3;
 const ATTACKED: usize = 4;
-
-/// An attack as a client is told it: the attacker, the one it attacked if the client sees it, and
-/// how it came out.
-pub type Attack = (Whose, Option<Whose>, Outcome);
 
 pub struct ServerOwnShows {
     pub pose: Option<u16>,
@@ -102,7 +98,11 @@ impl Shown {
                     show: Show::Attack { target, outcome },
                 } => {
                     if !self.dropped(ATTACKED) {
-                        self.latest_attacks.push((whose, target, outcome));
+                        self.latest_attacks.push(Attacked {
+                            attacker: whose,
+                            target,
+                            outcome,
+                        });
                     }
                 }
                 Record::Show {
@@ -176,7 +176,7 @@ impl Shown {
         view: &[InView<'_>],
         own: &ServerOwnShows,
         played: &[(Whose, u16)],
-        attacked: &[Attack],
+        attacked: &[Attacked],
     ) -> Option<String> {
         let mut ours = self.by_slot.iter();
         for &InView {
@@ -228,7 +228,7 @@ impl Shown {
         }
         let this_tick = self.tick == Some(tick);
         let plays: &[(Whose, u16)] = if this_tick { &self.latest_plays } else { &[] };
-        let attacks: &[Attack] = if this_tick { &self.latest_attacks } else { &[] };
+        let attacks: &[Attacked] = if this_tick { &self.latest_attacks } else { &[] };
         first_told_apart("animation", plays, played)
             .or_else(|| first_told_apart("attack", attacks, attacked))
     }
