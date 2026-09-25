@@ -43,7 +43,7 @@ pub struct Took {
 }
 
 /// A game running inside the server, whatever the game.
-pub trait Hosted: Send {
+pub trait Hosted: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn tick(&mut self, turn: &Turn<'_>);

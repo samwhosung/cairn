@@ -1,5 +1,6 @@
 use std::io;
 
+use game::{Delivery, Hosted};
 use rayon::ThreadPool;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -45,7 +46,7 @@ impl Link {
 }
 
 impl Stepper {
-    pub fn new(cfg: &Config, order: InputOrder) -> io::Result<Self> {
+    pub fn new(cfg: &Config, order: InputOrder, delivery: Delivery) -> io::Result<Self> {
         cfg.check()?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(cfg.tick_threads)
@@ -58,6 +59,11 @@ impl Stepper {
             cfg.view,
             cfg.map,
             cfg.tick_ms,
+        )
+        .with_game(
+            cfg.game
+                .as_ref()
+                .map(|g| g.start(u32::from(cfg.tick_ms), delivery)),
         );
         Ok(Self {
             sim,
@@ -75,6 +81,43 @@ impl Stepper {
     /// The tick the next [`Stepper::tick`] runs.
     pub fn next_tick(&self) -> u32 {
         self.sim.world().tick()
+    }
+
+    pub fn game(&self) -> Option<&dyn Hosted> {
+        self.sim.game()
+    }
+
+    /// The bodies the game placed in the tick just run, each now awaiting its client's ack.
+    pub fn placed(&self) -> Vec<u32> {
+        let world = self.sim.world();
+        let tick = world.tick().wrapping_sub(1);
+        (0..)
+            .zip(world.before())
+            .filter(|(_, b)| b.placed.is_some_and(|p| p.tick == tick))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// What observer `id` has in view, by slot: each entity, and the game's state of it.
+    pub fn in_view(&self, id: u32) -> Option<Vec<(u16, u32, &[u8])>> {
+        let game = self.sim.game();
+        let mut view: Vec<(u16, u32, &[u8])> = self
+            .sim
+            .in_view(id)?
+            .into_iter()
+            .map(|(slot, e)| {
+                let state = game.and_then(|g| g.shown(e)).map_or(&[][..], |s| s.0);
+                (slot, e, state)
+            })
+            .collect();
+        view.sort_unstable_by_key(|v| v.0);
+        Some(view)
+    }
+
+    /// Where what the record saved differs from a full scan of the game's rows.
+    pub fn saves_differ(&self) -> Option<String> {
+        let game = self.sim.game()?;
+        self.sim.saves().first_difference(&game.saved())
     }
 
     pub fn keep_refusals(&mut self) {

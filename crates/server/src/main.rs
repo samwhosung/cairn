@@ -12,14 +12,15 @@ use server::{
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
               [--record FILE] [--players N --arrival S --settle S --measure S --grace S]
-              [--label TEXT]
+              [--game NAME [--knobs FILE] [--overlay FILE] [--seed N]] [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
          are in, or S seconds after the start (--arrival, 60) with whoever is, wait S
          seconds and measure for S seconds; once every player has left, or S seconds
          after the window (--grace, 10) with the rest dropped, print one summary row and
          stop.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
-         and world hash to FILE.
+         and world hash to FILE. --game runs a game's rules (melee) on its own knobs, or on
+         the --knobs FILE, with an --overlay FILE laid on them; --seed seeds its rolls.
        server header
          print the header of the summary row's table.
        server replay FILE [--threads N] [--racy] [--refusals] [--replicate] [--dump OUT]
@@ -97,6 +98,21 @@ fn serve(args: &[String]) -> Result<(), String> {
         Some(path) => read_spawns(Path::new(path))?,
         None => Vec::new(),
     };
+    let game = match f.get("game") {
+        Some(name) => {
+            let (knobs, overlay) = (f.get("knobs"), f.get("overlay"));
+            let seed = num(&f, "seed", 0)?;
+            let files = (knobs.map(Path::new), overlay.map(Path::new));
+            Some(catalog::from_files(name, files.0, files.1, seed)?)
+        }
+        None if ["knobs", "overlay", "seed"]
+            .iter()
+            .any(|k| f.contains_key(*k)) =>
+        {
+            return Err("--knobs, --overlay and --seed are a game's: give --game".into());
+        }
+        None => None,
+    };
     let cfg = Config {
         addr: Some(SocketAddr::from(([127, 0, 0, 1], num(&f, "port", 7777)?))),
         tick_threads: num(&f, "threads", defaults.tick_threads)?,
@@ -108,6 +124,7 @@ fn serve(args: &[String]) -> Result<(), String> {
         },
         record: f.get("record").map(PathBuf::from),
         window,
+        game,
         ..defaults
     };
     let running = server::start(cfg).map_err(|e| format!("starting: {e}"))?;

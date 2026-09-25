@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use game::{Delivery, Loaded};
+
 use crate::limits::Limits;
 use crate::log::{Header, LogWriter};
 use crate::net::Shared;
@@ -25,6 +27,8 @@ pub struct Config {
     pub spawns: Vec<Spawn>,
     pub limits: Limits,
     pub view: View,
+    /// The game whose rules the world runs; with none, it runs only movement.
+    pub game: Option<Loaded>,
     /// Where to write every tick's inputs and world hash, for replay.
     pub record: Option<PathBuf>,
     /// When to measure and stop; without one the server runs until stopped.
@@ -50,6 +54,7 @@ impl Default for Config {
             spawns: Vec::new(),
             limits: Limits::default(),
             view: View::default(),
+            game: None,
             record: None,
             window: None,
         }
@@ -110,6 +115,11 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         cfg.view,
         cfg.map,
         cfg.tick_ms,
+    )
+    .with_game(
+        cfg.game
+            .as_ref()
+            .map(|g| g.start(u32::from(cfg.tick_ms), Delivery::Canonical)),
     );
     let mut log = match &cfg.record {
         Some(path) => Some(LogWriter::create(

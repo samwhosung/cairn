@@ -1,5 +1,6 @@
 use std::io::ErrorKind;
 
+use game::Delivery;
 use server::{Config, InputOrder, Limits, PastReach, Stepper, View};
 
 fn config(radius: f32, run: f32) -> Config {
@@ -33,7 +34,7 @@ fn a_view_past_what_the_wire_reaches_is_refused_by_name_and_the_same_within_it_r
             .expect("a view past reach refused");
         assert_eq!(refused.kind(), ErrorKind::InvalidInput);
         assert_eq!(refused.to_string(), past.to_string());
-        let refused = Stepper::new(&cfg, InputOrder::Canonical)
+        let refused = Stepper::new(&cfg, InputOrder::Canonical, Delivery::Canonical)
             .err()
             .expect("a view past reach refused");
         assert_eq!(refused.to_string(), past.to_string());
@@ -44,7 +45,8 @@ fn a_view_past_what_the_wire_reaches_is_refused_by_name_and_the_same_within_it_r
             .expect("a view within reach")
             .stop()
             .expect("it stops");
-        Stepper::new(&within, InputOrder::Canonical).expect("a view within reach");
+        Stepper::new(&within, InputOrder::Canonical, Delivery::Canonical)
+            .expect("a view within reach");
     }
     assert!(
         PastReach {

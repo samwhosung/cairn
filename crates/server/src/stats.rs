@@ -112,7 +112,17 @@ impl Phase {
 }
 
 /// The phases of a tick in the order they run, which is also the order of every per-phase array.
-pub const PHASES: [&str; 6] = ["admit", "step", "index", "encode", "replicate", "hash"];
+pub const PHASES: [&str; 9] = [
+    "admit",
+    "step",
+    "rules",
+    "deliver",
+    "record",
+    "index",
+    "encode",
+    "replicate",
+    "hash",
+];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TickStats {
@@ -330,8 +340,8 @@ mod tests {
     #[test]
     fn the_ideal_tick_is_spread_cpu_or_the_largest_task() {
         let t = TickStats {
-            cpu_ns: [100, 1400, 10, 70, 2800, 0],
-            largest_task_ns: [100, 50, 10, 20, 400, 0],
+            cpu_ns: [100, 1400, 0, 0, 0, 10, 70, 2800, 0],
+            largest_task_ns: [100, 50, 0, 0, 0, 10, 20, 400, 0],
             ..TickStats::default()
         };
         assert_eq!(t.ideal_ns(14), 100 + 100 + 10 + 20 + 400);

@@ -41,9 +41,17 @@ pub struct Running {
 }
 
 /// Binds `cfg.addr`, if it names one, and starts ticking; refuses a view past what a batch's
-/// positions reach ([`View::check`]).
+/// positions reach ([`View::check`]), and a game's run to be recorded.
 pub fn start(cfg: Config) -> io::Result<Running> {
     cfg.check()?;
+    if cfg.record.is_some()
+        && let Some(game) = &cfg.game
+    {
+        return Err(io::Error::other(format!(
+            "a run of {} cannot be recorded yet: its replay would not know the game",
+            game.name()
+        )));
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.io_threads.max(1))
         .thread_name("conn")
@@ -154,7 +162,7 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
         },
         ..Config::default()
     };
-    let mut stepper = Stepper::new(&cfg, how.order)?;
+    let mut stepper = Stepper::new(&cfg, how.order, game::Delivery::Canonical)?;
     if how.keep_refusals {
         stepper.keep_refusals();
     }

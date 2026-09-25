@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use protocol::{Appearance, Claim, Hello, Movement};
+use game::BodyOrder;
+use protocol::{Appearance, Claim, Hello, Movement, flags};
 use rayon::prelude::*;
 
 use crate::limits::{ClockPin, Limits, Verdict, Why};
@@ -58,12 +59,21 @@ pub struct Body {
     pub flags_changed_at: u32,
     pub refused: u32,
     pub stale: u32,
+    /// Where on the ground the game holds the body; `None` while it is free.
+    pub rooted_at: Option<[f32; 2]>,
+    pub placed: Option<Placement>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Correction {
     pub tick: u32,
     pub why: Why,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placement {
+    pub tick: u32,
+    pub rooted: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -175,6 +185,11 @@ impl World {
         &self.next
     }
 
+    /// The bodies as last tick left them.
+    pub fn before(&self) -> &[Body] {
+        &self.prev
+    }
+
     pub fn name(&self, id: u32) -> &str {
         &self.names[id as usize]
     }
@@ -261,6 +276,57 @@ impl World {
         };
         acts.sort_by_key(Act::id);
         acts
+    }
+
+    /// The game actions among `inputs` of players still present, by player and then in the order
+    /// each sent them.
+    pub fn actions(&self, inputs: &[Stamped]) -> Vec<(u32, u32)> {
+        let mut actions: Vec<(u32, u32)> = inputs
+            .iter()
+            .filter_map(|s| match s.input {
+                Input::Action(number) => Some((*self.id_of.get(&s.conn)?, number)),
+                _ => None,
+            })
+            .filter(|&(id, _)| self.next[id as usize].present)
+            .collect();
+        actions.sort_by_key(|a| a.0);
+        actions
+    }
+
+    /// Puts and roots bodies as the game orders. Each order is a placement the body's client
+    /// takes before its claims count again.
+    pub fn order(&mut self, orders: &[(u32, BodyOrder)]) {
+        let tick = self.tick;
+        for &(id, order) in orders {
+            let Some(b) = self.next.get_mut(id as usize).filter(|b| b.present) else {
+                continue;
+            };
+            let mut m = b.movement;
+            if let Some(at) = order.place {
+                (m.pos, m.facing) = (at.pos, at.facing);
+            }
+            let rooted = order.root.unwrap_or(b.rooted_at.is_some());
+            let still = if rooted { flags::ROOT } else { 0 };
+            if order.place.is_some() || rooted {
+                m = Movement {
+                    time: m.time,
+                    flags: still,
+                    pos: m.pos,
+                    facing: m.facing,
+                    ..Movement::default()
+                };
+            } else {
+                m.flags &= !flags::ROOT;
+            }
+            if m.flags != b.movement.flags {
+                b.flags_changed_at = tick;
+            }
+            b.rooted_at = rooted.then_some([m.pos[0], m.pos[1]]);
+            b.movement = m;
+            b.moved_at = tick;
+            b.correction_seq = b.correction_seq.wrapping_add(1);
+            b.placed = Some(Placement { tick, rooted });
+        }
     }
 
     pub fn step(&mut self, acts: &[Act], phase: &Phase) -> Stepped {
@@ -365,7 +431,10 @@ impl Judge<'_> {
         done.claims += 1;
         match verdict {
             Verdict::Accept => {
-                let m = claim.movement;
+                let mut m = claim.movement;
+                if body.rooted_at.is_some() {
+                    m.flags |= flags::ROOT;
+                }
                 self.limits.pin_clock(body, m.time, received_ms);
                 if m.flags != body.movement.flags {
                     body.flags_changed_at = tick;
@@ -406,7 +475,7 @@ fn hash_body(id: u32, b: &Body) -> u64 {
     let pin = b.clock.unwrap_or_default();
     let words = [
         id,
-        u32::from(b.present),
+        u32::from(b.present) | u32::from(b.rooted_at.is_some()) << 1,
         m.time,
         m.flags,
         m.pos[0].to_bits(),
@@ -430,7 +499,16 @@ fn hash_body(id: u32, b: &Body) -> u64 {
         b.refused,
         b.stale,
     ];
-    words.iter().fold(0xcbf2_9ce4_8422_2325, |h, &w| {
-        (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3)
-    })
+    let rooted = b.rooted_at.into_iter().flatten().map(f32::to_bits);
+    let placed = b
+        .placed
+        .into_iter()
+        .flat_map(|p| [p.tick, u32::from(p.rooted)]);
+    words
+        .into_iter()
+        .chain(rooted)
+        .chain(placed)
+        .fold(0xcbf2_9ce4_8422_2325, |h, w| {
+            (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3)
+        })
 }

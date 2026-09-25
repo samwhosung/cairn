@@ -1383,6 +1383,7 @@ name = "bots"
 version = "0.0.0"
 dependencies = [
  "dbc",
+ "game",
  "libm",
  "mpq",
  "protocol",
@@ -4110,6 +4111,8 @@ dependencies = [
 name = "server"
 version = "0.0.0"
 dependencies = [
+ "catalog",
+ "game",
  "libm",
  "protocol",
  "rayon",

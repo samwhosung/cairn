@@ -96,7 +96,8 @@ pub fn run(
         tick_ms: spec.tick_ms,
         ..Config::default()
     };
-    let mut stepper = Stepper::new(&cfg, order).map_err(|e| format!("a server: {e}"))?;
+    let mut stepper = Stepper::new(&cfg, order, game::Delivery::Canonical)
+        .map_err(|e| format!("a server: {e}"))?;
     stepper.keep_refusals();
     let mut clients: Vec<Client> = briefs
         .into_iter()

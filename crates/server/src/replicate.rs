@@ -1,8 +1,9 @@
 use std::fmt;
 
+use game::Hosted;
 use protocol::{
-    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_granted,
-    write_move, write_state, write_turn, write_vanish,
+    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_game,
+    write_granted, write_move, write_place, write_state, write_turn, write_vanish,
 };
 
 use crate::grid::Grid;
@@ -187,6 +188,11 @@ impl Observer {
             outbox,
         }
     }
+
+    /// Each entity in view, by the slot its client knows it by.
+    pub fn in_view(&self) -> Vec<(u16, u32)> {
+        self.seen.iter().map(|e| (e.slot, e.id)).collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -245,6 +251,7 @@ pub struct Scene<'a> {
     pub view: &'a View,
     pub relays: &'a Relays,
     pub clients: &'a Shared,
+    pub game: Option<&'a dyn Hosted>,
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -267,19 +274,24 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     let me = bodies[o.id as usize];
     let mut out = Vec::with_capacity(o.size_hint);
     let start = begin_batch(&mut out, tick);
-    if let Some(c) = me.corrected
-        && c.tick == tick
-    {
-        write_correct(&mut out, me.correction_seq, c.why, &me.movement);
-        built.corrections += 1;
-    }
-    if me.teleported_at == Some(tick) {
-        write_granted(&mut out, &me.movement);
+    if let Some(p) = me.placed.filter(|p| p.tick == tick) {
+        write_place(&mut out, me.correction_seq, p.rooted, &me.movement);
+    } else {
+        if let Some(c) = me.corrected
+            && c.tick == tick
+        {
+            write_correct(&mut out, me.correction_seq, c.why, &me.movement);
+            built.corrections += 1;
+        }
+        if me.teleported_at == Some(tick) {
+            write_granted(&mut out, &me.movement);
+        }
     }
     let mut pass = Pass {
         me: me.movement.pos,
         reach: Reach::of(world.limits()),
         relays: scene.relays,
+        game: scene.game,
         view,
         tick,
         shedding: queued > view.shed_bytes || behind > view.shed_ticks,
@@ -315,6 +327,7 @@ struct Pass<'a> {
     me: [f32; 3],
     reach: Reach,
     relays: &'a Relays,
+    game: Option<&'a dyn Hosted>,
     view: &'a View,
     tick: u32,
     shedding: bool,
@@ -349,6 +362,7 @@ impl Pass<'_> {
                 s.kept_at[e.id as usize] = r;
                 let mut e = e;
                 if self.refresh_or_let_go(&mut e) {
+                    self.show(e.id, e.slot, false);
                     s.kept.push(e);
                 }
             } else {
@@ -393,6 +407,17 @@ impl Pass<'_> {
         );
         self.built.shared_bytes += write_appear(self.out, slot, intro, relay) as u64;
         self.built.appeared += 1;
+        self.show(id, slot, true);
+    }
+
+    /// The game's state of entity `id`, on its appearing and on each change after.
+    fn show(&mut self, id: u32, slot: u16, appearing: bool) {
+        let Some((state, changed_at)) = self.game.and_then(|g| g.shown(id)) else {
+            return;
+        };
+        if appearing || changed_at == self.tick {
+            self.built.shared_bytes += write_game(self.out, slot, state) as u64;
+        }
     }
 
     fn vanish(&mut self, slot: u16) {
@@ -406,7 +431,11 @@ impl Pass<'_> {
             self.vanish(e.slot);
             return false;
         }
-        self.refresh_or_let_go(e)
+        let kept = self.refresh_or_let_go(e);
+        if kept {
+            self.show(e.id, e.slot, false);
+        }
+        kept
     }
 
     fn refresh_or_let_go(&mut self, e: &mut Seen) -> bool {

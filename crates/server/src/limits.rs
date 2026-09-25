@@ -97,6 +97,8 @@ impl Limits {
         }
     }
 
+    /// A body the game roots may turn and fall, but its claims may stand no further than the
+    /// slack from where it was rooted.
     pub fn judge(&self, body: &Body, claim: &Claim, received_ms: u32) -> Verdict {
         if claim.ack != body.correction_seq {
             return Verdict::Stale;
@@ -111,6 +113,12 @@ impl Limits {
         let last = &body.movement;
         if self.off_the_clock(body, m, received_ms) {
             return Verdict::Refuse(Why::Clock);
+        }
+        if body
+            .rooted_at
+            .is_some_and(|at| (m.pos[0] - at[0]).hypot(m.pos[1] - at[1]) > self.slack)
+        {
+            return Verdict::Refuse(Why::Speed);
         }
         let launched = m.flags & flags::FALLING != 0 && last.flags & flags::FALLING == 0;
         if launched && m.jump.xy_speed > self.run * (1.0 + self.tolerance) {
@@ -147,6 +155,9 @@ impl Limits {
         }
         if !self.check {
             return Verdict::Accept;
+        }
+        if body.rooted_at.is_some() {
+            return Verdict::Refuse(Why::Speed);
         }
         if !may_teleport {
             return Verdict::Refuse(Why::Teleport);
@@ -356,6 +367,34 @@ mod tests {
             Some(111),
             "a clock 20 % fast banks 11 s, then is refused"
         );
+    }
+
+    #[test]
+    fn a_rooted_body_may_turn_and_fall_but_not_move_over_the_ground_or_teleport() {
+        let limits = Limits::default();
+        let mut body = last_at([0.0, 0.0, 10.0], 1000, flags::ROOT);
+        body.rooted_at = Some([0.0, 0.0]);
+        let turned = Claim {
+            ack: 0,
+            movement: Movement {
+                facing: 2.0,
+                ..claim(1500, flags::ROOT, [0.0, 0.0, 10.0]).movement
+            },
+        };
+        assert_eq!(limits.judge(&body, &turned, 1500), Verdict::Accept);
+        let fell = claim(1500, flags::ROOT | flags::FALLING, [0.3, 0.0, 8.0]);
+        assert_eq!(limits.judge(&body, &fell, 1500), Verdict::Accept);
+        let walked = claim(3000, flags::FORWARD, [3.0, 0.0, 10.0]);
+        assert_eq!(
+            limits.judge(&body, &walked, 3000),
+            Verdict::Refuse(Why::Speed)
+        );
+        assert_eq!(
+            limits.judge_teleport(&body, &claim(1500, 0, [0.0, 0.0, 10.0]), 1500, true),
+            Verdict::Refuse(Why::Speed)
+        );
+        body.rooted_at = None;
+        assert_eq!(limits.judge(&body, &walked, 3000), Verdict::Accept);
     }
 
     #[test]
