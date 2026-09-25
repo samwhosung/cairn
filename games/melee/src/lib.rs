@@ -39,13 +39,8 @@ pub enum Msg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Life {
     Alive,
-    Dead {
-        rises_at: Option<Tick>,
-    },
-    /// Dead as it came back, its body not yet laid down.
-    Returned {
-        rises_at: Option<Tick>,
-    },
+    Dead { rises_at: Option<Tick> },
+    DeadUnlaid { rises_at: Option<Tick> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -72,7 +67,7 @@ impl Game for Melee {
         let (health, life) = if score.dead {
             (
                 0,
-                Life::Returned {
+                Life::DeadUnlaid {
                     rises_at: rises_at(w),
                 },
             )
@@ -112,7 +107,7 @@ impl Kind<Melee> for Fighter {
 
     fn step(id: Id, me: &mut Self, w: &World<'_, Melee>, out: &mut Out<Melee>) {
         match me.life {
-            Life::Returned { rises_at } => {
+            Life::DeadUnlaid { rises_at } => {
                 me.life = Life::Dead { rises_at };
                 lie_down(out);
                 out.count("down", 1);

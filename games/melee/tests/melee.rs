@@ -169,8 +169,10 @@ fn a_fighter_that_comes_back_keeps_its_kills_and_deaths_and_rises_whole() {
     assert_eq!(saved[1], (1, Some(score.to_bytes())));
 }
 
-/// A fighter that saved itself dead joins beside a live one, and the engine runs `ticks` more.
-fn comes_back_dead(overlays: &[&str], ticks: u32) -> (Engine<Melee>, Vec<(u32, u32, BodyOrder)>) {
+fn comes_back_dead(
+    overlays: &[&str],
+    ticks_after: u32,
+) -> (Engine<Melee>, Vec<(u32, u32, BodyOrder)>) {
     let mut e = engine(overlays);
     let dead = Score {
         kills: 2,
@@ -180,7 +182,7 @@ fn comes_back_dead(overlays: &[&str], ticks: u32) -> (Engine<Melee>, Vec<(u32, u
     let (spot, far) = (at(0.0, 0.0, 0.0), at(40.0, 0.0, 0.0));
     let restored = [(1, dead.to_bytes())];
     let mut orders = Vec::new();
-    for tick in 0..=ticks {
+    for tick in 0..=ticks_after {
         let joined = [(0, spot), (1, far)];
         e.tick(&Turn {
             tick,

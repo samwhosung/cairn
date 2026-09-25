@@ -36,7 +36,6 @@ fn join(addr: SocketAddr, name: &str) -> (TcpStream, Welcome) {
     panic!("{name} was never welcomed");
 }
 
-/// Whether the server closes the stream within `wait`, whatever it sends first.
 fn closed_within(stream: &mut TcpStream, wait: Duration) -> bool {
     let (deadline, mut buf) = (Instant::now() + wait, vec![0; 1 << 16]);
     while Instant::now() < deadline {

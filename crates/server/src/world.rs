@@ -63,6 +63,31 @@ pub struct Body {
     pub placed: Option<Placement>,
 }
 
+impl Body {
+    /// Stands the body still where it is, rooted if it was, for a new session to take: its clock
+    /// and its last claim's time are the old client's, and a placement tells the new one the
+    /// sequence its claims answer.
+    fn hand_over(&mut self, tick: u32) -> Movement {
+        let rooted = self.rooted_at.is_some();
+        let still = Movement {
+            flags: if rooted { flags::ROOT } else { 0 },
+            pos: self.movement.pos,
+            facing: self.movement.facing,
+            ..Movement::default()
+        };
+        if still.flags != self.movement.flags {
+            self.flags_changed_at = tick;
+        }
+        self.movement = still;
+        self.moved_at = tick;
+        self.clock = None;
+        self.clock_spent_ms = 0;
+        self.correction_seq = self.correction_seq.wrapping_add(1);
+        self.placed = Some(Placement { tick, rooted });
+        still
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Correction {
     pub tick: u32,
@@ -127,17 +152,10 @@ pub struct Admitted {
     pub spawn: Movement,
 }
 
-/// A join that took over the body of the player of its name, from the connection that had it.
-pub struct TakenOver {
-    pub conn: u32,
-    pub id: u32,
-    pub spawn: Movement,
-}
-
 pub struct Admission {
     pub tick: u32,
     pub admitted: Vec<Admitted>,
-    pub taken_over: Vec<TakenOver>,
+    pub taken_over: Vec<Admitted>,
     pub refused: Vec<u32>,
 }
 
@@ -147,7 +165,7 @@ pub struct World {
     next: Vec<Body>,
     names: Vec<String>,
     looks: Vec<Appearance>,
-    may_teleport: Vec<bool>,
+    hosts: Vec<bool>,
     id_of: HashMap<u32, u32>,
     spawns: Vec<Spawn>,
     limits: Limits,
@@ -170,7 +188,7 @@ impl World {
             next: Vec::new(),
             names: Vec::new(),
             looks: Vec::new(),
-            may_teleport: Vec::new(),
+            hosts: Vec::new(),
             id_of: HashMap::new(),
             spawns,
             limits,
@@ -232,7 +250,7 @@ impl World {
             let spawn = match decide(&hello.name) {
                 Admit::AtSpawn => self.spawns[id as usize % self.spawns.len()],
                 Admit::Back(spawn) => spawn,
-                Admit::TakeOver => {
+                Admit::Here => {
                     match self.take_over(s.conn, &hello.name, host) {
                         Some(taken) => taken_over.push(taken),
                         None => refused.push(s.conn),
@@ -255,7 +273,7 @@ impl World {
             self.next.push(body);
             self.names.push(hello.name.clone());
             self.looks.push(hello.appearance);
-            self.may_teleport.push(host);
+            self.hosts.push(host);
             self.id_of.insert(s.conn, id);
             admitted.push(Admitted {
                 conn: s.conn,
@@ -271,41 +289,22 @@ impl World {
         }
     }
 
-    /// Hands the body of the player named `name` to `conn`, as it stands, still, and forgetting
-    /// the clock and the claims of the connection that had it; a guest never takes the host's.
-    fn take_over(&mut self, conn: u32, name: &str, host: bool) -> Option<TakenOver> {
+    fn take_over(&mut self, conn: u32, name: &str, host: bool) -> Option<Admitted> {
         let id = (0..self.prev.len())
             .rev()
             .find(|&i| self.prev[i].present && self.names[i] == name)?;
-        if self.may_teleport[id] && !host {
+        if self.hosts[id] && !host {
             return None;
         }
         let id32 = id as u32;
         self.id_of.retain(|_, body| *body != id32);
         self.id_of.insert(conn, id32);
-        self.may_teleport[id] = host;
-        let tick = self.tick;
-        let b = &mut self.prev[id];
-        let rooted = b.rooted_at.is_some();
-        let still = Movement {
-            flags: if rooted { flags::ROOT } else { 0 },
-            pos: b.movement.pos,
-            facing: b.movement.facing,
-            ..Movement::default()
-        };
-        if still.flags != b.movement.flags {
-            b.flags_changed_at = tick;
-        }
-        b.movement = still;
-        b.moved_at = tick;
-        b.clock = None;
-        b.clock_spent_ms = 0;
-        b.correction_seq = b.correction_seq.wrapping_add(1);
-        b.placed = Some(Placement { tick, rooted });
-        Some(TakenOver {
+        self.hosts[id] = host;
+        let spawn = self.prev[id].hand_over(self.tick);
+        Some(Admitted {
             conn,
             id: id32,
-            spawn: still,
+            spawn,
         })
     }
 
@@ -325,7 +324,7 @@ impl World {
                         id,
                         received_ms: s.received_ms,
                         claim: *claim,
-                        may_teleport: self.may_teleport[id as usize],
+                        may_teleport: self.hosts[id as usize],
                     }),
                     Input::Leave => Some(Act::Leave { id }),
                 }

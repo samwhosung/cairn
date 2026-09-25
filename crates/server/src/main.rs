@@ -28,8 +28,7 @@ usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unche
          known by its name: one that comes back gets what it saved and stands where it
          last stood, saved about once a minute and as it leaves, and a join under the
          name of a player in the world takes over its body and closes the connection
-         that had it, though a guest never takes the host's. --unsaved keeps the world in
-         memory.
+         that had it. --unsaved keeps the world in memory.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
          and world hash to FILE. --game runs a game's rules (melee) on its own knobs, or on
          the --knobs FILE, with an --overlay FILE laid on them; --seed seeds its rolls.

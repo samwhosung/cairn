@@ -138,8 +138,7 @@ impl Run {
         (conn, self.told[conn as usize].welcome)
     }
 
-    /// The game's health and death of the body `conn` was welcomed to.
-    fn shown(&self, conn: u32) -> Option<(u32, bool)> {
+    fn health_and_death(&self, conn: u32) -> Option<(u32, bool)> {
         let id = self.told[conn as usize].welcome?.id;
         game::Bytes::from_bytes(self.stepper.game()?.shown(id)?)
     }
@@ -281,7 +280,7 @@ fn a_join_under_the_name_of_a_player_in_the_world_takes_over_its_body_and_row() 
     );
     assert!(run.links[a as usize].closed(), "the old session is let go");
     assert_eq!(
-        run.shown(again),
+        run.health_and_death(again),
         Some((40, false)),
         "the same row: hit once"
     );
@@ -327,14 +326,14 @@ fn under_permadeath_a_fighter_killed_stays_dead_when_it_comes_back_and_after_a_r
     let (a, _) = run.join("Ada");
     let (b, _) = run.join("Bo");
     run.swing(a, 4);
-    assert_eq!(run.shown(b), Some((0, true)));
+    assert_eq!(run.health_and_death(b), Some((0, true)));
     run.leave(b);
     let (back, _) = run.join("Bo");
     let dead_again = |run: &mut Run, conn: u32| {
         let stood = run.body(conn).map(|s| s.pos);
         run.walk(conn, 2.0);
         let rooted = run.body(conn).map(|s| s.pos) == stood;
-        (run.shown(conn), run.pose(conn), rooted)
+        (run.health_and_death(conn), run.pose(conn), rooted)
     };
     let dead = (Some((0, true)), Some(game::anim::DEAD.0), true);
     assert_eq!(dead_again(&mut run, back), dead, "back in the same run");
@@ -350,7 +349,7 @@ fn under_permadeath_a_fighter_killed_stays_dead_when_it_comes_back_and_after_a_r
     let mut run = Run::new(&cfg);
     let (back, _) = run.join("Bo");
     assert_eq!(
-        (run.shown(back), run.pose(back)),
+        (run.health_and_death(back), run.pose(back)),
         (Some((100, false)), None),
         "the control: saved alive, it comes back alive"
     );
@@ -362,16 +361,16 @@ fn a_fighter_that_left_dead_comes_back_dead_and_rises_on_its_timer_from_then() {
     let (a, _) = run.join("Ada");
     let (b, _) = run.join("Bo");
     run.swing(a, 2);
-    assert_eq!(run.shown(b), Some((0, true)));
+    assert_eq!(run.health_and_death(b), Some((0, true)));
     run.leave(b);
     run.idle(10);
     let (back, _) = run.join("Bo");
     run.idle(19);
     assert_eq!(
-        run.shown(back),
+        run.health_and_death(back),
         Some((0, true)),
         "a second, the respawn, after it came back"
     );
     run.idle(1);
-    assert_eq!(run.shown(back), Some((100, false)));
+    assert_eq!(run.health_and_death(back), Some((100, false)));
 }
