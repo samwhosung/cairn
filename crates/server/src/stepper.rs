@@ -22,8 +22,8 @@ pub struct Stepper {
     batches: bool,
 }
 
-/// An entity in an observer's view: the slot its client knows it by, the game's state of it and
-/// the pose the game has its body hold.
+/// An entity in an observer's view: the slot its client knows it by, the game's state of it, and
+/// what the game has its body hold and idle in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InView<'a> {
     pub slot: u16,
