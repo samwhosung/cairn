@@ -251,6 +251,8 @@ pub struct Scene<'a> {
     pub relays: &'a Relays,
     pub clients: &'a Shared,
     pub game: Option<&'a dyn Hosted>,
+    /// By entity, whether the game's state of it changed this tick.
+    pub changed: &'a [bool],
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -291,6 +293,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         reach: Reach::of(world.limits()),
         relays: scene.relays,
         game: scene.game,
+        changed: scene.changed,
         view,
         tick,
         shedding: queued > view.shed_bytes || behind > view.shed_ticks,
@@ -327,6 +330,7 @@ struct Pass<'a> {
     reach: Reach,
     relays: &'a Relays,
     game: Option<&'a dyn Hosted>,
+    changed: &'a [bool],
     view: &'a View,
     tick: u32,
     shedding: bool,
@@ -410,10 +414,10 @@ impl Pass<'_> {
     }
 
     fn write_game_state(&mut self, id: u32, slot: u16, appearing: bool) {
-        let Some((state, changed_at)) = self.game.and_then(|g| g.shown(id)) else {
+        if !appearing && !self.changed.get(id as usize).copied().unwrap_or(false) {
             return;
-        };
-        if appearing || changed_at == self.tick {
+        }
+        if let Some(state) = self.game.and_then(|g| g.shown(id)) {
             self.built.shared_bytes += write_game(self.out, slot, state) as u64;
         }
     }

@@ -60,8 +60,8 @@ pub trait Hosted: Send + Sync {
 
     fn record(&self) -> &Record;
 
-    /// A player's sent fields, encoded, and the tick they last changed.
-    fn shown(&self, n: u32) -> Option<(&[u8], Tick)>;
+    /// A player's sent fields, encoded.
+    fn shown(&self, n: u32) -> Option<&[u8]>;
 
     fn hash(&self) -> u64;
 

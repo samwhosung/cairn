@@ -60,7 +60,7 @@ pub struct Engine<G: Game> {
     space: Space,
     carry: Vec<(Id, Letter<G::Msg>)>,
     record: Record,
-    shown: Vec<(Vec<u8>, Tick)>,
+    shown: Vec<Vec<u8>>,
     orders: Vec<(u32, BodyOrder)>,
     counts: BTreeMap<&'static str, i64>,
     took: Stages,
@@ -194,9 +194,9 @@ impl<G: Game> Engine<G> {
                 }
                 let n = id.n as usize;
                 if self.shown.len() <= n {
-                    self.shown.resize(n + 1, (Vec::new(), 0));
+                    self.shown.resize(n + 1, Vec::new());
                 }
-                self.shown[n] = (bytes.clone(), self.tick);
+                self.shown[n].clone_from(bytes);
             }
         });
     }
@@ -324,10 +324,8 @@ impl<G: Game> Hosted for Engine<G> {
         &self.record
     }
 
-    fn shown(&self, n: u32) -> Option<(&[u8], Tick)> {
-        self.shown
-            .get(n as usize)
-            .map(|(bytes, at)| (bytes.as_slice(), *at))
+    fn shown(&self, n: u32) -> Option<&[u8]> {
+        self.shown.get(n as usize).map(Vec::as_slice)
     }
 
     fn hash(&self) -> u64 {

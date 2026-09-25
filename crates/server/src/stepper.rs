@@ -113,7 +113,7 @@ impl Stepper {
             .in_view(id)?
             .into_iter()
             .map(|(slot, id)| {
-                let state = game.and_then(|g| g.shown(id)).map_or(&[][..], |s| s.0);
+                let state = game.and_then(|g| g.shown(id)).unwrap_or_default();
                 InView { slot, id, state }
             })
             .collect();

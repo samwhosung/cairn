@@ -214,7 +214,7 @@ fn a_game_roots_and_places_a_body_and_its_observers_are_shown_its_state() {
     assert_eq!(seen[6].1, [], "it walks on from its spawn");
     let game = stepper.game().expect("a game");
     assert_eq!(
-        game.shown(1).map(|s| s.0.to_vec()),
+        game.shown(1).map(<[u8]>::to_vec),
         Some(2u32.to_le_bytes().to_vec())
     );
     assert!(hashes.windows(2).all(|w| w[0] != w[1]));

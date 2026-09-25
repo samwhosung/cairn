@@ -45,6 +45,7 @@ pub struct Sim {
     game: Option<Box<dyn Hosted>>,
     saves: Saves,
     bodies: Vec<Option<Spot>>,
+    changed: Vec<bool>,
 }
 
 impl Sim {
@@ -62,6 +63,7 @@ impl Sim {
             game: None,
             saves: Saves::default(),
             bodies: Vec::new(),
+            changed: Vec::new(),
         }
     }
 
@@ -127,6 +129,7 @@ impl Sim {
             game,
             saves,
             bodies,
+            changed,
         } = self;
         let mut st = TickStats {
             tick: world.tick(),
@@ -189,6 +192,13 @@ impl Sim {
             phases[RECORD].time(|| {
                 world.order(game.orders());
                 saves.take(game.record());
+                changed.clear();
+                changed.resize(world.stepped().len(), false);
+                for (id, _) in &game.record().shown {
+                    if let Some(c) = changed.get_mut(id.n as usize).filter(|_| id.is_player()) {
+                        *c = true;
+                    }
+                }
             });
             let Stages {
                 rules,
@@ -220,6 +230,7 @@ impl Sim {
                 relays,
                 clients,
                 game: game.as_deref(),
+                changed,
             };
             let phase = &phases[REPLICATE];
             observers
