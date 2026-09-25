@@ -1,0 +1,70 @@
+# Lies about the client's clock on a straight run: a clock and a body a quarter fast; a clock at
+# half speed; a clock set five seconds back; a clock that stands still for ten seconds while the
+# client claims every frame, then jumps. And time banked by standing: a client that stood silent
+# for thirty seconds, then claims a start two hundred yards away.
+place = flat
+seconds = 90
+bots.walkers.count = 20
+
+bots.clock-fast.count = 1
+bots.clock-fast.script = line
+bots.clock-fast.lie.from_s = 5
+bots.clock-fast.lie.clock_rate = 1.25
+bots.clock-fast.lie.factor = 1.25
+
+bots.clock-slow.count = 1
+bots.clock-slow.script = line
+bots.clock-slow.lie.from_s = 5
+bots.clock-slow.lie.clock_rate = 0.5
+
+bots.clock-back.count = 1
+bots.clock-back.script = line
+bots.clock-back.lie.from_s = 10
+bots.clock-back.lie.clock_back_ms = 5000
+
+bots.clock-stall.count = 1
+bots.clock-stall.script = line
+bots.clock-stall.claims = every-frame
+bots.clock-stall.lie.from_s = 10
+bots.clock-stall.lie.to_s = 20
+bots.clock-stall.lie.clock_stall = yes
+
+bots.banked.count = 1
+bots.banked.script = stand
+bots.banked.lie.from_s = 30
+bots.banked.lie.shift = 200 0 0
+bots.banked.lie.set = forward
+
+expect walkers.corrections == 0
+
+# Taken for the eleven seconds of lead the check allows, a second of slack and ten of budget,
+# which a clock a quarter fast spends in 44 seconds; then refused.
+expect clock-fast.through_after_s < 1
+expect clock-fast.caught_after_s > 40
+expect clock-fast.caught_after_s < 50
+expect clock-fast.past_honest_yd > 70
+expect clock-fast.control_corrections == 0
+
+# Refused at its first heartbeat: the ground covered is too much for the time it claims.
+expect clock-slow.caught_after_s <= 1.1
+expect clock-slow.past_honest_yd < 1
+expect clock-slow.control_corrections == 0
+
+# Refused while its clock reads before its last claim taken, then for speed until the tolerance
+# has made up the five seconds; it gains nothing.
+expect clock-back.caught_after_s <= 0.1
+expect clock-back.past_honest_yd < 1
+expect clock-back.control_corrections == 0
+
+# A known hole: claims every frame with a clock that stands still each cover less than the slack,
+# so a stalled clock goes unseen. It gains nothing here. When it closes, lies_refused > 0.
+expect clock-stall.lies_refused == 0
+expect clock-stall.past_honest_yd < 1
+expect clock-stall.control_corrections == 0
+
+# A known hole: a claim may cover the ground of the faster of its flags and the last taken
+# claim's, for all the time since that claim, so standing silent banks a teleport. When it
+# closes, banked is refused.
+expect banked.lies_refused == 0
+expect banked.past_honest_yd > 199
+expect banked.control_corrections == 0

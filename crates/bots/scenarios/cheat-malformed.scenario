@@ -1,0 +1,24 @@
+# Malformed claims on a straight run: a position that is not a number; one past the map's bound.
+place = flat
+seconds = 20
+bots.walkers.count = 20
+
+bots.nan.count = 1
+bots.nan.script = line
+bots.nan.lie.from_s = 5
+bots.nan.lie.malformed = nan
+
+bots.out-of-bounds.count = 1
+bots.out-of-bounds.script = line
+bots.out-of-bounds.lie.from_s = 5
+bots.out-of-bounds.lie.malformed = bound
+
+expect walkers.corrections == 0
+
+# Refused at once, every one.
+expect nan.caught_after_s <= 0.1
+expect nan.lies_accepted == 0
+expect nan.control_corrections == 0
+expect out-of-bounds.caught_after_s <= 0.1
+expect out-of-bounds.lies_accepted == 0
+expect out-of-bounds.control_corrections == 0

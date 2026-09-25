@@ -1,0 +1,40 @@
+# Lies about height on a straight run over level ground: climbing five yards a second with no
+# jump; ten yards under the ground; a hundred yards under it.
+place = flat
+seconds = 30
+bots.walkers.count = 20
+
+bots.rise.count = 1
+bots.rise.script = line
+bots.rise.lie.from_s = 5
+bots.rise.lie.rise = 5
+
+bots.under-10.count = 1
+bots.under-10.script = line
+bots.under-10.lie.from_s = 5
+bots.under-10.lie.shift = 0 0 -10
+
+bots.under-100.count = 1
+bots.under-100.script = line
+bots.under-100.lie.from_s = 5
+bots.under-100.lie.shift = 0 0 -100
+
+expect walkers.corrections == 0
+
+# A known hole: a claim may climb 1.2 yards for every yard of ground and 2.7 more, with or
+# without a jump, and the server holds no ground to fall to. When it closes, rise is refused.
+expect rise.lies_refused == 0
+expect rise.past_honest_yd > 100
+expect rise.control_corrections == 0
+
+# A known hole: nothing holds a claim above the ground. When it closes, both are refused.
+expect under-10.lies_refused == 0
+expect under-10.past_honest_yd > 9.9
+expect under-10.control_corrections == 0
+
+# A drop of a hundred yards is too fast for one claim, but the fall allowed grows with the time
+# since the last claim taken, so it is taken a second later.
+expect under-100.caught_after_s <= 0.1
+expect under-100.through_after_s < 2
+expect under-100.past_honest_yd > 99
+expect under-100.control_corrections == 0

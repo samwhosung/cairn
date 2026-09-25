@@ -13,7 +13,9 @@ loot, quests and every other rule belong to the games built on it.
 world as the client walks, swims and collides, lit by the hour under its sky and heard as the
 client hears it; `-- --help` shows the controls, the looks, the maps, the cameras and the
 headless shot. `--host` serves the world from the window for others to `--connect` to, and the
-`server` and `bots` crates serve it alone and walk a crowd against it.
+`server` and `bots` crates serve it alone and walk a crowd against it; `cargo run -p bots --
+scenario FILE` runs one of `crates/bots/scenarios` headless on the server's clock and prints its
+verdict.
 
 ## Working on it
 

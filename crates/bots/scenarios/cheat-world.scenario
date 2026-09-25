@@ -1,0 +1,46 @@
+# Lies about the world, which the server does not hold: no ground, no water and no walls. A walk
+# on through the Goldshire inn's north wall, where an honest body stops; a run across Crystal
+# Lake on its surface, where an honest body swims; a walk down the bank to the lake that keeps
+# the height of the bank's top while the ground falls away beneath it.
+place = goldshire
+seconds = 30
+bots.walkers.count = 20
+
+bots.wall.count = 1
+bots.wall.script = line
+bots.wall.spawn = -9446.6 23
+bots.wall.facing = 180
+bots.wall.stop = 4.6
+bots.wall.lie.to_s = 6
+bots.wall.lie.through = yes
+bots.wall.lie.set = forward
+
+bots.water.count = 1
+bots.water.script = line
+bots.water.spawn = -9430 -316
+bots.water.facing = 180
+bots.water.gait = swim
+bots.water.surface = yes
+bots.water.lie.to_s = 12
+bots.water.lie.clear = swim
+bots.water.lie.factor = 1.4824
+
+bots.hover.count = 1
+bots.hover.script = line
+bots.hover.spawn = -9230.08 -349.29
+bots.hover.facing = 131.9
+bots.hover.stop = 120
+bots.hover.lie.hover = yes
+
+expect walkers.corrections == 0
+
+# Known holes: the server holds no walls, water or ground. When one closes, its liar is refused.
+expect wall.lies_refused == 0
+expect wall.past_honest_yd > 30
+expect wall.control_corrections == 0
+expect water.lies_refused == 0
+expect water.past_honest_yd > 20
+expect water.control_corrections == 0
+expect hover.lies_refused == 0
+expect hover.past_honest_yd > 40
+expect hover.control_corrections == 0

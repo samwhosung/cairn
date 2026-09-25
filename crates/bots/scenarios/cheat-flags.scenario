@@ -1,0 +1,60 @@
+# Lies in the movement flags on a straight run over level ground: swimming on dry land at the
+# swim speed; jumps launched at three times their speed; falling, to be held to a run, while
+# walking at a run; walking's flags on a run; standing's flags on a run.
+place = flat
+seconds = 30
+bots.walkers.count = 20
+
+bots.swim-on-land.count = 1
+bots.swim-on-land.script = line
+bots.swim-on-land.speed = 4.722
+bots.swim-on-land.lie.set = swim
+
+bots.launch.count = 1
+bots.launch.script = line
+bots.launch.jump_every_s = 3
+bots.launch.lie.launch = 3
+
+bots.fall-walk.count = 1
+bots.fall-walk.script = line
+bots.fall-walk.gait = walk
+bots.fall-walk.lie.set = fall
+bots.fall-walk.lie.factor = 2.8
+
+bots.walk-flags.count = 1
+bots.walk-flags.script = line
+bots.walk-flags.lie.set = walk
+
+bots.stand-flags.count = 1
+bots.stand-flags.script = line
+bots.stand-flags.lie.clear = moving
+
+expect walkers.corrections == 0
+
+# A known hole, harmless today: nothing asks whether there is water, and a swim is slower than a
+# run. When it closes, swim-on-land is refused.
+expect swim-on-land.lies_refused == 0
+expect swim-on-land.past_honest_yd < 1
+expect swim-on-land.control_corrections == 0
+
+# Refused at each launch.
+expect launch.caught_after_s <= 0.1
+expect launch.lies_accepted == 0
+expect launch.control_corrections == 0
+
+# A known hole: a falling body is held to a run whatever else its flags say. When it closes,
+# fall-walk is refused.
+expect fall-walk.lies_refused == 0
+expect fall-walk.past_honest_yd > 100
+expect fall-walk.control_corrections == 0
+
+# Refused at its first heartbeat: a walk's speed does not cover a run.
+expect walk-flags.caught_after_s <= 0.6
+expect walk-flags.past_honest_yd < 1
+expect walk-flags.control_corrections == 0
+
+# A known hole: a body that claims to stand still claims wherever it drifts, every frame, each
+# claim within the slack. It gains no ground here. When it closes, stand-flags is refused.
+expect stand-flags.lies_refused == 0
+expect stand-flags.past_honest_yd < 1
+expect stand-flags.control_corrections == 0

@@ -1,0 +1,42 @@
+# Teleports of 300 yards to one side of a straight run: once and back; once and staying there;
+# and on the first claim after joining, from a client whose clock read a minute at the start.
+place = flat
+seconds = 120
+bots.walkers.count = 20
+
+bots.teleport-once.count = 1
+bots.teleport-once.script = line
+bots.teleport-once.lie.from_s = 10
+bots.teleport-once.lie.shift = 0 300 0
+bots.teleport-once.lie.once = yes
+
+bots.teleport-stay.count = 1
+bots.teleport-stay.script = line
+bots.teleport-stay.lie.from_s = 10
+bots.teleport-stay.lie.shift = 0 300 0
+
+bots.teleport-at-join.count = 1
+bots.teleport-at-join.script = line
+bots.teleport-at-join.clock_ms = 60000
+bots.teleport-at-join.lie.shift = 0 300 0
+
+expect walkers.corrections == 0
+
+# Refused at once; its next claim, back where its body is, is taken.
+expect teleport-once.caught_after_s <= 0.1
+expect teleport-once.lies_accepted == 0
+expect teleport-once.control_corrections == 0
+
+# A known hole: every refusal leaves the body where it last stood, and the ground a claim may
+# cover grows with the time since then, so the claim that stays three hundred yards away is taken
+# once enough time has passed. When it closes, lies_accepted is 0 and through_after_s none.
+expect teleport-stay.caught_after_s <= 0.1
+expect teleport-stay.through_after_s > 60
+expect teleport-stay.past_honest_yd > 299
+expect teleport-stay.control_corrections == 0
+
+# A known hole: a body the server places has its clock at zero, so the first claim may cover all
+# the ground its client's clock allows. When it closes, the first claim is refused.
+expect teleport-at-join.lies_refused == 0
+expect teleport-at-join.past_honest_yd > 299
+expect teleport-at-join.control_corrections == 0
