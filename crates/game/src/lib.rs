@@ -28,7 +28,7 @@ pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Stages, Took, Turn, load};
 pub use knobs::{Knob, Knobs, KnobsFile, Line};
 pub use out::Out;
 pub use record::Record;
-pub use show::{Anim, Shows, anim};
+pub use show::{Anim, Outcome, Shows, anim};
 pub use space::Spot;
 pub use table::Table;
 pub use world::World;

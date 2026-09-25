@@ -1,6 +1,6 @@
 use std::fmt;
 
-use game::{Hosted, Id, Shows};
+use game::{Hosted, Id, Outcome, Shows};
 use protocol::{
     SLOTS, Show, Whose, Wrapped, begin_batch, finish_frame, write_appear, write_correct,
     write_game, write_granted, write_move, write_place, write_show, write_state, write_turn,
@@ -14,6 +14,20 @@ use crate::relays::{Hot, Relays};
 use crate::world::World;
 
 const HELD_CLAIM_AGE_S: f32 = 2.0;
+
+pub(crate) fn on_the_wire(outcome: Outcome) -> protocol::Outcome {
+    match outcome {
+        Outcome::Hit => protocol::Outcome::Hit,
+        Outcome::Crit => protocol::Outcome::Crit,
+        Outcome::Crushing => protocol::Outcome::Crushing,
+        Outcome::Miss => protocol::Outcome::Miss,
+        Outcome::Dodge => protocol::Outcome::Dodge,
+        Outcome::Parry => protocol::Outcome::Parry,
+        Outcome::Block => protocol::Outcome::Block,
+        Outcome::Absorb => protocol::Outcome::Absorb,
+        Outcome::Immune => protocol::Outcome::Immune,
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Reach {
@@ -454,6 +468,13 @@ impl Pass<'_> {
         for &(n, anim) in &shows.played {
             if let Some(whose) = whose(n) {
                 write_show(self.out, whose, Show::Play(anim.0));
+            }
+        }
+        for &(n, target, outcome) in &shows.attacked {
+            if let Some(attacker) = whose(n) {
+                let target = target.and_then(whose);
+                let outcome = on_the_wire(outcome);
+                write_show(self.out, attacker, Show::Attack { target, outcome });
             }
         }
         let told_as_it_appeared = |n: u32| came.binary_search(&n).is_ok();

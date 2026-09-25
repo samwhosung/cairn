@@ -204,6 +204,7 @@ fn played(g: &Played) -> Json {
         ("plays_told", Json::Count(g.plays_told)),
         ("poses_told", Json::Count(g.poses_told)),
         ("idles_told", Json::Count(g.idles_told)),
+        ("attacks_told", Json::Count(g.attacks_told)),
         ("plays_out_of_view", Json::Count(g.plays_out_of_view)),
     ])
 }

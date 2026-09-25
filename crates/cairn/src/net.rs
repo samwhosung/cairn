@@ -14,12 +14,12 @@ use bevy::math::ops;
 use bevy::prelude::*;
 use bevy::time::Real;
 use protocol::{
-    Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome, Whose,
+    Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, Show, VERSION, Welcome, Whose,
 };
 use server::Spawn;
 use world::CurrentMap;
 use world::coords::{bevy_to_wow, wow_to_bevy};
-use world::unit::{CharacterLook, UnitShow, UnitSystems};
+use world::unit::{CharacterLook, UnitAttack, UnitShow, UnitSystems};
 
 use crate::args::{Join, Joining};
 use crate::player::{CameraRig, Player, PlayerBody};
@@ -266,7 +266,7 @@ fn receive(
     map: Res<'_, CurrentMap>,
     mut player: ResMut<'_, Player>,
     mut rigs: Query<'_, '_, &mut CameraRig>,
-    mut own: Query<'_, '_, &mut UnitShow, With<PlayerBody>>,
+    mut own: Query<'_, '_, (Entity, &mut UnitShow), With<PlayerBody>>,
 ) {
     let alone =
         |commands: &mut Commands<'_, '_>, net: &mut Net, player: &mut Player, why: String| {
@@ -322,7 +322,9 @@ fn receive(
                     claims.as_mut(),
                     others,
                     &mut player,
-                    own.single_mut().ok().as_deref_mut(),
+                    own.single_mut()
+                        .ok()
+                        .map(|(body, show)| (body, show.into_inner())),
                     &mut commands,
                 );
                 if let Err(e) = taken {
@@ -351,18 +353,35 @@ fn take_batch(
     mut claims: Option<&mut Claims>,
     others: &mut Others,
     player: &mut Player,
-    mut own: Option<&mut UnitShow>,
+    mut own: Option<(Entity, &mut UnitShow)>,
     commands: &mut Commands<'_, '_>,
 ) -> Result<(), protocol::Error> {
+    let own_body = own.as_ref().map(|&(body, _)| body);
     for record in batch {
         match record? {
             #[cfg(test)]
             Record::Show { .. } if others.faults.no_show => {}
             Record::Show {
+                whose,
+                show: Show::Attack { target, outcome },
+            } => {
+                let body = |whose| match whose {
+                    Whose::Own => own_body,
+                    Whose::Slot(slot) => others.body_in(slot),
+                };
+                if let Some(attacker) = body(whose) {
+                    commands.write_message(UnitAttack {
+                        attacker,
+                        target: target.and_then(body),
+                        outcome: others::outcome_of(outcome),
+                    });
+                }
+            }
+            Record::Show {
                 whose: Whose::Own,
                 show,
             } => {
-                if let Some(own) = own.as_deref_mut() {
+                if let Some((_, own)) = own.as_mut() {
                     others::apply_show(own, show);
                 }
             }
@@ -431,10 +450,12 @@ fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::message::MessageCursor;
     use protocol::{
-        Intro, LEN_BYTES, Movement, Relay, Why, begin_batch, finish_frame, write_appear,
-        write_correct, write_granted, write_move, write_place, write_vanish,
+        Intro, LEN_BYTES, Movement, Outcome, Relay, Why, begin_batch, finish_frame, write_appear,
+        write_correct, write_granted, write_move, write_place, write_show, write_vanish,
     };
+    use world::unit::Outcome as Shown;
 
     use super::*;
 
@@ -453,12 +474,13 @@ mod tests {
         claims: Claims,
         others: Others,
         player: Player,
+        own: Option<(Entity, UnitShow)>,
     }
 
     impl Reader {
         fn new() -> Self {
             let mut app = App::new();
-            app.init_resource::<Time>();
+            app.init_resource::<Time>().add_message::<UnitAttack>();
             let mut player = Player::default();
             player.put(wow_to_bevy(STOOD), 0.0);
             Self {
@@ -466,6 +488,7 @@ mod tests {
                 claims: Claims::new(&at(0.0)),
                 others: Others::default(),
                 player,
+                own: None,
             }
         }
 
@@ -492,7 +515,7 @@ mod tests {
                 Some(&mut self.claims),
                 &mut self.others,
                 &mut self.player,
-                None,
+                self.own.as_mut().map(|(body, show)| (*body, show)),
                 &mut world.commands(),
             )
             .expect("a whole batch");
@@ -650,5 +673,37 @@ mod tests {
         let at = |ms: u64| real_ms_at(&real, start + Duration::from_millis(ms));
         assert!((at(2500) - 2500.0).abs() < 1e-6, "{}", at(2500));
         assert!((at(3100) - 3100.0).abs() < 1e-6, "{}", at(3100));
+    }
+
+    #[test]
+    fn an_attack_is_read_as_the_bodies_it_names_and_one_by_a_stranger_not_at_all() {
+        let mut r = Reader::new();
+        let own = r.app.world_mut().spawn_empty().id();
+        r.own = Some((own, UnitShow::default()));
+        r.appear(20, NEIGHBOUR, 7, 10.0);
+        let attack = |target, outcome| Show::Attack { target, outcome };
+        r.take(21, |out| {
+            let (neighbour, stranger) = (Whose::Slot(NEIGHBOUR), Whose::Slot(NEIGHBOUR + 1));
+            write_show(out, neighbour, attack(Some(Whose::Own), Outcome::Crit));
+            write_show(out, Whose::Own, attack(Some(neighbour), Outcome::Miss));
+            write_show(out, neighbour, attack(Some(stranger), Outcome::Parry));
+            write_show(out, stranger, attack(Some(Whose::Own), Outcome::Hit));
+        });
+        let neighbour = r.others.body_in(NEIGHBOUR).expect("the neighbour's body");
+        let messages = r.app.world().resource::<Messages<UnitAttack>>();
+        let read: Vec<UnitAttack> = MessageCursor::default().read(messages).copied().collect();
+        let attack = |attacker, target, outcome| UnitAttack {
+            attacker,
+            target,
+            outcome,
+        };
+        assert_eq!(
+            read,
+            [
+                attack(neighbour, Some(own), Shown::Crit),
+                attack(own, Some(neighbour), Shown::Miss),
+                attack(neighbour, None, Shown::Parry)
+            ]
+        );
     }
 }

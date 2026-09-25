@@ -11,6 +11,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::log::LogWriter;
 use crate::net::{InProcess, Outbox, Reader, ServerEnd, Shared, Standing};
+use crate::replicate::on_the_wire;
 use crate::save::{Keeping, Player, Roster, scan};
 use crate::serve::{Config, log};
 use crate::sim::{Batches, Sim};
@@ -186,6 +187,35 @@ impl Stepper {
     /// The animations this tick played on the bodies in observer `id`'s view and on its own, by
     /// body and then in the order its rules played them.
     pub fn played_to(&self, id: u32) -> Vec<(Whose, u16)> {
+        self.told_to(id, |shows, whose| {
+            shows
+                .played
+                .iter()
+                .filter_map(|&(n, anim)| Some((whose(n)?, anim.0)))
+                .collect()
+        })
+    }
+
+    /// The attacks this tick made by the bodies in observer `id`'s view and by its own, by attacker
+    /// and then in the order its rules made them, each with the one attacked as the observer sees
+    /// it.
+    pub fn attacks_to(&self, id: u32) -> Vec<(Whose, Option<Whose>, protocol::Outcome)> {
+        self.told_to(id, |shows, whose| {
+            shows
+                .attacked
+                .iter()
+                .filter_map(|&(n, target, outcome)| {
+                    Some((whose(n)?, target.and_then(whose), on_the_wire(outcome)))
+                })
+                .collect()
+        })
+    }
+
+    fn told_to<T>(
+        &self,
+        id: u32,
+        told: impl FnOnce(&game::Shows, &dyn Fn(u32) -> Option<Whose>) -> Vec<T>,
+    ) -> Vec<T> {
         let (Some(game), Some(view)) = (self.sim.game(), self.sim.in_view(id)) else {
             return Vec::new();
         };
@@ -196,11 +226,7 @@ impl Stepper {
             let at = view.binary_search_by_key(&n, |&(_, v)| v).ok()?;
             Some(Whose::Slot(view[at].0))
         };
-        game.shows()
-            .played
-            .iter()
-            .filter_map(|&(n, anim)| Some((whose(n)?, anim.0)))
-            .collect()
+        told(game.shows(), &whose)
     }
 
     /// Every player's saved state as the world has it: a full scan of the game's rows, and where

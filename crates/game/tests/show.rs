@@ -1,5 +1,6 @@
 use game::{
-    Anim, Delivery, Engine, Game, Hosted, Id, Kind, Kinds, Letter, Out, Shows, Spot, Turn, World,
+    Anim, Delivery, Engine, Game, Hosted, Id, Kind, Kinds, Letter, Out, Outcome, Shows, Spot, Turn,
+    World,
 };
 
 const SWING: u32 = 1;
@@ -9,6 +10,9 @@ const HAUNT: u32 = 4;
 const SIT_AND_WAVE: u32 = 5;
 const MAKE_READY: u32 = 6;
 const CALM_DOWN: u32 = 7;
+const STRIKE: u32 = 8;
+const WHIFF: u32 = 9;
+const STRIKE_A_GHOST: u32 = 10;
 
 const ATTACK: Anim = Anim(16);
 const WOUND: Anim = Anim(9);
@@ -72,6 +76,15 @@ impl Kind<Mime> for Player {
                 }
                 MAKE_READY => out.idle(Some(READY)),
                 CALM_DOWN => out.idle(None),
+                STRIKE => {
+                    out.play(ATTACK);
+                    out.attack(Some(Id::player(1)), Outcome::Hit);
+                }
+                WHIFF => {
+                    out.play(ATTACK);
+                    out.attack(None, Outcome::Miss);
+                }
+                STRIKE_A_GHOST => out.attack(Some(Id { kind: 1, n: 0 }), Outcome::Crit),
                 _ => {}
             }
         }
@@ -191,4 +204,28 @@ fn a_body_idles_until_it_stops_told_as_it_changes_and_apart_from_its_pose() {
         before,
         "stopped and let go, the world is as it was"
     );
+}
+
+#[test]
+fn an_attack_is_told_by_attacker_beside_its_swing_and_leaves_nothing_in_the_world() {
+    let mut e = engine();
+    tick(&mut e, 0, &[]);
+    let before = e.hash();
+    let shows = tick(&mut e, 1, &[(2, WHIFF), (0, STRIKE), (0, STRIKE_A_GHOST)]);
+    assert_eq!(
+        shows.attacked,
+        [
+            (0, Some(1), Outcome::Hit),
+            (0, None, Outcome::Crit),
+            (2, None, Outcome::Miss)
+        ],
+        "a row that is not a player's has no body to be attacked"
+    );
+    assert_eq!(shows.played, [(0, ATTACK), (2, ATTACK)]);
+    assert_eq!(
+        e.hash(),
+        before,
+        "an attack, like a play, is no part of the world"
+    );
+    assert_eq!(tick(&mut e, 2, &[]), Shows::default());
 }

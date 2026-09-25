@@ -25,6 +25,10 @@ const HOLD: u8 = 1;
 const LET_GO: u8 = 2;
 const IDLE: u8 = 3;
 const STOP_IDLING: u8 = 4;
+const ATTACK: u8 = 5;
+
+const TARGET_OWN: u16 = SLOTS;
+const NO_TARGET: u16 = SLOTS + 1;
 
 /// How many slots a client's view has: one for each entity in it.
 pub const SLOTS: u16 = 1 << KIND_SHIFT;
@@ -97,11 +101,27 @@ pub enum Show {
     /// The body idles in this animation where it would stand, until it is told another, or stops
     /// with `None`.
     Idle(Option<u16>),
+    /// The body attacked `target`, if this client sees the one it attacked, and it came out so.
+    Attack {
+        target: Option<Whose>,
+        outcome: Outcome,
+    },
 }
 
 impl Show {
     fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
-        let (how, anim) = (r.u8()?, r.u16()?);
+        let how = r.u8()?;
+        if how == ATTACK {
+            let target = match r.u16()? {
+                TARGET_OWN => Some(Whose::Own),
+                NO_TARGET => None,
+                slot if slot < SLOTS => Some(Whose::Slot(slot)),
+                other => return Err(Error::UnknownTarget(other)),
+            };
+            let outcome = Outcome::read(r)?;
+            return Ok(Self::Attack { target, outcome });
+        }
+        let anim = r.u16()?;
         match how {
             PLAY => Ok(Self::Play(anim)),
             HOLD => Ok(Self::Hold(Some(anim))),
@@ -110,6 +130,43 @@ impl Show {
             STOP_IDLING => Ok(Self::Idle(None)),
             other => Err(Error::UnknownShow(other)),
         }
+    }
+}
+
+/// How an attack came out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Outcome {
+    Hit,
+    Crit,
+    Crushing,
+    Miss,
+    Dodge,
+    Parry,
+    Block,
+    Absorb,
+    Immune,
+}
+
+impl Outcome {
+    pub const ALL: [Self; 9] = [
+        Self::Hit,
+        Self::Crit,
+        Self::Crushing,
+        Self::Miss,
+        Self::Dodge,
+        Self::Parry,
+        Self::Block,
+        Self::Absorb,
+        Self::Immune,
+    ];
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+        let byte = r.u8()?;
+        Self::ALL
+            .get(usize::from(byte))
+            .copied()
+            .ok_or(Error::UnknownOutcome(byte))
     }
 }
 
@@ -349,6 +406,17 @@ pub fn write_show(out: &mut Vec<u8>, whose: Whose, show: Show) {
         Show::Hold(None) => (LET_GO, 0),
         Show::Idle(Some(anim)) => (IDLE, anim),
         Show::Idle(None) => (STOP_IDLING, 0),
+        Show::Attack { target, outcome } => {
+            let target = match target {
+                Some(Whose::Slot(slot)) => slot,
+                Some(Whose::Own) => TARGET_OWN,
+                None => NO_TARGET,
+            };
+            out.push(ATTACK);
+            out.extend_from_slice(&target.to_le_bytes());
+            out.push(outcome as u8);
+            return;
+        }
     };
     out.push(how);
     out.extend_from_slice(&anim.to_le_bytes());
@@ -522,6 +590,27 @@ mod tests {
             (Whose::Slot(4), Show::Idle(None)),
             (Whose::Own, Show::Idle(Some(25))),
             (Whose::Own, Show::Idle(None)),
+            (
+                Whose::Slot(4),
+                Show::Attack {
+                    target: Some(Whose::Own),
+                    outcome: Outcome::Crit,
+                },
+            ),
+            (
+                Whose::Own,
+                Show::Attack {
+                    target: Some(Whose::Slot(SLOTS - 1)),
+                    outcome: Outcome::Immune,
+                },
+            ),
+            (
+                Whose::Slot(2),
+                Show::Attack {
+                    target: None,
+                    outcome: Outcome::Hit,
+                },
+            ),
         ];
         let mut bytes = Vec::new();
         let start = begin_batch(&mut bytes, 5);
@@ -530,18 +619,38 @@ mod tests {
         }
         let unknown = bytes.len() + 3;
         write_show(&mut bytes, Whose::Slot(1), Show::Play(1));
-        bytes[unknown] = STOP_IDLING + 1;
+        bytes[unknown] = ATTACK + 1;
         finish_frame(&mut bytes, start);
         let (_, got) = records_of(&bytes);
         let mut want: Vec<Result<Record<'_>, Error>> = shows
             .into_iter()
             .map(|(whose, show)| Ok(Record::Show { whose, show }))
             .collect();
-        want.push(Err(Error::UnknownShow(STOP_IDLING + 1)));
+        want.push(Err(Error::UnknownShow(ATTACK + 1)));
         assert_eq!(got, want);
         let mut one = Vec::new();
         write_show(&mut one, Whose::Slot(2), Show::Play(16));
         assert_eq!(one.len(), 6);
+    }
+
+    #[test]
+    fn an_attack_with_an_unknown_outcome_or_target_ends_the_batch() {
+        for (at, byte, error) in [
+            (6, Outcome::ALL.len() as u8, Error::UnknownOutcome(9)),
+            (4, 0x02, Error::UnknownTarget(NO_TARGET + 1)),
+        ] {
+            let mut bytes = Vec::new();
+            let start = begin_batch(&mut bytes, 5);
+            let record = bytes.len();
+            let attack = Show::Attack {
+                target: None,
+                outcome: Outcome::Block,
+            };
+            write_show(&mut bytes, Whose::Own, attack);
+            bytes[record + at] = byte;
+            finish_frame(&mut bytes, start);
+            assert_eq!(records_of(&bytes).1, vec![Err(error)]);
+        }
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use game::{Anim, Delivery, Game, Id, Kind, Letter, Out, World};
-use protocol::{Appearance, Hello, LEN_BYTES, Record, ServerMessage, Show, VERSION, Whose};
+use protocol::{
+    Appearance, Hello, LEN_BYTES, Outcome, Record, ServerMessage, Show, VERSION, Whose,
+};
 use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 
 const SWING: u32 = 1;
@@ -9,6 +11,8 @@ const LIE_DOWN: u32 = 2;
 const GET_UP: u32 = 3;
 const MAKE_READY: u32 = 4;
 const CALM_DOWN: u32 = 5;
+const STRIKE_THE_NEAR_ONE: u32 = 6;
+const STRIKE_THE_FAR_ONE: u32 = 7;
 const ATTACK: u16 = 16;
 const DEAD: u16 = 6;
 const READY: u16 = 25;
@@ -56,6 +60,11 @@ impl Kind<Mime> for Player {
                 GET_UP => out.hold(None),
                 MAKE_READY => out.idle(Some(Anim(READY))),
                 CALM_DOWN => out.idle(None),
+                STRIKE_THE_NEAR_ONE => {
+                    out.play(Anim(ATTACK));
+                    out.attack(Some(Id::player(1)), game::Outcome::Crit);
+                }
+                STRIKE_THE_FAR_ONE => out.attack(Some(Id::player(2)), game::Outcome::Miss),
                 _ => {}
             }
         }
@@ -79,6 +88,16 @@ impl Client {
             Whose::Slot(slot) => On::Other(self.slots[&slot]),
             Whose::Own => On::Own,
         }
+    }
+
+    fn attacks_in(&self, shown: &[(On, Show)]) -> Vec<(On, Option<On>, Outcome)> {
+        shown
+            .iter()
+            .filter_map(|&(on, show)| match show {
+                Show::Attack { target, outcome } => Some((on, target.map(|t| self.on(t)), outcome)),
+                _ => None,
+            })
+            .collect()
     }
 
     fn shown(&mut self) -> Vec<(On, Show)> {
@@ -268,4 +287,62 @@ fn what_a_body_idles_in_is_told_to_whoever_sees_it_and_its_player_and_comes_with
         ]
     );
     assert_eq!(stepper.idle_of(b), None);
+}
+
+#[test]
+fn an_attack_is_told_to_whoever_sees_the_attacker_with_the_one_attacked_as_each_sees_it() {
+    let (mut stepper, mut clients) = four_clients();
+    let (a, b, c, late) = (0, 1, 2, 3);
+    stepper.tick(&[join(a), join(b), join(c)]);
+    for client in &mut clients {
+        client.shown();
+    }
+    stepper.tick(&[
+        act(a, Input::Action(STRIKE_THE_NEAR_ONE)),
+        act(a, Input::Action(STRIKE_THE_FAR_ONE)),
+    ]);
+    let told: Vec<Vec<(On, Option<On>, Outcome)>> = clients
+        .iter_mut()
+        .map(|client| {
+            let shown = client.shown();
+            client.attacks_in(&shown)
+        })
+        .collect();
+    assert_eq!(
+        told[a as usize],
+        [
+            (On::Own, Some(On::Other(b)), Outcome::Crit),
+            (On::Own, None, Outcome::Miss)
+        ],
+        "its player is told both, and c is out of its view"
+    );
+    assert_eq!(
+        told[b as usize],
+        [
+            (On::Other(a), Some(On::Own), Outcome::Crit),
+            (On::Other(a), None, Outcome::Miss)
+        ]
+    );
+    assert_eq!(
+        told[c as usize],
+        [],
+        "c, far off, is told nothing, though a attacked it"
+    );
+    assert_eq!(told[late as usize], []);
+    let stepped: Vec<(On, Option<On>, Outcome)> = stepper
+        .attacks_to(b)
+        .into_iter()
+        .map(|(w, t, o)| {
+            (
+                clients[b as usize].on(w),
+                t.map(|t| clients[b as usize].on(t)),
+                o,
+            )
+        })
+        .collect();
+    assert_eq!(
+        stepped, told[b as usize],
+        "the stepper says what b was told"
+    );
+    assert_eq!(stepper.attacks_to(c), []);
 }

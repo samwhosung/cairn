@@ -128,6 +128,31 @@ pub struct UnitShow {
     pub idle: Option<u16>,
 }
 
+/// How an attack came out, in the terms the client shows and sounds one by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Hit,
+    Crit,
+    /// A hit the client voices at its loudest.
+    Crushing,
+    Miss,
+    Dodge,
+    Parry,
+    Block,
+    /// A hit that landed and took nothing.
+    Absorb,
+    Immune,
+}
+
+/// A body attacked another, as its game told it beside the swing the body plays.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitAttack {
+    pub attacker: Entity,
+    /// The one it attacked, if this client sees it.
+    pub target: Option<Entity>,
+    pub outcome: Outcome,
+}
+
 pub(crate) const DEFAULT_WALK_SPEED: f32 = 2.5;
 const SPRINT_SPEED: f32 = 11.0;
 

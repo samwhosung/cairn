@@ -443,6 +443,7 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
         "drop_played" => g.drops.play = Some(Nth(whole(v)?)),
         "drop_held" => g.drops.hold = Some(Nth(whole(v)?)),
         "drop_idled" => g.drops.idle = Some(Nth(whole(v)?)),
+        "drop_attacked" => g.drops.attack = Some(Nth(whole(v)?)),
         field => match field.strip_prefix("lie.") {
             Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), &s.key, key, v)?,
             None => return Err(unknown(&s.key)),

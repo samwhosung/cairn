@@ -3,7 +3,7 @@ use std::any::{Any, TypeId};
 use crate::engine::NEVER;
 use crate::hosted::BodyOrder;
 use crate::show::{BodyShow, Show};
-use crate::{Anim, Game, Id, Kind, Letter, Spot, Tick};
+use crate::{Anim, Game, Id, Kind, Letter, Outcome, Spot, Tick};
 
 pub(crate) const ACT: u8 = 0;
 pub(crate) const STEP: u8 = 1;
@@ -120,6 +120,13 @@ impl<G: Game> Out<G> {
     /// sees the body.
     pub fn play(&mut self, anim: Anim) {
         self.show(Show::Play(anim));
+    }
+
+    /// Tells the player this row is, and everyone who sees its body, that it attacked `target`,
+    /// which came out as `outcome`: beside the swing it plays, it is what the client sounds.
+    pub fn attack(&mut self, target: Option<Id>, outcome: Outcome) {
+        let target = target.filter(|t| t.is_player()).map(|t| t.n);
+        self.show(Show::Attack(target, outcome));
     }
 
     /// Holds the body of the player this row is in `pose` until it is held in another, or let go

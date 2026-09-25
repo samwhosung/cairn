@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use protocol::{Appearance, Jump, Record, Show, State, Whose, flags};
+use protocol::{Appearance, Jump, Outcome, Record, Show, State, Whose, flags};
 use world::Install;
 use world::coords::wow_to_bevy;
+use world::unit::Outcome as Shown;
 use world::unit::{
     BodySkin, CharacterLook, CharacterTables, UnitAlpha, UnitAppear, UnitMotion, UnitShade,
     UnitShow,
@@ -105,6 +106,10 @@ pub struct BatchContext {
 }
 
 impl Others {
+    pub fn body_in(&self, slot: u16) -> Option<Entity> {
+        self.by_slot.get(&slot).map(|r| r.entity)
+    }
+
     pub fn take(&mut self, commands: &mut Commands<'_, '_>, record: Record<'_>, at: &BatchContext) {
         match record {
             Record::Appear {
@@ -222,6 +227,21 @@ pub fn apply_show(shown: &mut UnitShow, show: Show) {
         Show::Play(anim) => shown.play = Some(anim),
         Show::Hold(pose) => shown.pose = pose,
         Show::Idle(idle) => shown.idle = idle,
+        Show::Attack { .. } => {}
+    }
+}
+
+pub fn outcome_of(outcome: Outcome) -> Shown {
+    match outcome {
+        Outcome::Hit => Shown::Hit,
+        Outcome::Crit => Shown::Crit,
+        Outcome::Crushing => Shown::Crushing,
+        Outcome::Miss => Shown::Miss,
+        Outcome::Dodge => Shown::Dodge,
+        Outcome::Parry => Shown::Parry,
+        Outcome::Block => Shown::Block,
+        Outcome::Absorb => Shown::Absorb,
+        Outcome::Immune => Shown::Immune,
     }
 }
 

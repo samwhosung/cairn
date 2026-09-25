@@ -14,11 +14,30 @@ pub mod anim {
     pub const READY_UNARMED: Anim = Anim(25);
 }
 
+/// How an attack came out, in the terms the client shows and sounds one by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Outcome {
+    Hit,
+    Crit,
+    /// A hit the client voices at its loudest.
+    Crushing,
+    Miss,
+    Dodge,
+    Parry,
+    Block,
+    /// A hit that landed and took nothing.
+    Absorb,
+    Immune,
+}
+
 /// What a tick had the players' bodies show, by body.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shows {
     /// Each animation played once, by body and then in the order the rules played them.
     pub played: Vec<(u32, Anim)>,
+    /// Each attack, by attacker and then in the order the rules made them: the player's body it
+    /// attacked, if any, and how it came out.
+    pub attacked: Vec<(u32, Option<u32>, Outcome)>,
     /// Each pose that changed, by body: the one now held, or `None` once let go.
     pub held: Vec<(u32, Option<Anim>)>,
     /// Each idle that changed, by body: the one it now idles in, or `None` once it stops.
@@ -28,6 +47,7 @@ pub struct Shows {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Show {
     Play(Anim),
+    Attack(Option<u32>, Outcome),
     Hold(Option<Anim>),
     Idle(Option<Anim>),
 }
@@ -69,6 +89,7 @@ impl Poses {
 
     pub fn settle(&mut self, mut shows: Vec<BodyShow>) {
         self.tick.played.clear();
+        self.tick.attacked.clear();
         self.tick.held.clear();
         self.tick.idled.clear();
         shows.sort_by_key(|s| (s.body, s.phase));
@@ -82,6 +103,7 @@ impl Poses {
             {
                 match show {
                     Show::Play(anim) => self.tick.played.push((n, anim)),
+                    Show::Attack(target, outcome) => self.tick.attacked.push((n, target, outcome)),
                     Show::Hold(pose) => held = pose,
                     Show::Idle(anim) => idling = anim,
                 }

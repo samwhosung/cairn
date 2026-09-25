@@ -13,6 +13,8 @@ pub enum Error {
     UnknownRecord(u8),
     UnknownWhy(u8),
     UnknownShow(u8),
+    UnknownOutcome(u8),
+    UnknownTarget(u16),
     /// A name that is not UTF-8.
     Name,
     /// A kind the reading side never receives, such as a batch sent to the server.
@@ -29,6 +31,8 @@ impl fmt::Display for Error {
             Self::UnknownRecord(k) => write!(f, "unknown batch record {k}"),
             Self::UnknownWhy(k) => write!(f, "unknown reason {k} for a correction"),
             Self::UnknownShow(k) => write!(f, "unknown way {k} for a body to show an animation"),
+            Self::UnknownOutcome(k) => write!(f, "unknown outcome {k} of an attack"),
+            Self::UnknownTarget(t) => write!(f, "{t} is neither a slot nor a target of an attack"),
             Self::Name => f.write_str("a name that is not UTF-8"),
             Self::Unexpected(k) => write!(f, "message kind {k} is not for this side"),
         }

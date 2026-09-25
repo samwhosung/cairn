@@ -19,6 +19,7 @@ pub struct Played {
     pub plays_told: u64,
     pub poses_told: u64,
     pub idles_told: u64,
+    pub attacks_told: u64,
     pub plays_out_of_view: u64,
 }
 
@@ -35,6 +36,7 @@ impl Played {
             plays_told: 0,
             poses_told: 0,
             idles_told: 0,
+            attacks_told: 0,
             plays_out_of_view: 0,
         }
     }
@@ -57,7 +59,11 @@ impl Played {
                 pose: stepper.pose_of(c.conn),
                 idle: stepper.idle_of(c.conn),
             };
-            if let Some(what) = c.shown.first_difference(tick, &view, &own, &to_it) {
+            let attacked = stepper.attacks_to(c.conn);
+            if let Some(what) = c
+                .shown
+                .first_difference(tick, &view, &own, &to_it, &attacked)
+            {
                 self.shown_mismatches += 1;
                 self.first_shown_mismatch
                     .get_or_insert_with(|| format!("tick {tick}: bot {}: {what}", c.conn));
@@ -73,6 +79,7 @@ impl Played {
             self.plays_told += c.shown.plays_told();
             self.poses_told += c.shown.poses_told();
             self.idles_told += c.shown.idles_told();
+            self.attacks_told += c.shown.attacks_told();
         }
     }
 }

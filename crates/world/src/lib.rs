@@ -148,6 +148,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<portal::CameraInteriorClaim>()
         .init_resource::<portal::ExteriorWindows>()
         .add_message::<rig_events::AnimEvent>()
+        .add_message::<unit::UnitAttack>()
         .add_systems(Startup, (atmosphere::load_catalog, wmo_areas::load))
         .add_systems(
             Update,

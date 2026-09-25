@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use std::num::NonZeroU64;
 
-use protocol::{LEN_BYTES, Record, ServerMessage, Show, Whose};
+use protocol::{LEN_BYTES, Outcome, Record, ServerMessage, Show, Whose};
 use server::InView;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub struct Drops {
     pub play: Option<Nth>,
     pub hold: Option<Nth>,
     pub idle: Option<Nth>,
+    pub attack: Option<Nth>,
 }
 
 #[derive(Default)]
@@ -31,7 +32,8 @@ pub struct Shown {
     own_idle: Option<u16>,
     tick: Option<u32>,
     latest_plays: Vec<(Whose, u16)>,
-    told: [u64; 4],
+    latest_attacks: Vec<Attack>,
+    told: [u64; 5],
     drops: Drops,
 }
 
@@ -39,6 +41,11 @@ const STATE: usize = 0;
 const PLAYED: usize = 1;
 const HELD: usize = 2;
 const IDLED: usize = 3;
+const ATTACKED: usize = 4;
+
+/// An attack as a client is told it: the attacker, the one it attacked if the client sees it, and
+/// how it came out.
+pub type Attack = (Whose, Option<Whose>, Outcome);
 
 pub struct ServerOwnShows {
     pub pose: Option<u16>,
@@ -59,6 +66,7 @@ impl Shown {
         };
         self.tick = Some(batch.tick);
         self.latest_plays.clear();
+        self.latest_attacks.clear();
         for record in batch.flatten() {
             match record {
                 Record::Appear { slot, id, .. } => {
@@ -87,6 +95,14 @@ impl Shown {
                 } => {
                     if !self.dropped(PLAYED) {
                         self.latest_plays.push((whose, anim));
+                    }
+                }
+                Record::Show {
+                    whose,
+                    show: Show::Attack { target, outcome },
+                } => {
+                    if !self.dropped(ATTACKED) {
+                        self.latest_attacks.push((whose, target, outcome));
                     }
                 }
                 Record::Show {
@@ -133,6 +149,7 @@ impl Shown {
             self.drops.play,
             self.drops.hold,
             self.drops.idle,
+            self.drops.attack,
         ][what];
         drop.is_some_and(|Nth(n)| n.get() == self.told[what])
     }
@@ -149,12 +166,17 @@ impl Shown {
         self.told[IDLED]
     }
 
+    pub fn attacks_told(&self) -> u64 {
+        self.told[ATTACKED]
+    }
+
     pub fn first_difference(
         &self,
         tick: u32,
         view: &[InView<'_>],
         own: &ServerOwnShows,
         played: &[(Whose, u16)],
+        attacked: &[Attack],
     ) -> Option<String> {
         let mut ours = self.by_slot.iter();
         for &InView {
@@ -204,18 +226,22 @@ impl Shown {
                 self.own_idle, own.idle
             ));
         }
-        let ours: &[(Whose, u16)] = if self.tick == Some(tick) {
-            &self.latest_plays
-        } else {
-            &[]
-        };
-        let at = ours.iter().zip(played).take_while(|(a, b)| a == b).count();
-        let (told, meant) = (ours.get(at), played.get(at));
-        (told != meant).then(|| {
-            format!(
-                "its animation {at} of the tick was told as {told:?}, and the server played \
-                 {meant:?}"
-            )
-        })
+        let this_tick = self.tick == Some(tick);
+        let plays: &[(Whose, u16)] = if this_tick { &self.latest_plays } else { &[] };
+        let attacks: &[Attack] = if this_tick { &self.latest_attacks } else { &[] };
+        first_told_apart("animation", plays, played)
+            .or_else(|| first_told_apart("attack", attacks, attacked))
     }
+}
+
+fn first_told_apart<T: PartialEq + std::fmt::Debug>(
+    what: &str,
+    told: &[T],
+    meant: &[T],
+) -> Option<String> {
+    let at = told.iter().zip(meant).take_while(|(a, b)| a == b).count();
+    let (told, meant) = (told.get(at), meant.get(at));
+    (told != meant).then(|| {
+        format!("its {what} {at} of the tick was told as {told:?}, and the server made {meant:?}")
+    })
 }
