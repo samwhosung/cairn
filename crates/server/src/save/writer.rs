@@ -13,7 +13,6 @@ use super::{Batch, Saving};
 use crate::net::Held;
 
 const CHECKPOINT_EVERY: u32 = 20;
-const WAL_PAGE_BYTES: u32 = 4096;
 
 thread_local! {
     static WAL_PAGES: Cell<c_int> = const { Cell::new(0) };
@@ -184,12 +183,18 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     let path = opened.path.clone();
     let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
     opened.conn.wal_hook(Some(on_wal));
-    if let Err(e) = opened
+    let page_bytes = opened
         .conn
         .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
-    {
-        return fail(shared, at(e));
-    }
+        .and_then(|()| {
+            opened
+                .conn
+                .pragma_query_value(None, "page_size", |r| r.get::<_, u32>(0))
+        });
+    let page_bytes = match page_bytes {
+        Ok(bytes) => bytes,
+        Err(e) => return fail(shared, at(e)),
+    };
     let (kick, kicked) = mpsc::channel::<()>();
     let checkpointer = {
         let (path, shared) = (path.clone(), shared.clone());
@@ -226,7 +231,7 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
             tick: batch.tick,
             rows: wrote.rows,
             value_bytes: wrote.value_bytes,
-            wal_bytes: taken.unsigned_abs() * WAL_PAGE_BYTES,
+            wal_bytes: taken.unsigned_abs() * page_bytes,
             durable_ns: handed.elapsed().as_nanos() as u64,
             commit_ns: started.elapsed().as_nanos() as u64,
         });

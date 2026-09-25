@@ -170,7 +170,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::
         shared
             .latest_tick
             .store(sim.world().tick(), Ordering::Relaxed);
-        let st = sim.tick(&pool, &inputs, InputOrder::Canonical, Batches::Send(shared));
+        let mut st = sim.tick(&pool, &inputs, InputOrder::Canonical, Batches::Send(shared));
         if let Some(log) = &mut log {
             log.tick(st.tick, &inputs, st.hash)?;
         }
@@ -180,10 +180,18 @@ pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::
                 return Err(io::Error::other(why));
             }
             if let Some(back) = st.tick.checked_sub(MAX_TICKS_UNRELEASED) {
-                writer.wait_released(back).map_err(io::Error::other)?;
+                let waited = writer.wait_released(back).map_err(io::Error::other)?;
+                st.wait_ns = waited.as_nanos() as u64;
             }
         }
         ticks.push(st);
+        if let Some(writer) = sim.writer() {
+            for c in writer.take_commits() {
+                if let Some(t) = ticks.get_mut(c.tick as usize) {
+                    t.commit = Some(c);
+                }
+            }
+        }
         let n = ticks.len();
         match cfg.window {
             Some(_) if crowd_in_at.is_some() && st.players == 0 => break,

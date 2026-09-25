@@ -140,7 +140,8 @@ pub struct TickStats {
     /// Rows the tick saved, or would have with a file.
     pub saved_rows: u32,
     pub commit: Option<Commit>,
-    /// How long a stepper's tick waited on its results being let out.
+    /// How long the tick waited on its results being let out: a stepper waits on each tick's, a
+    /// served world only on those a second behind.
     pub wait_ns: u64,
 }
 
