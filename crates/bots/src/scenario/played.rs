@@ -2,7 +2,7 @@ use game::Loaded;
 use server::Stepper;
 
 use super::client::Client;
-use super::shown::OwnShows;
+use super::shown::ServerOwnShows;
 
 const CHAIN_START: u64 = 0xcbf2_9ce4_8422_2325;
 const CHAIN_PRIME: u64 = 0x0100_0000_01b3;
@@ -53,7 +53,7 @@ impl Played {
             };
             let to_it = stepper.played_to(c.conn);
             self.plays_out_of_view += (played - to_it.len()) as u64;
-            let own = OwnShows {
+            let own = ServerOwnShows {
                 pose: stepper.pose_of(c.conn),
                 idle: stepper.idle_of(c.conn),
             };

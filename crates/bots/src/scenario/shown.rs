@@ -40,8 +40,7 @@ const PLAYED: usize = 1;
 const HELD: usize = 2;
 const IDLED: usize = 3;
 
-/// What the server has a bot's own body hold and idle in.
-pub struct OwnShows {
+pub struct ServerOwnShows {
     pub pose: Option<u16>,
     pub idle: Option<u16>,
 }
@@ -154,7 +153,7 @@ impl Shown {
         &self,
         tick: u32,
         view: &[InView<'_>],
-        own: &OwnShows,
+        own: &ServerOwnShows,
         played: &[(Whose, u16)],
     ) -> Option<String> {
         let mut ours = self.by_slot.iter();
