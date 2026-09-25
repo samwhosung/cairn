@@ -248,4 +248,121 @@ mod tests {
         drop(link);
         running.stop().expect("the server stops");
     }
+
+    /// The two ways to a server, as the window takes them.
+    enum Way {
+        InProcess,
+        Loopback,
+    }
+
+    /// A claim the server refuses, so the next batch answers it with a correction.
+    fn malformed(ack: u32) -> ClientMessage {
+        ClientMessage::Claim(protocol::Claim {
+            ack,
+            movement: protocol::Movement {
+                pos: [f32::NAN; 3],
+                ..protocol::Movement::default()
+            },
+        })
+    }
+
+    /// The correction's sequence number in `bytes`, if it is a batch that carries one.
+    fn corrected(bytes: &[u8]) -> Option<u32> {
+        let Ok(protocol::ServerMessage::Batch(batch)) = protocol::ServerMessage::read(bytes) else {
+            return None;
+        };
+        batch.flatten().find_map(|r| match r {
+            protocol::Record::Correct { seq, .. } => Some(seq),
+            _ => None,
+        })
+    }
+
+    fn percentile(sorted: &[Duration], q: f64) -> f64 {
+        sorted[((sorted.len() - 1) as f64 * q) as usize].as_secs_f64() * 1e6
+    }
+
+    #[test]
+    #[ignore = "a measurement, for a release build"]
+    fn the_cost_of_a_link_in_process_and_over_loopback() {
+        const PINGS: usize = 2000;
+        const IDLE: Duration = Duration::from_secs(10);
+        const FRAME: Duration = Duration::from_millis(16);
+        eprintln!("{}", server::load_average());
+        for tick_ms in [1u16, 50] {
+            for way in [Way::InProcess, Way::Loopback] {
+                let running = server::start(server::Config {
+                    addr: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+                    tick_threads: 1,
+                    io_threads: 1,
+                    tick_ms,
+                    ..server::Config::default()
+                })
+                .expect("a server");
+                let hello = Hello {
+                    version: VERSION,
+                    name: "Probe".into(),
+                    appearance: Appearance::default(),
+                };
+                let (name, link) = match way {
+                    Way::InProcess => (
+                        "in-process",
+                        Link::in_process(running.connect_host(), hello),
+                    ),
+                    Way::Loopback => (
+                        "over loopback",
+                        Link::open(running.addr().expect("a listener"), hello),
+                    ),
+                };
+                while link.arrivals().is_empty() {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                let (cpu, began) = (server::process_cpu_ns(), Instant::now());
+                let mut frames = 0usize;
+                while began.elapsed() < IDLE {
+                    thread::sleep(FRAME);
+                    frames += link.arrivals().len();
+                }
+                let idle_cpu = (server::process_cpu_ns() - cpu) as f64 / 1e9 / IDLE.as_secs_f64();
+                let mut trips = Vec::with_capacity(PINGS);
+                let mut ack = 0;
+                if tick_ms == 1 {
+                    for _ in 0..PINGS {
+                        let sent = Instant::now();
+                        link.send(&malformed(ack));
+                        'answer: loop {
+                            for a in link.arrivals() {
+                                if let Arrival::Frame { bytes, arrived } = a
+                                    && let Some(seq) = corrected(&bytes)
+                                {
+                                    ack = seq;
+                                    trips.push(arrived - sent);
+                                    break 'answer;
+                                }
+                            }
+                            thread::yield_now();
+                        }
+                    }
+                    trips.sort();
+                }
+                let trip = if trips.is_empty() {
+                    "—".to_owned()
+                } else {
+                    format!(
+                        "{:.1} / {:.1} µs",
+                        percentile(&trips, 0.5),
+                        percentile(&trips, 0.99)
+                    )
+                };
+                eprintln!(
+                    "{name}, {tick_ms} ms ticks: {:.0} frames a second, the process {:.2} % of a core \
+                     idle; a claim refused and answered in {trip} (p50 / p99)",
+                    frames as f64 / IDLE.as_secs_f64(),
+                    idle_cpu * 100.0
+                );
+                drop(link);
+                running.stop().expect("the server stops");
+            }
+        }
+        eprintln!("{}", server::load_average());
+    }
 }

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::App;
 use protocol::Why;
+use server::Summary;
 use world::unit::CharacterLook;
 
 use crate::net::{self, Net};
@@ -37,12 +38,24 @@ impl Pace {
     }
 }
 
-#[derive(Debug)]
 pub struct Judged {
     pub refused: Vec<(Why, u64)>,
     pub corrections: u32,
     pub claims: u32,
     pub teleports: u32,
+    pub summary: Summary,
+}
+
+impl std::fmt::Debug for Judged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [p50, p99, _] = self.summary.cpu;
+        write!(
+            f,
+            "refused {:?}, {} corrections, {} claims, {} teleports; a tick took {p50:.3} / \
+             {p99:.3} ms of CPU (p50 / p99)",
+            self.refused, self.corrections, self.claims, self.teleports
+        )
+    }
 }
 
 impl Judged {
@@ -67,6 +80,7 @@ pub fn judge(app: &mut App) -> Option<Judged> {
         corrections: net.corrections(),
         claims: net.claims_sent(),
         teleports: net.teleports_sent(),
+        summary,
     };
     eprintln!("its own server: {judged:?}");
     Some(judged)
