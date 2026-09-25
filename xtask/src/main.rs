@@ -177,9 +177,9 @@ fn commits(root: &Path, range: &str) -> Result<()> {
     bail!("{}", bad.join("\n"))
 }
 
-/// The tests that start the whole app on the GPU and save what it draws. The pair runs on its own:
-/// beside the others, it has missed its wall-clock deadlines.
-const PICTURES: [&[&str]; 2] = [
+/// One `cargo test` run each: the two-player test, run beside the others, has missed its
+/// wall-clock deadlines.
+const PICTURE_RUNS: [&[&str]; 2] = [
     &["scenarios::pictures::", "--skip", "the_frame_cost"],
     &["scenarios::together::two_players"],
 ];
@@ -190,7 +190,7 @@ fn pictures(root: &Path, dir: &Path) -> Result<()> {
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let dir = std::path::absolute(dir).context("resolving the shots' directory")?;
-    for filter in PICTURES {
+    for filter in PICTURE_RUNS {
         let out = Command::new("cargo")
             .args(["test", "-q", "-p", "cairn", "--locked", "--", "--ignored"])
             .args(filter)
