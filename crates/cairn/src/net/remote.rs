@@ -376,22 +376,23 @@ pub(super) fn extrapolate_remote_units(
 ) {
     let dt = time.delta_secs();
     let now_ms = time.elapsed_secs_f64() * 1000.0;
-    for (mut t, mut rm, mut motion, twist) in &mut q {
-        let mut step = rm.reckon(dt);
-        step.wow_pos = through_world(&world, &capsule.0, &rm, step.wow_pos, time.delta());
-        let step = toward_waiting(&rm, step, dt, now_ms);
-        let in_place = turn_in_place_flags(&rm, step.facing);
-        rm.wow_pos = step.wow_pos;
-        rm.orientation = step.facing;
-        rm.vertical_velocity = step.vertical_velocity;
-        motion.set_if_neq(UnitMotion {
-            speed: step.speed,
-            vertical_speed: step.vertical_velocity,
-            flags: rm.flags | in_place,
-            ..*motion
+    q.par_iter_mut()
+        .for_each(|(mut t, mut rm, mut motion, twist)| {
+            let mut step = rm.reckon(dt);
+            step.wow_pos = through_world(&world, &capsule.0, &rm, step.wow_pos, time.delta());
+            let step = toward_waiting(&rm, step, dt, now_ms);
+            let in_place = turn_in_place_flags(&rm, step.facing);
+            rm.wow_pos = step.wow_pos;
+            rm.orientation = step.facing;
+            rm.vertical_velocity = step.vertical_velocity;
+            motion.set_if_neq(UnitMotion {
+                speed: step.speed,
+                vertical_speed: step.vertical_velocity,
+                flags: rm.flags | in_place,
+                ..*motion
+            });
+            draw(&mut t, &rm, twist, dt);
         });
-        draw(&mut t, &rm, twist, dt);
-    }
 }
 
 #[cfg(test)]
