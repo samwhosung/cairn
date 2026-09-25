@@ -1,4 +1,5 @@
-//! The world server: a 20 Hz bulk-synchronous tick that checks and relays movement.
+//! The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, and keeps the
+//! world in an SQLite file.
 
 mod grid;
 mod limits;
@@ -6,6 +7,7 @@ mod log;
 mod net;
 mod relays;
 mod replicate;
+mod save;
 mod serve;
 mod sim;
 mod stats;
@@ -24,8 +26,11 @@ pub use limits::{Limits, Why, ground_between};
 pub use net::InProcess;
 pub use protocol::Movement;
 pub use replicate::{PastReach, Tier, View};
+pub use save::{Commit, Keeping, Kept, Place, Player, Saving, default_world, read, scan};
 pub use serve::{Config, Window};
-pub use stats::{PHASES, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns};
+pub use stats::{
+    PHASES, SaveCost, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns,
+};
 pub use stepper::{InView, Link, Stepper};
 pub use world::{Input, InputOrder, Refusal, Spawn, Stamped};
 
@@ -40,8 +45,9 @@ pub struct Running {
     runtime: tokio::runtime::Runtime,
 }
 
-/// Binds `cfg.addr`, if it names one, and starts ticking; refuses a view past what a batch's
-/// positions reach ([`View::check`]), and a game's run to be recorded.
+/// Opens the world's file, binds `cfg.addr`, if it names one, and starts ticking; refuses a view
+/// past what a batch's positions reach ([`View::check`]), a file the world cannot start from, and
+/// a game's run to be recorded.
 pub fn start(cfg: Config) -> io::Result<Running> {
     cfg.check()?;
     if cfg.record.is_some()
@@ -52,6 +58,7 @@ pub fn start(cfg: Config) -> io::Result<Running> {
             game.name()
         )));
     }
+    let opened = cfg.open_world()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.io_threads.max(1))
         .thread_name("conn")
@@ -70,7 +77,7 @@ pub fn start(cfg: Config) -> io::Result<Running> {
     let admitting = StopsAdmitting(shared.clone());
     let tick = std::thread::Builder::new()
         .name("world".into())
-        .spawn(move || serve::run(&cfg, &admitting.0))?;
+        .spawn(move || serve::run(&cfg, &admitting.0, opened))?;
     Ok(Running {
         addr,
         shared,
@@ -123,6 +130,10 @@ pub struct Replayed {
     pub hash: u64,
     /// The first tick whose world hash differs from the recorded one.
     pub first_mismatch: Option<u32>,
+    /// The ticks that saved anything.
+    pub saving: Vec<u32>,
+    /// Every player's saved state after [`Replay::keeping_at`].
+    pub kept: Option<Keeping>,
     /// Every refused claim or teleport, when the replay was asked to keep them.
     pub refusals: Vec<Refusal>,
     /// Every replayed tick summarized over the time it stands for, one tick's length each.
@@ -136,6 +147,8 @@ pub struct Replay<'a> {
     pub order: InputOrder,
     pub keep_refusals: bool,
     pub replicate: Replicate<'a>,
+    /// The tick after which to take every player's saved state.
+    pub keeping_at: Option<u32>,
 }
 
 /// Whether a replay builds every client's batch, as a server with the default [`View`] builds
@@ -148,13 +161,14 @@ pub enum Replicate<'a> {
     Dumping(&'a Path),
 }
 
-/// Replays the inputs recorded at `path` and compares the world hash after every tick with the
-/// recorded one.
+/// Replays the inputs recorded at `path`, with the players the run started with, and compares the
+/// world hash after every tick with the recorded one.
 pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     let mut log = LogReader::open(path)?;
     let cfg = Config {
         tick_threads: how.threads,
         tick_ms: log.header.tick_ms,
+        map: log.header.map,
         spawns: log.header.spawns.clone(),
         limits: Limits {
             check: log.header.check,
@@ -162,7 +176,8 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
         },
         ..Config::default()
     };
-    let mut stepper = Stepper::new(&cfg, how.order, game::Delivery::Canonical)?;
+    let players = std::mem::take(&mut log.header.players);
+    let mut stepper = Stepper::starting(&cfg, players, how.order)?;
     if how.keep_refusals {
         stepper.keep_refusals();
     }
@@ -178,6 +193,12 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     let cpu = process_cpu_ns();
     while let Some(logged) = log.next_tick()? {
         let st = stepper.tick(&logged.inputs);
+        if st.saved_rows > 0 {
+            out.saving.push(st.tick);
+        }
+        if how.keeping_at == Some(st.tick) {
+            out.kept = Some(stepper.keeping());
+        }
         if (st.tick != logged.tick || st.hash != logged.hash) && out.first_mismatch.is_none() {
             out.first_mismatch = Some(logged.tick);
         }

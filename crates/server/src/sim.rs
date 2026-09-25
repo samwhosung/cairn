@@ -1,17 +1,18 @@
 use std::time::Instant;
 
-use game::{Hosted, Saves, Spot, Stages, Turn};
+use game::{Hosted, Spot, Stages, Turn};
 use protocol::{VERSION, Welcome};
 use rayon::ThreadPool;
 use rayon::prelude::*;
 
 use crate::grid::Grid;
 use crate::limits::Limits;
-use crate::net::Shared;
+use crate::net::{Held, Shared};
 use crate::relays::Relays;
 use crate::replicate::{Built, Observer, Scene, Scratch, View, send_batch};
+use crate::save::{Keeping, Roster, Writer};
 use crate::stats::{PHASES, Phase, TickStats, thread_cpu_ns};
-use crate::world::{InputOrder, Refusal, Spawn, Stamped, World};
+use crate::world::{Act, InputOrder, Refusal, Spawn, Stamped, World};
 
 const OBSERVERS_PER_TASK: usize = 16;
 const ADMIT: usize = 0;
@@ -43,7 +44,9 @@ pub struct Sim {
     phases: [Phase; PHASES.len()],
     refusals: Vec<Refusal>,
     game: Option<Box<dyn Hosted>>,
-    saves: Saves,
+    roster: Roster,
+    writer: Option<Writer>,
+    held: Vec<Held>,
     bodies: Vec<Option<Spot>>,
 }
 
@@ -60,13 +63,22 @@ impl Sim {
             phases: Default::default(),
             refusals: Vec::new(),
             game: None,
-            saves: Saves::default(),
+            roster: Roster::new(Vec::new(), map, tick_ms),
+            writer: None,
+            held: Vec::new(),
             bodies: Vec::new(),
         }
     }
 
     pub fn with_game(mut self, game: Option<Box<dyn Hosted>>) -> Self {
         self.game = game;
+        self
+    }
+
+    /// Starts from the players `roster` knows, and saves what each tick changes through `writer`.
+    pub fn with_roster(mut self, roster: Roster, writer: Option<Writer>) -> Self {
+        self.roster = roster;
+        self.writer = writer;
         self
     }
 
@@ -86,10 +98,42 @@ impl Sim {
         self.game.as_deref()
     }
 
-    pub fn saves(&self) -> &Saves {
-        &self.saves
+    pub fn roster(&self) -> &Roster {
+        &self.roster
     }
 
+    pub fn writer(&self) -> Option<&Writer> {
+        self.writer.as_ref()
+    }
+
+    pub fn take_writer(&mut self) -> Option<Writer> {
+        self.writer.take()
+    }
+
+    /// Every player's saved state as the file should hold it after this tick: a full scan of
+    /// the game's rows, and where each player last stood as saved.
+    pub fn keeping(&self) -> Keeping {
+        let schema = self.game.as_ref().and_then(|g| g.schemas()[0]);
+        let scan = self.game.as_ref().map(|g| g.saved()).unwrap_or_default();
+        self.roster.keeping(schema.as_ref(), &scan)
+    }
+
+    /// Lets the last tick's results out once its changes are durable.
+    pub fn release(&mut self) {
+        if let Some(writer) = &self.writer {
+            let tick = self.world.tick().wrapping_sub(1);
+            writer.release(tick, std::mem::take(&mut self.held));
+        }
+    }
+
+    /// Saves where every player in the world stands, as the server stops.
+    pub fn stop(&mut self) {
+        self.roster.all(self.world.before());
+        let batch = self.roster.batch(self.world.tick());
+        if let Some(writer) = &self.writer {
+            writer.save(batch);
+        }
+    }
     pub fn in_view(&self, id: u32) -> Option<Vec<(u16, u32)>> {
         self.observers
             .iter()
@@ -125,7 +169,9 @@ impl Sim {
             phases,
             refusals,
             game,
-            saves,
+            roster,
+            writer,
+            held,
             bodies,
         } = self;
         let mut st = TickStats {
@@ -133,8 +179,15 @@ impl Sim {
             ..TickStats::default()
         };
         let mut clock = Instant::now();
-        let mut joined = Vec::new();
-        for admitted in phases[ADMIT].time(|| world.admit(inputs)) {
+        let (mut joined, mut restored) = (Vec::new(), Vec::new());
+        let (admitted, refused) = phases[ADMIT].time(|| world.admit(inputs, |n| roster.admit(n)));
+        if let Batches::Send(shared) = batches {
+            for conn in refused {
+                drop(shared.take_outbox(conn));
+            }
+        }
+        for admitted in admitted {
+            roster.bind(admitted.id, world.name(admitted.id), &mut restored);
             let outbox = match batches {
                 Batches::Send(shared) => shared.take_outbox(admitted.conn),
                 Batches::Skip => None,
@@ -166,6 +219,13 @@ impl Sim {
         let acts = phases[STEP].time(|| world.route(inputs, order));
         let mut stepped = world.step(&acts, &phases[STEP]);
         refusals.append(&mut stepped.refusals);
+        for act in &acts {
+            let Act::Leave { id } = *act else { continue };
+            let (was, now) = (&world.before()[id as usize], &world.stepped()[id as usize]);
+            if was.present && !now.present {
+                roster.leave(id, now);
+            }
+        }
         st.wall_ns[STEP] = lap_ns(&mut clock);
         if let Some(game) = game {
             let actions = phases[RULES].time(|| {
@@ -181,7 +241,7 @@ impl Sim {
             game.tick(&Turn {
                 tick: world.tick(),
                 joined: &joined,
-                restored: &[],
+                restored: &restored,
                 bodies,
                 actions: &actions,
                 cpu_ns: thread_cpu_ns,
@@ -189,7 +249,7 @@ impl Sim {
             let playing = lap_ns(&mut clock);
             phases[RECORD].time(|| {
                 world.order(game.orders());
-                saves.take(game.record());
+                roster.take(game.record());
             });
             let Stages {
                 rules,
@@ -203,6 +263,14 @@ impl Sim {
                 st.cpu_ns[p] = took.cpu_ns;
                 st.largest_task_ns[p] = took.largest_ns;
             }
+        }
+        let batch = phases[RECORD].time(|| {
+            roster.due(world.tick(), world.stepped());
+            roster.batch(world.tick())
+        });
+        st.saved_rows = batch.rows() as u32;
+        if let Some(writer) = writer {
+            writer.save(batch);
         }
         phases[INDEX].time(|| grid.rebuild(world.stepped()));
         st.wall_ns[INDEX] = lap_ns(&mut clock);
@@ -221,6 +289,7 @@ impl Sim {
                 relays,
                 clients,
                 game: game.as_deref(),
+                holding: writer.is_some(),
             };
             let phase = &phases[REPLICATE];
             observers
@@ -236,6 +305,7 @@ impl Sim {
         } else {
             Built::default()
         };
+        held.extend(observers.iter_mut().filter_map(|o| o.held.take()));
         st.wall_ns[REPLICATE] = lap_ns(&mut clock);
         st.hash = world.hash(&phases[HASH]);
         if let Some(game) = game {

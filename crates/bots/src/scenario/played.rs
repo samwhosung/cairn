@@ -38,7 +38,7 @@ impl Played {
 
     pub fn check(&mut self, tick: u32, hash: u64, stepper: &Stepper, clients: &[Client]) {
         self.hash_chain = (self.hash_chain ^ hash).wrapping_mul(CHAIN_PRIME);
-        if let Some(what) = stepper.saves_differ() {
+        if let Some(what) = stepper.file_differs() {
             self.saved_mismatches += 1;
             self.first_saved_mismatch
                 .get_or_insert_with(|| format!("tick {tick}: {what}"));

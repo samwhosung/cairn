@@ -1,6 +1,6 @@
 [package]
 name = "server"
-description = "The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process"
+description = "The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process, and keeps the world in an SQLite file"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,11 @@ catalog = { path = "../catalog" }
 game = { path = "../game" }
 protocol = { path = "../protocol" }
 rayon = "1.12"
+rusqlite = { version = "0.40", default-features = false, features = [
+  "bundled",
+  "cache",
+  "hooks",
+] }
 tokio = { version = "1.53", features = [
   "rt-multi-thread",
   "net",

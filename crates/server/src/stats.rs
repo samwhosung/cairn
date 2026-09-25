@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::limits::Why;
 use crate::replicate::Built;
+use crate::save::Commit;
 
 pub use clock::{process_cpu_ns, thread_cpu_ns};
 
@@ -136,6 +137,12 @@ pub struct TickStats {
     pub stale: u32,
     pub built: Built,
     pub hash: u64,
+    /// Rows the tick handed the writer.
+    pub saved_rows: u32,
+    /// The tick's transaction, when it made one.
+    pub commit: Option<Commit>,
+    /// How long the tick's caller waited for its results to be let out.
+    pub wait_ns: u64,
 }
 
 impl TickStats {
@@ -198,6 +205,42 @@ pub struct Summary {
     /// was in when its arrival ran out; 0 if it never stopped waiting.
     pub players_arrived: u32,
     pub players_wanted: u32,
+    pub saving: SaveCost,
+}
+
+/// What saving cost over a run's ticks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SaveCost {
+    pub commits: usize,
+    pub rows_per_tick: f64,
+    pub bytes_per_tick: f64,
+    pub wal_bytes_per_tick: f64,
+    /// Percentiles 50, 99 and 100 of a transaction, ms.
+    pub commit: [f64; 3],
+    /// Percentiles 50, 99 and 100 of a tick's changes becoming durable once handed over, ms.
+    pub durable: [f64; 3],
+    /// Percentiles 50, 99 and 100 of the wait of the ticks that waited on their results, ms.
+    pub wait: [f64; 3],
+}
+
+impl SaveCost {
+    pub fn of(ticks: &[TickStats]) -> Self {
+        let n = ticks.len().max(1) as f64;
+        let commits: Vec<Commit> = ticks.iter().filter_map(|t| t.commit).collect();
+        let per_tick =
+            |f: fn(&Commit) -> u32| commits.iter().map(|c| f64::from(f(c))).sum::<f64>() / n;
+        let ms = |f: fn(&Commit) -> u64| p50_p99_max_ms(commits.iter().map(f).collect());
+        let waits = ticks.iter().map(|t| t.wait_ns).filter(|&w| w > 0).collect();
+        Self {
+            commits: commits.len(),
+            rows_per_tick: ticks.iter().map(|t| f64::from(t.saved_rows)).sum::<f64>() / n,
+            bytes_per_tick: per_tick(|c| c.bytes),
+            wal_bytes_per_tick: per_tick(|c| c.wal_bytes),
+            commit: ms(|c| c.commit_ns),
+            durable: ms(|c| c.durable_ns),
+            wait: p50_p99_max_ms(waits),
+        }
+    }
 }
 
 impl Summary {
@@ -251,6 +294,7 @@ impl Summary {
             stayed: 0,
             players_arrived: 0,
             players_wanted: 0,
+            saving: SaveCost::of(ticks),
         }
     }
 
@@ -260,7 +304,7 @@ impl Summary {
             .map(|w| format!("{w:?}").to_lowercase())
             .collect();
         format!(
-            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | movements/s per client | of them turns / states | moves and turns by tier, near / middle / far | B per movement | shared % of bytes out | refused: {} | stale | deferred | kicked / appears without a slot | process % of a core | world hash | load |",
+            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | movements/s per client | of them turns / states | moves and turns by tier, near / middle / far | B per movement | shared % of bytes out | refused: {} | stale | deferred | kicked / appears without a slot | process % of a core | world hash | load | saved rows / KB / WAL KB a tick | commits | commit p50 / p99 ms | durable p50 / p99 ms | tick's wait p50 / p99 / max ms |",
             PHASES.join(" / "),
             why.join(" / ")
         )
@@ -278,8 +322,23 @@ impl Summary {
         let [c50, c99, _] = self.cpu;
         let [w50, w99, _] = self.wall;
         let phases: Vec<String> = self.phase_cpu.iter().map(|p| format!("{p:.3}")).collect();
+        let v = &self.saving;
+        let saving = format!(
+            " {:.2} / {:.2} / {:.1} | {} | {:.2} / {:.2} | {:.2} / {:.2} | {:.2} / {:.2} / {:.2} |",
+            v.rows_per_tick,
+            v.bytes_per_tick / 1e3,
+            v.wal_bytes_per_tick / 1e3,
+            v.commits,
+            v.commit[0],
+            v.commit[1],
+            v.durable[0],
+            v.durable[1],
+            v.wait[0],
+            v.wait[1],
+            v.wait[2],
+        );
         format!(
-            "| {label} | {players} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {:.1} / {:.1} | {} | {:.2} | {:.1} | {} | {} | {} | {} / {} | {:.1} | {:016x} | {} |",
+            "| {label} | {players} | {} | {} | {i50:.3} | {i99:.3} | {imax:.3} | {c50:.3} | {c99:.3} | {w50:.3} | {w99:.3} | {} | {:.2} | {:.0} | {:.2} | {:.1} | {:.1} | {:.1} / {:.1} | {} | {:.2} | {:.1} | {} | {} | {} | {} / {} | {:.1} | {:016x} | {} |{saving}",
             self.threads,
             self.ticks,
             phases.join(" / "),

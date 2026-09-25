@@ -4,31 +4,49 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use server::{
-    Config, InputOrder, Limits, Refusal, Replay, Replicate, Spawn, Summary, Window, ground_between,
+    Config, InputOrder, Limits, Refusal, Replay, Replicate, Saving, Spawn, Summary, Window,
+    default_world, ground_between,
 };
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
-              [--record FILE] [--players N --arrival S --settle S --measure S --grace S]
+              [--world FILE | --unsaved] [--record FILE]
+              [--players N --arrival S --settle S --measure S --grace S]
               [--game NAME [--knobs FILE] [--overlay FILE] [--seed N]] [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
          are in, or S seconds after the start (--arrival, 60) with whoever is, wait S
          seconds and measure for S seconds; once every player has left, or S seconds
          after the window (--grace, 10) with the rest dropped, print one summary row and
          stop.
+         The world is kept in FILE, an SQLite file made if there is none, and starts
+         from it: by default the game's own in the user's data directory (on macOS
+         ~/Library/Application Support/cairn/worlds/NAME.sqlite, NAME the game or world).
+         A tick's results leave once its changes are in the file for good. A player is
+         known by its name: one that comes back gets what it saved and stands where it
+         last stood, saved about once a minute and as it leaves, and a join under the
+         name of a player in the world is refused. --unsaved keeps the world in memory.
          --unchecked accepts every well-formed claim. --record writes every tick's inputs
          and world hash to FILE. --game runs a game's rules (melee) on its own knobs, or on
          the --knobs FILE, with an --overlay FILE laid on them; --seed seeds its rolls.
+         --results-early, a control, lets a tick's results out before its changes are
+         durable, and commits them only with the next tick's.
+       server read [--world FILE | --game NAME] [--timeout S] SQL...
+         run each SQL statement on a world's file without writing to it, each a read of
+         its own given up after S seconds (5), while its server runs; print what each
+         read, tab-separated, after a line of its columns' names. The world is the
+         game's own, or the one with no game, unless --world names it.
        server header
          print the header of the summary row's table.
        server replay FILE [--threads N] [--racy] [--refusals] [--replicate] [--dump OUT]
-         replay a recorded run and compare the world after every tick; --racy applies
-         each entity's inputs in the order worker threads hand them over; --refusals
-         prints every refused claim and what it was judged against; --replicate also
-         builds every client's batch as if all kept up and prints the summary row;
-         --dump writes the first connection's frames to OUT, and implies --replicate.
+         replay a recorded run, with the players it began with, and compare the world after
+         every tick; --racy applies each entity's inputs in the order worker threads hand
+         them over; --refusals prints every refused claim and what it was judged against;
+         --replicate also builds every client's batch as if all kept up and prints the
+         summary row; --dump writes the first connection's frames to OUT, and implies
+         --replicate.
 
 FILE of spawns: one `x y z facing` per line, WoW world coordinates and radians.";
 
@@ -36,6 +54,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("replay") => replay(&args[1..]),
+        Some("read") => read(&args[1..]),
         Some("header") => {
             println!("{}", Summary::header());
             Ok(())
@@ -80,7 +99,7 @@ fn num<T: std::str::FromStr>(
 }
 
 fn serve(args: &[String]) -> Result<(), String> {
-    let f = flags(args, &["unchecked"])?;
+    let f = flags(args, &["unchecked", "unsaved", "results-early"])?;
     let defaults = Config::default();
     let tick_ms = defaults.tick_ms;
     let ticks = |secs: f64| (secs * 1000.0 / f64::from(tick_ms)).round() as u32;
@@ -113,6 +132,19 @@ fn serve(args: &[String]) -> Result<(), String> {
         }
         None => None,
     };
+    let world = match (f.get("world"), f.contains_key("unsaved")) {
+        (Some(_), true) => return Err("--world and --unsaved: give one".into()),
+        (Some(path), false) => Some(PathBuf::from(path)),
+        (None, false) => Some(
+            default_world(game.as_ref().map(game::Loaded::name))
+                .ok_or("no data directory to keep the world in: give --world or --unsaved")?,
+        ),
+        (None, true) => None,
+    };
+    match &world {
+        Some(path) => eprintln!("keeping the world in {}", path.display()),
+        None => eprintln!("keeping the world in memory only"),
+    }
     let cfg = Config {
         addr: Some(SocketAddr::from(([127, 0, 0, 1], num(&f, "port", 7777)?))),
         tick_threads: num(&f, "threads", defaults.tick_threads)?,
@@ -125,6 +157,12 @@ fn serve(args: &[String]) -> Result<(), String> {
         record: f.get("record").map(PathBuf::from),
         window,
         game,
+        world,
+        saving: if f.contains_key("results-early") {
+            Saving::Early
+        } else {
+            Saving::Held
+        },
         ..defaults
     };
     let running = server::start(cfg).map_err(|e| format!("starting: {e}"))?;
@@ -150,6 +188,32 @@ fn serve(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn read(args: &[String]) -> Result<(), String> {
+    let (mut given, mut sql) = (Vec::new(), Vec::new());
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg.starts_with("--") {
+            given.push(arg.clone());
+            given.push(it.next().ok_or(format!("{arg} needs a value"))?.clone());
+        } else {
+            sql.push(arg.clone());
+        }
+    }
+    let f = flags(&given, &[])?;
+    if sql.is_empty() {
+        return Err("read needs SQL".into());
+    }
+    let path = match (f.get("world"), f.get("game")) {
+        (Some(_), Some(_)) => return Err("--world and --game: give one".into()),
+        (Some(path), None) => PathBuf::from(path),
+        (None, game) => default_world(game.map(String::as_str)).ok_or("no data directory")?,
+    };
+    let timeout = Duration::try_from_secs_f64(num(&f, "timeout", 5.0)?)
+        .map_err(|_| "--timeout wants seconds")?;
+    print!("{}", server::read(&path, &sql, timeout)?);
+    Ok(())
+}
+
 fn replay(args: &[String]) -> Result<(), String> {
     let (path, rest) = args.split_first().ok_or("replay needs a FILE")?;
     let f = flags(rest, &["racy", "refusals", "replicate"])?;
@@ -167,6 +231,7 @@ fn replay(args: &[String]) -> Result<(), String> {
             None if f.contains_key("replicate") => Replicate::Yes,
             None => Replicate::No,
         },
+        keeping_at: None,
     };
     let r = server::replay(Path::new(path), &how).map_err(|e| format!("{path}: {e}"))?;
     let limits = Limits::default();

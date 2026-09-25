@@ -6,6 +6,7 @@ use protocol::{Appearance, Claim, Hello, Movement, flags};
 use rayon::prelude::*;
 
 use crate::limits::{ClockPin, Limits, Verdict, Why};
+use crate::save::Admit;
 use crate::stats::Phase;
 
 const ENTITIES_PER_TASK: usize = 256;
@@ -199,8 +200,14 @@ impl World {
         self.next.iter().filter(|b| b.present).count()
     }
 
-    pub fn admit(&mut self, inputs: &[Stamped]) -> Vec<Admitted> {
-        let mut admitted = Vec::new();
+    /// Gives each join a body where `admit` puts it, or at the next spawn; returns the admitted
+    /// and the connections `admit` refused.
+    pub fn admit(
+        &mut self,
+        inputs: &[Stamped],
+        mut admit: impl FnMut(&str) -> Admit,
+    ) -> (Vec<Admitted>, Vec<u32>) {
+        let (mut admitted, mut refused) = (Vec::new(), Vec::new());
         for s in inputs {
             let (Input::Join(hello) | Input::HostJoin(hello)) = &s.input else {
                 continue;
@@ -209,7 +216,13 @@ impl World {
                 continue;
             }
             let id = self.prev.len() as u32;
-            let spawn = self.spawns[id as usize % self.spawns.len()];
+            let spawn = match admit(&hello.name) {
+                Admit::Refused => {
+                    refused.push(s.conn);
+                    continue;
+                }
+                Admit::At(back) => back.unwrap_or(self.spawns[id as usize % self.spawns.len()]),
+            };
             let body = Body {
                 movement: Movement {
                     pos: spawn.pos,
@@ -234,7 +247,7 @@ impl World {
                 spawn: body.movement,
             });
         }
-        admitted
+        (admitted, refused)
     }
 
     pub fn route(&self, inputs: &[Stamped], order: InputOrder) -> Vec<Act> {

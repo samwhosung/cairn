@@ -6,6 +6,7 @@ use rayon::ThreadPool;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::net::{Outbox, Shared};
+use crate::save::{Keeping, Player, Roster, scan};
 use crate::serve::Config;
 use crate::sim::{Batches, Sim};
 use crate::stats::TickStats;
@@ -57,25 +58,29 @@ impl Link {
 }
 
 impl Stepper {
+    /// A world on `cfg`, from its file when it names one, saving to it; each tick's results
+    /// reach the links once its changes are durable.
     pub fn new(cfg: &Config, order: InputOrder, delivery: Delivery) -> io::Result<Self> {
         cfg.check()?;
+        let opened = cfg.open_world()?;
+        Self::with(cfg.sim(opened, delivery)?, cfg, order)
+    }
+
+    /// A world on `cfg` that knows `players` and keeps no file, as a replay starts.
+    pub fn starting(cfg: &Config, players: Vec<Player>, order: InputOrder) -> io::Result<Self> {
+        let roster = Roster::new(players, cfg.map, cfg.tick_ms);
+        let sim = cfg
+            .sim(None, Delivery::Canonical)?
+            .with_roster(roster, None);
+        Self::with(sim, cfg, order)
+    }
+
+    fn with(sim: Sim, cfg: &Config, order: InputOrder) -> io::Result<Self> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(cfg.tick_threads)
             .thread_name(|i| format!("tick-{i}"))
             .build()
             .map_err(io::Error::other)?;
-        let sim = Sim::new(
-            cfg.spawns.clone(),
-            cfg.limits,
-            cfg.view,
-            cfg.map,
-            cfg.tick_ms,
-        )
-        .with_game(
-            cfg.game
-                .as_ref()
-                .map(|g| g.start(u32::from(cfg.tick_ms), delivery)),
-        );
         Ok(Self {
             sim,
             pool,
@@ -106,6 +111,15 @@ impl Stepper {
             .filter(|(_, b)| b.placed.is_some_and(|p| p.tick == tick))
             .map(|(id, _)| id)
             .collect()
+    }
+
+    /// Where body `id` stands as the last tick left it, while it is in the world.
+    pub fn body(&self, id: u32) -> Option<game::Spot> {
+        let b = self.sim.world().before().get(id as usize)?;
+        b.present.then_some(game::Spot {
+            pos: b.movement.pos,
+            facing: b.movement.facing,
+        })
     }
 
     /// What observer `id` has in view, by slot.
@@ -155,9 +169,30 @@ impl Stepper {
             .collect()
     }
 
-    pub fn saves_differ(&self) -> Option<String> {
-        let game = self.sim.game()?;
-        self.sim.saves().first_difference(&game.saved())
+    /// Every player's saved state as the world has it: a full scan of the game's rows, and where
+    /// each last stood as saved.
+    pub fn keeping(&self) -> Keeping {
+        self.sim.keeping()
+    }
+
+    /// Where the world's file differs from the world's saved state, by a full scan of each, once
+    /// the last tick's changes are durable; `None` also when the world keeps no file.
+    pub fn file_differs(&self) -> Option<String> {
+        let writer = self.sim.writer()?;
+        let schema = self.sim.game().and_then(|g| g.schemas()[0]);
+        let file = match scan(writer.path(), schema.as_ref()) {
+            Ok(file) => file,
+            Err(e) => return Some(e),
+        };
+        first_difference(&self.sim.keeping(), &file)
+    }
+
+    /// Saves where every player stands, makes every change durable and closes the world's file.
+    pub fn finish(mut self) -> Result<(), String> {
+        self.sim.stop();
+        self.sim
+            .take_writer()
+            .map_or(Ok(()), |w| w.finish().map(drop))
     }
 
     pub fn keep_refusals(&mut self) {
@@ -191,16 +226,59 @@ impl Stepper {
             Batches::Skip
         };
         let given_up = self.clients.take_inputs();
-        if given_up.is_empty() {
-            return self.sim.tick(&self.pool, inputs, self.order, batches);
+        let mut st = if given_up.is_empty() {
+            self.sim.tick(&self.pool, inputs, self.order, batches)
+        } else {
+            let mut all = [inputs, &given_up].concat();
+            all.sort_by_key(|s| (s.conn, s.nth));
+            self.sim.tick(&self.pool, &all, self.order, batches)
+        };
+        self.sim.release();
+        if let Some(writer) = self.sim.writer() {
+            let waited = writer
+                .wait_released(st.tick)
+                .unwrap_or_else(|why| panic!("the world's file: {why}"));
+            st.wait_ns = waited.as_nanos() as u64;
+            st.commit = writer.commits().into_iter().find(|c| c.tick == st.tick);
         }
-        let mut all = [inputs, &given_up].concat();
-        all.sort_by_key(|s| (s.conn, s.nth));
-        self.sim.tick(&self.pool, &all, self.order, batches)
+        st
+    }
+
+    /// The world's file, when it keeps one.
+    pub fn world_file(&self) -> Option<&std::path::Path> {
+        self.sim.writer().map(crate::save::Writer::path)
     }
 
     /// Every claim refused since the last call, when [`Stepper::keep_refusals`] asked for them.
     pub fn take_refusals(&mut self) -> Vec<Refusal> {
         self.sim.take_refusals()
     }
+}
+
+impl Drop for Stepper {
+    fn drop(&mut self) {
+        self.sim.stop();
+    }
+}
+
+fn first_difference(world: &Keeping, file: &Keeping) -> Option<String> {
+    for (name, kept) in world {
+        match file.get(name) {
+            None => return Some(format!("{name} is missing from the file")),
+            Some(f) if f.saved != kept.saved => {
+                let (a, b) = (&f.saved, &kept.saved);
+                return Some(format!("{name}: the file saved {a:?}, and the world {b:?}"));
+            }
+            Some(f) if f.place != kept.place => {
+                let (a, b) = (&f.place, &kept.place);
+                return Some(format!(
+                    "{name}: the file has it at {a:?}, and the world {b:?}"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    file.keys()
+        .find(|name| !world.contains_key(*name))
+        .map(|name| format!("{name} is in the file and not the world"))
 }

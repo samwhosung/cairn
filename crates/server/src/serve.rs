@@ -10,9 +10,13 @@ use crate::limits::Limits;
 use crate::log::{Header, LogWriter};
 use crate::net::Shared;
 use crate::replicate::View;
+use crate::save::{Opened, Roster, Saving, Writer};
 use crate::sim::{Batches, Sim};
-use crate::stats::{Summary, TickStats, process_cpu_ns};
+use crate::stats::{SaveCost, Summary, TickStats, process_cpu_ns};
 use crate::world::{InputOrder, Spawn};
+
+/// A tick's results wait at most this many ticks on the writer before the tick waits too.
+const MOST_TICKS_HELD: u32 = 20;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -29,6 +33,10 @@ pub struct Config {
     pub view: View,
     /// The game whose rules the world runs; with none, it runs only movement.
     pub game: Option<Loaded>,
+    /// The file the world starts from and saves each tick's changes to; with none, the world is
+    /// kept only in memory.
+    pub world: Option<PathBuf>,
+    pub saving: Saving,
     /// Where to write every tick's inputs and world hash, for replay.
     pub record: Option<PathBuf>,
     /// When to measure and stop; without one the server runs until stopped.
@@ -40,6 +48,41 @@ impl Config {
         self.view
             .check(&self.limits)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    }
+
+    /// Opens the world's file, when it has one, for this server's game.
+    pub(crate) fn open_world(&self) -> io::Result<Option<Opened>> {
+        let Some(path) = &self.world else {
+            return Ok(None);
+        };
+        let game = self.game.as_ref().map(|g| (g.name(), g.schemas()));
+        crate::save::open(path, game)
+            .map(Some)
+            .map_err(io::Error::other)
+    }
+
+    /// The simulation this config starts, from the players `opened` knew, saving to it.
+    pub(crate) fn sim(&self, opened: Option<Opened>, delivery: Delivery) -> io::Result<Sim> {
+        let players = opened
+            .as_ref()
+            .map(|o| o.players.clone())
+            .unwrap_or_default();
+        let roster = Roster::new(players, self.map, self.tick_ms);
+        let writer = opened.map(|o| Writer::start(o, self.saving)).transpose()?;
+        let sim = Sim::new(
+            self.spawns.clone(),
+            self.limits,
+            self.view,
+            self.map,
+            self.tick_ms,
+        )
+        .with_game(
+            self.game
+                .as_ref()
+                .map(|g| g.start(u32::from(self.tick_ms), delivery)),
+        )
+        .with_roster(roster, writer);
+        Ok(sim)
     }
 }
 
@@ -55,6 +98,8 @@ impl Default for Config {
             limits: Limits::default(),
             view: View::default(),
             game: None,
+            world: None,
+            saving: Saving::default(),
             record: None,
             window: None,
         }
@@ -103,35 +148,18 @@ impl WindowStart {
     }
 }
 
-pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
+pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::Result<Summary> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(cfg.tick_threads)
         .thread_name(|i| format!("tick-{i}"))
         .build()
         .map_err(io::Error::other)?;
-    let mut sim = Sim::new(
-        cfg.spawns.clone(),
-        cfg.limits,
-        cfg.view,
-        cfg.map,
-        cfg.tick_ms,
-    )
-    .with_game(
-        cfg.game
-            .as_ref()
-            .map(|g| g.start(u32::from(cfg.tick_ms), Delivery::Canonical)),
-    );
-    let mut log = match &cfg.record {
-        Some(path) => Some(LogWriter::create(
-            path,
-            &Header {
-                tick_ms: cfg.tick_ms,
-                check: cfg.limits.check,
-                spawns: sim.world().spawns().to_vec(),
-            },
-        )?),
-        None => None,
-    };
+    let mut sim = cfg.sim(opened, Delivery::Canonical)?;
+    let mut log = cfg
+        .record
+        .as_ref()
+        .map(|path| log(path, cfg, &sim))
+        .transpose()?;
     let period = Duration::from_millis(u64::from(cfg.tick_ms));
     let mut due = Instant::now();
     let mut ticks: Vec<TickStats> = Vec::new();
@@ -148,6 +176,15 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         let st = sim.tick(&pool, &inputs, InputOrder::Canonical, Batches::Send(shared));
         if let Some(log) = &mut log {
             log.tick(st.tick, &inputs, st.hash)?;
+        }
+        sim.release();
+        if let Some(writer) = sim.writer() {
+            if let Some(why) = writer.failed() {
+                return Err(io::Error::other(why));
+            }
+            if let Some(back) = st.tick.checked_sub(MOST_TICKS_HELD) {
+                writer.wait_released(back).map_err(io::Error::other)?;
+            }
         }
         ticks.push(st);
         let n = ticks.len();
@@ -181,6 +218,11 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     if let Some(log) = log {
         log.finish()?;
     }
+    stop(&mut sim, &mut ticks)?;
+    if let Some(m) = &mut measured {
+        let window = measured_at.saturating_sub(m.ticks)..measured_at;
+        m.saving = SaveCost::of(ticks.get(window).unwrap_or_default());
+    }
     let mut summary = measured
         .or_else(|| mark.map(|m| m.summary(&ticks, cfg.tick_threads, shared)))
         .unwrap_or_default();
@@ -189,4 +231,29 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
     summary.players_arrived = arrived;
     summary.players_wanted = cfg.window.map_or(0, |w| w.players);
     Ok(summary)
+}
+
+fn log(path: &std::path::Path, cfg: &Config, sim: &Sim) -> io::Result<LogWriter> {
+    let header = Header {
+        tick_ms: cfg.tick_ms,
+        check: cfg.limits.check,
+        map: cfg.map,
+        spawns: sim.world().spawns().to_vec(),
+        players: sim.roster().players().cloned().collect(),
+    };
+    LogWriter::create(path, &header)
+}
+
+/// Saves where everyone stands, makes every change durable, and puts each transaction beside
+/// the tick that made it.
+fn stop(sim: &mut Sim, ticks: &mut [TickStats]) -> io::Result<()> {
+    sim.stop();
+    if let Some(writer) = sim.take_writer() {
+        for c in writer.finish().map_err(io::Error::other)? {
+            if let Some(t) = ticks.get_mut(c.tick as usize) {
+                t.commit = Some(c);
+            }
+        }
+    }
+    Ok(())
 }

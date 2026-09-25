@@ -148,6 +148,19 @@ impl Client {
     }
 }
 
+/// A world file of its own for a test, none there yet.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("worlds");
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let file = dir.join(format!("{name}.sqlite"));
+    for end in ["", "-wal", "-shm"] {
+        let mut name = file.as_os_str().to_owned();
+        name.push(end);
+        let _ = std::fs::remove_file(name);
+    }
+    file
+}
+
 fn input(conn: u32, nth: u32, input: Input) -> Stamped {
     Stamped {
         conn,
@@ -174,10 +187,12 @@ fn a_game_roots_and_places_a_body_and_its_observers_are_shown_its_state() {
         pos: [x, 0.0, 0.0],
         facing: 0.0,
     });
+    let world = scratch("roots-and-places");
     let cfg = Config {
         tick_threads: 2,
         spawns: spawns.to_vec(),
         game: Some(game::load::<Tag>(None, &[], 1).expect("a game")),
+        world: Some(world.clone()),
         ..Config::default()
     };
     let mut stepper =
@@ -209,7 +224,7 @@ fn a_game_roots_and_places_a_body_and_its_observers_are_shown_its_state() {
     let mut hashes = Vec::new();
     for inputs in &ticks {
         hashes.push(stepper.tick(inputs).hash);
-        assert_eq!(stepper.saves_differ(), None);
+        assert_eq!(stepper.file_differs(), None);
         seen.push((clients[0].batch(), clients[1].batch()));
     }
     assert_eq!(seen[0].0, [Got::Appear(1), Got::Shown(1, 0)]);
