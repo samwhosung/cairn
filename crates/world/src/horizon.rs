@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::mesh::{Indices, PrimitiveTopology};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Buffer};
 use bevy::shader::ShaderRef;
 use wdl::WdlFile;
 
 use crate::coords::{bevy_to_wow, wow_to_bevy};
+use crate::draw_order::OrderedMaterialPlugin;
 use crate::light::LightBuffer;
 use crate::view::WorldCamera;
 use crate::{CurrentMap, Install, Residency};
@@ -39,7 +40,7 @@ pub(crate) struct HorizonPlugin;
 impl Plugin for HorizonPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "wdl.wgsl");
-        app.add_plugins(MaterialPlugin::<WdlMaterial>::default())
+        app.add_plugins(OrderedMaterialPlugin::<WdlMaterial>::default())
             .init_resource::<Horizon>();
     }
 }

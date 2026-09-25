@@ -2,22 +2,19 @@ use std::collections::HashMap;
 use std::num::NonZeroU16;
 
 use bevy::asset::{AssetId, UntypedAssetId, embedded_asset};
-use bevy::ecs::system::StaticSystemParam;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
-    MaterialPlugin,
 };
 use bevy::prelude::*;
-use bevy::render::erased_render_asset::{ErasedRenderAsset, ExtractedAssets};
 use bevy::render::render_resource::{
     AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, Buffer, ColorWrites,
     CompareFunction, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::ShaderRef;
 use model::{FogPolicy, ModelBlend, WmoBatchClass};
 
+use crate::draw_order::OrderedMaterialPlugin;
 use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
 use crate::sky_order::{BAND_DROP, FAR_SIDE_SORT_RUNG};
 
@@ -207,36 +204,8 @@ pub(crate) struct ModelMaterialPlugin;
 impl Plugin for ModelMaterialPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "model.wgsl");
-        app.add_plugins(MaterialPlugin::<ModelMaterial>::default())
+        app.add_plugins(OrderedMaterialPlugin::<ModelMaterial>::default())
             .init_resource::<ModelMaterials>();
-        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.add_systems(
-                Render,
-                bind_groups_in_id_order
-                    .after(RenderSystems::ExtractCommands)
-                    .before(RenderSystems::PrepareAssets),
-            );
-        }
-    }
-}
-
-type Extracted = ExtractedAssets<MeshMaterial3d<ModelMaterial>>;
-type UnloadParam = <MeshMaterial3d<ModelMaterial> as ErasedRenderAsset>::Param;
-
-/// Bevy numbers a frame's new material bind groups, and frees its removed ones for reuse, in a hash
-/// order that takes in the type's id, which changes with the build; on one opaque pipeline the
-/// higher-numbered bind group wins an exact depth tie. Bevy's unload, run again on `removed`, then
-/// frees nothing.
-fn bind_groups_in_id_order(
-    mut extracted: ResMut<'_, Extracted>,
-    unload: StaticSystemParam<'_, '_, UnloadParam>,
-) {
-    extracted.extracted.sort_unstable_by_key(|(id, _)| *id);
-    let mut removed: Vec<_> = extracted.removed.iter().copied().collect();
-    removed.sort_unstable();
-    let mut unload = unload.into_inner();
-    for id in removed {
-        MeshMaterial3d::<ModelMaterial>::unload_asset(id, &mut unload);
     }
 }
 

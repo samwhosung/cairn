@@ -9,7 +9,6 @@ use bevy::mesh::{
 };
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
-    MaterialPlugin,
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
@@ -22,6 +21,7 @@ use super::query::{LiquidSource, WmoPool, world_grid};
 use super::{FoamPatch, frames};
 use crate::Install;
 use crate::coords::wow_to_bevy;
+use crate::draw_order::OrderedMaterialPlugin;
 use crate::light::LightBuffer;
 use crate::portal::WmoGroupVis;
 use crate::sky_order::WATER_SORT_RUNG;
@@ -80,7 +80,7 @@ impl MaterialExtension for LiquidExtension {
 
 pub(super) fn plugin(app: &mut App) {
     embedded_asset!(app, "liquid.wgsl");
-    app.add_plugins(MaterialPlugin::<LiquidMaterial>::default());
+    app.add_plugins(OrderedMaterialPlugin::<LiquidMaterial>::default());
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

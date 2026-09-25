@@ -1,1 +1,4 @@
 doc-valid-idents = ["WoW", ".."]
+disallowed-types = [
+  { path = "bevy::pbr::MaterialPlugin", reason = "add a material with world's OrderedMaterialPlugin, which hands out its bind groups in id order" },
+]

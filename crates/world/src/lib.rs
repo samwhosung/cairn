@@ -15,6 +15,7 @@ mod dbc_table;
 mod decal;
 mod doodad_anim;
 mod doodad_events;
+mod draw_order;
 pub mod effects;
 mod glow;
 mod ground;

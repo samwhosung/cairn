@@ -3,11 +3,11 @@ mod layer;
 mod tables;
 
 use bevy::asset::embedded_asset;
-use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 use crate::celestial::SPRITE_SPHERE_YARDS;
+use crate::draw_order::OrderedMaterialPlugin;
 use crate::light::SceneLight;
 use crate::submersion::Underwater;
 use crate::view::WorldCamera;
@@ -44,7 +44,7 @@ pub(crate) struct CloudsPlugin;
 impl Plugin for CloudsPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "cloud.wgsl");
-        app.add_plugins(MaterialPlugin::<CloudMaterial>::default())
+        app.add_plugins(OrderedMaterialPlugin::<CloudMaterial>::default())
             .init_resource::<CloudCoverage>()
             .init_resource::<CloudClock>()
             .add_systems(Startup, layer::spawn_layer)

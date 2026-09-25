@@ -3,7 +3,6 @@ use bevy::camera::Projection;
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
-    MaterialPlugin,
 };
 use bevy::prelude::*;
 use bevy::render::render_resource::{
@@ -12,6 +11,7 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
 
+use crate::draw_order::OrderedMaterialPlugin;
 use crate::light::SceneLight;
 use crate::sky_order::{SKY_VERTEX_SHADER, sky_pipeline_state};
 use crate::skybox::SkyPass;
@@ -70,7 +70,7 @@ impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "sky.wgsl");
         embedded_asset!(app, "sky_vertex.wgsl");
-        app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
+        app.add_plugins(OrderedMaterialPlugin::<SkyMaterial>::default())
             .add_systems(Startup, spawn_dome)
             .add_systems(
                 PostUpdate,

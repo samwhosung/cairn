@@ -5,11 +5,12 @@ mod setup;
 
 use bevy::asset::embedded_asset;
 use bevy::camera::visibility::VisibilitySystems;
-use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
 pub use materials::{CelestialMaterial, StarMaterial};
+
+use crate::draw_order::OrderedMaterialPlugin;
 
 pub(crate) const SPRITE_SPHERE_YARDS: f32 = 12.0;
 
@@ -37,8 +38,8 @@ impl Plugin for CelestialPlugin {
         embedded_asset!(app, "celestial.wgsl");
         embedded_asset!(app, "star.wgsl");
         app.add_plugins((
-            MaterialPlugin::<CelestialMaterial>::default(),
-            MaterialPlugin::<StarMaterial>::default(),
+            OrderedMaterialPlugin::<CelestialMaterial>::default(),
+            OrderedMaterialPlugin::<StarMaterial>::default(),
         ))
         .add_systems(Startup, setup::spawn_bodies)
         .add_systems(

@@ -1,10 +1,11 @@
 use bevy::asset::embedded_asset;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Buffer, Face};
 use bevy::shader::ShaderRef;
 
 use crate::adt::AdtTile;
+use crate::draw_order::OrderedMaterialPlugin;
 
 pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 
@@ -39,7 +40,7 @@ pub(crate) struct TerrainMaterialPlugin;
 impl Plugin for TerrainMaterialPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "terrain.wgsl");
-        app.add_plugins(MaterialPlugin::<TerrainMaterial>::default());
+        app.add_plugins(OrderedMaterialPlugin::<TerrainMaterial>::default());
     }
 }
 
