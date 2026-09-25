@@ -113,6 +113,10 @@ pub struct UnitShow {
     /// Played once from its start, then taken: one told before it ends cuts it short. A body not
     /// standing still plays most of them above its lower spine, its legs going on as they were, and
     /// a combat or cast one begun standing moves up there, where it stands, once the legs set off.
+    /// A wound cuts nothing short: it is laid over whatever the body plays, three quarters of the
+    /// pose at the hit and easing out over its clip, above the lower spine unless the body stands
+    /// in a ready stance or stands still in a stand wound, until the next play there takes it; a
+    /// body whose stand state is dead shows none.
     pub play: Option<u16>,
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
@@ -298,12 +302,15 @@ pub(crate) fn is_wound(id: u16) -> bool {
     matches!(id, STAND_WOUND | COMBAT_WOUND | COMBAT_CRITICAL)
 }
 
-/// The client lays a wound over the whole body when the body stands in a ready stance, and a
-/// stand wound when the body is still; any other over the upper body alone.
+/// Routes a wound as the client does.
 pub(crate) fn wound_takes_whole_body(id: u16, base: u16, flags: u32) -> bool {
     use move_flags::{ANY_MOVE, FALLING, SWIMMING};
-    matches!(base, READY_UNARMED..=READY_BOW)
-        || (id == STAND_WOUND && flags & (ANY_MOVE | FALLING | SWIMMING) == 0)
+    let still = flags & (ANY_MOVE | FALLING | SWIMMING) == 0;
+    is_ready_stance(base) || (id == STAND_WOUND && still)
+}
+
+fn is_ready_stance(id: u16) -> bool {
+    matches!(id, READY_UNARMED..=READY_BOW)
 }
 
 pub(crate) fn moves_up_when_the_legs_move(id: u16) -> bool {

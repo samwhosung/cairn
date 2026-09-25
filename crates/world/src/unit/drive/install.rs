@@ -380,11 +380,9 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
     );
 }
 
-/// Benilla's wound: a share of the pose that eases out from three quarters over the clip, laid
-/// over what the body plays, weighed a frame behind the clip's time as its slot is.
-fn benillas_wound_share(frame: usize, span: f32) -> f32 {
-    let t = (1.0 - frame as f32 * STEP.as_secs_f32() / span).clamp(0.0, 1.0);
-    (3.0 - 2.0 * t) * t * t * 0.75
+fn the_clients_wound_share(weighed_at: f32, span: f32) -> f32 {
+    let fraction_left = (1.0 - weighed_at / span).clamp(0.0, 1.0);
+    (3.0 - 2.0 * fraction_left) * fraction_left * fraction_left * 0.75
 }
 
 #[test]
@@ -427,13 +425,14 @@ fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_tors
     let dt = STEP.as_secs_f32();
     let (mut worst_off, mut shown) = (0.0_f32, 0);
     for f in 0..frames_in(wound.duration) - 1 {
-        let share = benillas_wound_share(f, wound.duration);
+        let (weighed_at, sampled_at) = (f as f32 * dt, (f + 1) as f32 * dt);
+        let share = the_clients_wound_share(weighed_at, wound.duration);
         for bone in keyed
             .bones
             .iter()
             .filter(|b| src.bone_masks[usize::from(b.bone)] == 0)
         {
-            let Some(flinch) = bone.rotation.sample((f + 1) as f32 * dt) else {
+            let Some(flinch) = bone.rotation.sample(sampled_at) else {
                 continue;
             };
             let b = usize::from(bone.bone);
@@ -442,7 +441,7 @@ fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_tors
             worst_off = worst_off.max(off);
             assert!(
                 off < 2e-3,
-                "frame {f}: bone {b} stands {off} rad off benilla's wound, share {share}"
+                "frame {f}: bone {b} stands {off} rad off the client's wound, share {share}"
             );
             shown += usize::from(angle(run[f][b].rotation, hit[f][b].rotation) > VISIBLY_APART_RAD);
         }
@@ -451,7 +450,7 @@ fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_tors
     eprintln!(
         "the {} bones below the spine are the run's bit for bit on all {frames} frames, standing \
          and running from frame {runs_from}; above it, the wound's share of the pose is \
-         benilla's to within {worst_off:.2e} rad, {shown} bone-frames over {VISIBLY_APART_RAD} \
+         the client's to within {worst_off:.2e} rad, {shown} bone-frames over {VISIBLY_APART_RAD} \
          rad from the run",
         legs.len(),
     );

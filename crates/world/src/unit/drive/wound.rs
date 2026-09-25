@@ -8,7 +8,8 @@ use super::super::motion::{StandState, UnitMotion, wound_takes_whole_body};
 use super::{UPPER_BODY_OVER_GAIT, UnitDriver, resolved_clip, smoothstep};
 use crate::rig::{AnimRng, ModelAnimations};
 
-/// The client's wound peaks at this share of the pose, never replacing it.
+/// The client's wound starts at this share of the pose and eases out over its clip, never
+/// replacing it.
 const WOUND_PEAK_SHARE: f32 = 0.75;
 
 #[derive(Clone, Copy)]
@@ -18,10 +19,11 @@ pub(super) struct Wound {
     upper_body_only: bool,
 }
 
-/// The weight that gives the wound its share of the pose among the weight of the rest: the
-/// client eases the share out from its peak over the clip.
-fn wound_weight(fraction_left: f32, the_rest: f32) -> f32 {
-    let share = smoothstep(fraction_left) * WOUND_PEAK_SHARE;
+fn wound_share(fraction_left: f32) -> f32 {
+    smoothstep(fraction_left) * WOUND_PEAK_SHARE
+}
+
+fn weight_for_share(share: f32, the_rest: f32) -> f32 {
     the_rest * share / (1.0 - share)
 }
 
@@ -42,7 +44,7 @@ impl UnitDriver {
         match player.animation_mut(wound.node) {
             Some(active) if !active.is_finished() => {
                 let fraction_left = 1.0 - active.seek_time() / wound.span;
-                active.set_weight(wound_weight(fraction_left, the_rest));
+                active.set_weight(weight_for_share(wound_share(fraction_left), the_rest));
             }
             _ => {
                 player.stop(wound.node);
@@ -51,7 +53,8 @@ impl UnitDriver {
         }
     }
 
-    /// The client's next blended play on the wound's bones takes its slot.
+    /// The client's next blended play on the wound's own track, the base or the upper body, takes
+    /// its slot.
     pub(super) fn evict_wound(
         &mut self,
         player: &mut AnimationPlayer,
@@ -105,7 +108,7 @@ impl UnitDriver {
         player
             .start(node)
             .set_repeat(RepeatAnimation::Never)
-            .set_weight(wound_weight(1.0, the_rest));
+            .set_weight(weight_for_share(wound_share(1.0), the_rest));
         self.wound = Some(Wound {
             node,
             span: clip.duration,
