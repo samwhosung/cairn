@@ -1,9 +1,9 @@
 use std::fmt;
 
-use game::{Hosted, Id};
+use game::{Hosted, Id, Shows};
 use protocol::{
-    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_game,
-    write_granted, write_move, write_place, write_state, write_turn, write_vanish,
+    SLOTS, Show, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_game,
+    write_granted, write_move, write_place, write_show, write_state, write_turn, write_vanish,
 };
 
 use crate::grid::Grid;
@@ -317,6 +317,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     if let Some(game) = scene.game {
         let came = if rechecked { &s.came[..] } else { &[] };
         pass.write_game_changes(&o.seen, &game.record().shown, came);
+        pass.write_shows(o.id, &o.seen, game.shows(), came);
     }
     finish_frame(&mut out, start);
     built.bytes = out.len() as u64;
@@ -410,8 +411,12 @@ impl Pass<'_> {
         );
         self.built.shared_bytes += write_appear(self.out, slot, intro, relay) as u64;
         self.built.appeared += 1;
-        if let Some(state) = self.game.and_then(|g| g.shown(id)) {
+        let Some(game) = self.game else { return };
+        if let Some(state) = game.shown(id) {
             self.built.shared_bytes += write_game(self.out, slot, state) as u64;
+        }
+        if let Some(pose) = game.held(id) {
+            write_show(self.out, Some(slot), Show::Hold(Some(pose.0)));
         }
     }
 
@@ -423,6 +428,31 @@ impl Pass<'_> {
             let Some(e) = rest.first() else { break };
             if e.id == id.n && came.binary_search(&id.n).is_err() {
                 self.built.shared_bytes += write_game(self.out, e.slot, state) as u64;
+            }
+        }
+    }
+
+    /// What the bodies in view and the observer's own showed this tick; a body that came into view
+    /// was shown its pose as it appeared.
+    fn write_shows(&mut self, me: u32, seen: &[Seen], shows: &Shows, came: &[u32]) {
+        let slot_of = |n: u32| {
+            if n == me {
+                return Some(None);
+            }
+            let at = seen.binary_search_by_key(&n, |e| e.id).ok()?;
+            Some(Some(seen[at].slot))
+        };
+        for &(n, anim) in &shows.played {
+            if let Some(slot) = slot_of(n) {
+                write_show(self.out, slot, Show::Play(anim.0));
+            }
+        }
+        for &(n, pose) in &shows.held {
+            if n != me && came.binary_search(&n).is_ok() {
+                continue;
+            }
+            if let Some(slot) = slot_of(n) {
+                write_show(self.out, slot, Show::Hold(pose.map(|a| a.0)));
             }
         }
     }

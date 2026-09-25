@@ -48,7 +48,7 @@ impl Shown {
 
     pub fn differs(&self, view: &[InView<'_>]) -> Option<String> {
         let mut ours = self.by_slot.iter();
-        for &InView { slot, id, state } in view {
+        for &InView { slot, id, state, .. } in view {
             match ours.next() {
                 Some((&s, (i, held)))
                     if s == slot && *i == id && held.as_deref() == Some(state) => {}

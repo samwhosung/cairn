@@ -20,12 +20,14 @@ pub struct Stepper {
     batches: bool,
 }
 
-/// An entity in an observer's view: the slot its client knows it by, and the game's state of it.
+/// An entity in an observer's view: the slot its client knows it by, the game's state of it and
+/// the pose the game has its body hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InView<'a> {
     pub slot: u16,
     pub id: u32,
     pub state: &'a [u8],
+    pub pose: Option<u16>,
 }
 
 /// A client's end of its connection to a [`Stepper`]: the frames the server sent it, in order.
@@ -114,11 +116,42 @@ impl Stepper {
             .into_iter()
             .map(|(slot, id)| {
                 let state = game.and_then(|g| g.shown(id)).unwrap_or_default();
-                InView { slot, id, state }
+                let pose = game.and_then(|g| g.held(id)).map(|a| a.0);
+                InView {
+                    slot,
+                    id,
+                    state,
+                    pose,
+                }
             })
             .collect();
         view.sort_unstable_by_key(|v| v.slot);
         Some(view)
+    }
+
+    /// The pose the game has observer `id`'s own body hold.
+    pub fn pose_of(&self, id: u32) -> Option<u16> {
+        self.sim.game()?.held(id).map(|a| a.0)
+    }
+
+    /// The animations this tick played on the bodies in observer `id`'s view, by slot, and on its
+    /// own, with no slot, in the order they were played.
+    pub fn played_to(&self, id: u32) -> Vec<(Option<u16>, u16)> {
+        let (Some(game), Some(view)) = (self.sim.game(), self.sim.in_view(id)) else {
+            return Vec::new();
+        };
+        let slot_of = |n: u32| {
+            if n == id {
+                return Some(None);
+            }
+            let at = view.binary_search_by_key(&n, |&(_, v)| v).ok()?;
+            Some(Some(view[at].0))
+        };
+        game.shows()
+            .played
+            .iter()
+            .filter_map(|&(n, anim)| Some((slot_of(n)?, anim.0)))
+            .collect()
     }
 
     pub fn saves_differ(&self) -> Option<String> {
