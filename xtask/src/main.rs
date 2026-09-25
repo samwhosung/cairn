@@ -13,6 +13,7 @@ const USAGE: &str = "usage: cargo xtask <command>
   commit-msg <file>   lint one commit message (the commit-msg hook)
   commits <range>     lint every commit message in a git range
   map [--check]       regenerate the crate list in README.md
+  pictures <dir>      run the tests that draw the app on the GPU, saving their shots in <dir>
   setup               use the repo's git hooks";
 
 fn main() -> ExitCode {
@@ -30,6 +31,10 @@ fn main() -> ExitCode {
             .and_then(|f| commit_msg(Path::new(f))),
         Some("commits") => commits(&root, args.get(1).map_or("HEAD", String::as_str)),
         Some("map") => map(&root, flag("--check")),
+        Some("pictures") => args
+            .get(1)
+            .context("pictures needs a directory for the shots")
+            .and_then(|d| pictures(&root, Path::new(d))),
         Some("setup") => run(&root, "git", &["config", "core.hooksPath", "hooks"]),
         _ => {
             eprintln!("{USAGE}");
@@ -89,6 +94,9 @@ fn check(root: &Path, fast: bool) -> Result<()> {
         });
         step("deny", &|| run(root, "cargo-deny", &["check"]));
         step("machete", &|| run(root, "cargo-machete", &[]));
+        if std::env::var_os("WOW_DATA").is_none() {
+            println!("note  WOW_DATA is not set, so the tests on the install were skipped");
+        }
     }
     if failed.is_empty() {
         Ok(())
@@ -167,6 +175,42 @@ fn commits(root: &Path, range: &str) -> Result<()> {
         return Ok(());
     }
     bail!("{}", bad.join("\n"))
+}
+
+/// The tests that start the whole app on the GPU and save what it draws. The pair runs on its own:
+/// beside the others, it has missed its wall-clock deadlines.
+const PICTURES: [&[&str]; 2] = [
+    &["scenarios::pictures::", "--skip", "the_frame_cost"],
+    &["scenarios::together::two_players"],
+];
+
+fn pictures(root: &Path, dir: &Path) -> Result<()> {
+    if std::env::var_os("WOW_DATA").is_none() {
+        bail!("pictures needs WOW_DATA, the install's Data directory");
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dir = std::path::absolute(dir).context("resolving the shots' directory")?;
+    for filter in PICTURES {
+        let out = Command::new("cargo")
+            .args(["test", "-q", "-p", "cairn", "--locked", "--", "--ignored"])
+            .args(filter)
+            .env("CAIRN_PICTURES", &dir)
+            .current_dir(root)
+            .output()
+            .context("running cargo test")?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        print!("{text}");
+        if !out.status.success() {
+            bail!("{}", String::from_utf8_lossy(&out.stderr));
+        }
+        let passed = text.lines().any(|l| {
+            l.starts_with("test result: ok.") && !l.starts_with("test result: ok. 0 passed")
+        });
+        if !passed {
+            bail!("no test matched {}", filter.join(" "));
+        }
+    }
+    Ok(())
 }
 
 /// The crate list in README.md, generated from each member's `description`.

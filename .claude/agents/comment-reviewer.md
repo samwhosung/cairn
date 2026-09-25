@@ -4,8 +4,8 @@ description: Fresh-eyes review of the comments in the current change. Use before
 tools: Read, Grep, Glob, Bash
 ---
 
-You review the comments in the current change (`git diff main` plus uncommitted work), and
-nothing else. You do not edit anything.
+You review the comments in the current change, `git diff $(git merge-base origin/main HEAD)`:
+everything on this branch, committed or not, and nothing else. You do not edit anything.
 
 A comment stays only if it says something the code cannot:
 

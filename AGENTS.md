@@ -27,6 +27,8 @@ at run time.
   and says how to install any that is missing.
 - Set `WOW_DATA` to the install's `Data` directory. Without it the tests that read the install
   skip, and a green check says nothing about them.
+- A change to the client: `cargo xtask pictures <dir>` runs the tests that start the app on the
+  GPU and saves their shots in `<dir>`. Look at them.
 - Small commits on a branch, with conventional messages: `feat(mpq): read the patch chain`. A branch
   lands on `main` by fast-forward once `cargo xtask check` passes on it.
 - Prove it works: run the real thing and read the real output. "It compiles" is not done.
@@ -52,8 +54,10 @@ a check fails.
 
 - Fix the cause, not the symptom. A workaround is a question to answer, not an answer.
 - Delete before adding. The smallest change that solves the problem wins.
+- A new file reader gets a test that truncated and bit-flipped copies of the install's files
+  give an error, never a panic or a runaway.
 - If you catch yourself writing the same instruction twice, make it a rule in `xtask` instead.
   What the next agent must know to avoid a real mistake, and no gate can check, goes in this file
   in a line.
-- Before landing a change with comments in it, have a fresh agent review them
+- Before a branch with comments in it lands, a fresh agent reviews them
   (`.claude/agents/comment-reviewer.md`). The author defends its comments; a stranger doesn't.
