@@ -119,7 +119,7 @@ fn square_facing_up_five_yards_down(blend: ModelBlend) -> Candidate {
             blend,
             ..RenderSubmesh::default()
         }),
-        seen: Seen::Terrain { chunk: (0, 0) },
+        seen: Seen::Terrain { column: 0, row: 0 },
     }
 }
 

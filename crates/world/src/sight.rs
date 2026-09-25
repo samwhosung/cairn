@@ -19,8 +19,8 @@ use crate::stream::Streamer;
 /// What a ray met. A file is its path in the install.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Seen {
-    /// The terrain of the tile's ADT: the chunk's column and row in it.
-    Terrain { chunk: (u32, u32) },
+    /// A chunk of the terrain of the tile's ADT.
+    Terrain { column: u32, row: u32 },
     /// An M2 the map places, by its placement's unique id in the ADTs.
     Doodad { file: Arc<str>, unique_id: u32 },
     /// A group of a WMO the map places.
@@ -29,12 +29,11 @@ pub enum Seen {
         unique_id: u32,
         group: u16,
     },
-    /// An M2 a WMO places, by its index among the WMO's doodads; `building` is the WMO's file and
-    /// `unique_id` the WMO's placement.
+    /// An M2 a WMO places, by its index among the WMO's doodads.
     Prop {
         file: Arc<str>,
-        building: Arc<str>,
-        unique_id: u32,
+        building_file: Arc<str>,
+        building_unique_id: u32,
         doodad: usize,
     },
 }
@@ -80,9 +79,9 @@ pub struct Sight<'w, 's> {
 impl Sight<'_, '_> {
     /// A ray from `origin` along `dir`, in Bevy's axes, out to `reach`. The terrain's nearest face
     /// is found now, and the model batches the ray enters nearer than it are kept for
-    /// [`Ray::first`], which can run on any thread. Cast after `PostUpdate`'s visibility check,
+    /// [`Cast::first`], which can run on any thread. Cast after `PostUpdate`'s visibility check,
     /// they are the batches drawn this frame.
-    pub fn cast(&self, origin: Vec3, dir: Dir3, reach: f32) -> Ray {
+    pub fn cast(&self, origin: Vec3, dir: Dir3, reach: f32) -> Cast {
         let mut terrain: Option<(f32, Seen, (u32, u32))> = None;
         let (from_wow, dir_wow) = (
             Vec3::from(bevy_to_wow(origin)),
@@ -93,7 +92,8 @@ impl Sight<'_, '_> {
                 let limit = terrain.as_ref().map_or(reach, |t| t.0);
                 if let Some(t) = chunk_hit(chunk, from_wow, dir_wow, limit) {
                     let seen = Seen::Terrain {
-                        chunk: (chunk.index_x, chunk.index_y),
+                        column: chunk.index_x,
+                        row: chunk.index_y,
                     };
                     terrain = Some((t, seen, tile));
                 }
@@ -124,7 +124,7 @@ impl Sight<'_, '_> {
             }
         }
         batches.sort_by(|a, b| a.enters.total_cmp(&b.enters));
-        Ray {
+        Cast {
             origin,
             dir: *dir,
             terrain,
@@ -136,7 +136,7 @@ impl Sight<'_, '_> {
 }
 
 /// A ray cast into what was drawn, still to be followed through the model batches it enters.
-pub struct Ray {
+pub struct Cast {
     origin: Vec3,
     dir: Vec3,
     terrain: Option<(f32, Seen, (u32, u32))>,
@@ -152,7 +152,7 @@ struct Candidate {
     seen: Seen,
 }
 
-impl Ray {
+impl Cast {
     /// The nearest face the ray meets. A face is met from the side it is drawn from, and a batch
     /// that turns to the camera or is two-sided from either. A batch that cuts out or blends is met
     /// only where its texture, read from the install, passes the client's alpha key: nowhere when

@@ -72,8 +72,8 @@ pub(super) fn resolve_props(
             };
             let seen = Seen::Prop {
                 file: install_path(&p.url),
-                building: file.clone(),
-                unique_id,
+                building_file: file.clone(),
+                building_unique_id: unique_id,
                 doodad: p.doodad,
             };
             Prop {

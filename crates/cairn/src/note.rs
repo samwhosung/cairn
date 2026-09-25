@@ -10,7 +10,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
 use bevy::transform::TransformSystems;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use world::coords::bevy_to_wow;
-use world::sight::{Ray, Seen, Sight, Sighting};
+use world::sight::{Cast, Seen, Sight, Sighting};
 use world::{CurrentMap, FARCLIP, FullScreenGlow, NEARCLIP, TimeOfDay, WorldCamera};
 
 use crate::player::{Mode, Player};
@@ -152,8 +152,8 @@ struct PendingNote {
     facts: Facts,
     camera: GlobalTransform,
     feet: Vec3,
-    through_spot: Ray,
-    line_of_sight: Ray,
+    through_spot: Cast,
+    line_of_sight: Cast,
 }
 
 impl PendingNote {
@@ -301,8 +301,9 @@ impl Facts {
 
 fn named(seen: &Seen, adt: &str) -> String {
     match seen {
-        Seen::Terrain { chunk: (x, y) } => {
-            format!("terrain, chunk {x},{y} (MCNK {}) of {adt}", y * 16 + x)
+        Seen::Terrain { column, row } => {
+            let mcnk = row * 16 + column;
+            format!("terrain, chunk {column},{row} (MCNK {mcnk}) of {adt}")
         }
         Seen::Doodad { file, unique_id } => format!("doodad, unique id {unique_id}, {file}"),
         Seen::Building {
@@ -312,10 +313,12 @@ fn named(seen: &Seen, adt: &str) -> String {
         } => format!("building, unique id {unique_id}, {file}, group {group}"),
         Seen::Prop {
             file,
-            building,
-            unique_id,
+            building_file,
+            building_unique_id,
             doodad,
-        } => format!("{file}, doodad {doodad} of building unique id {unique_id}, {building}"),
+        } => format!(
+            "{file}, doodad {doodad} of building unique id {building_unique_id}, {building_file}"
+        ),
     }
 }
 
