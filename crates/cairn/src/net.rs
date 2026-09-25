@@ -175,12 +175,19 @@ pub fn join(
     heading: f32,
 ) -> Result<(), CannotHost> {
     let hello = hello(joining.name.clone(), look);
+    let game = joining.game.as_ref().map(|g| {
+        let (knobs, overlay) = (g.knobs.as_deref(), g.overlay.as_deref());
+        catalog::from_files(&g.name, knobs, overlay, 0)
+    });
+    let game = game.transpose().map_err(CannotHost)?;
+    let served = |port: Option<u16>| server::Config {
+        game: game.clone(),
+        ..own_server(port, map, start, heading)
+    };
     let net = match joining.how {
         Join::Connect(addr) => Net::connect(addr, hello),
-        Join::Host(port) => {
-            Net::host(own_server(Some(port), map, start, heading), hello).map_err(CannotHost)?
-        }
-        Join::Alone => match Net::host(own_server(None, map, start, heading), hello) {
+        Join::Host(port) => Net::host(served(Some(port)), hello).map_err(CannotHost)?,
+        Join::Alone => match Net::host(served(None), hello) {
             Ok(net) => net,
             Err(e) => {
                 warn!("{e}; playing on alone");
@@ -223,15 +230,17 @@ fn receive(
     mut player: ResMut<'_, Player>,
     mut rigs: Query<'_, '_, &mut CameraRig>,
 ) {
-    let alone = |commands: &mut Commands<'_, '_>, net: &mut Net, why: String| {
-        warn!("{why}; playing on alone");
-        net.others.leave_all(commands, time.elapsed_secs());
-        commands.remove_resource::<Net>();
-    };
+    let alone =
+        |commands: &mut Commands<'_, '_>, net: &mut Net, player: &mut Player, why: String| {
+            warn!("{why}; playing on alone");
+            player.rooted = false;
+            net.others.leave_all(commands, time.elapsed_secs());
+            commands.remove_resource::<Net>();
+        };
     for arrival in net.link.arrivals() {
         let (frame, arrived) = match arrival {
             Arrival::Frame { bytes, arrived } => (bytes, arrived),
-            Arrival::Gone { reason } => return alone(&mut commands, &mut net, reason),
+            Arrival::Gone { reason } => return alone(&mut commands, &mut net, &mut player, reason),
         };
         match ServerMessage::read(&frame) {
             Ok(ServerMessage::Welcome(w)) if w.map != map.id => {
@@ -239,7 +248,7 @@ fn receive(
                     "the server is on map {}, and this window walks map {}",
                     w.map, map.id
                 );
-                return alone(&mut commands, &mut net, why);
+                return alone(&mut commands, &mut net, &mut player, why);
             }
             Ok(ServerMessage::Welcome(w)) => {
                 player.put(wow_to_bevy(w.spawn.pos), w.spawn.facing);
@@ -279,12 +288,12 @@ fn receive(
                 );
                 if let Err(e) = taken {
                     let why = format!("the server sent a broken batch ({e})");
-                    return alone(&mut commands, &mut net, why);
+                    return alone(&mut commands, &mut net, &mut player, why);
                 }
             }
             Err(e) => {
                 let why = format!("the server sent what is not a message ({e})");
-                return alone(&mut commands, &mut net, why);
+                return alone(&mut commands, &mut net, &mut player, why);
             }
         }
     }
@@ -321,6 +330,20 @@ fn take_batch(
                 if let Some(claims) = claims.as_deref_mut() {
                     claims.granted(&movement);
                     at.read_around = movement.pos;
+                }
+            }
+            Record::Place {
+                seq,
+                rooted,
+                movement,
+            } => {
+                if let Some(claims) = claims.as_deref_mut() {
+                    claims.place(player, seq, rooted, &movement);
+                    at.read_around = movement.pos;
+                    info!(
+                        "the game put the player at {:?}, {} times now; rooted: {rooted}",
+                        movement.pos, claims.placements
+                    );
                 }
             }
             record => others.take(commands, record, at),
@@ -360,7 +383,7 @@ fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {
 mod tests {
     use protocol::{
         Intro, LEN_BYTES, Movement, Relay, Why, begin_batch, finish_frame, write_appear,
-        write_correct, write_granted, write_move, write_vanish,
+        write_correct, write_granted, write_move, write_place, write_vanish,
     };
 
     use super::*;
@@ -511,6 +534,40 @@ mod tests {
         assert!(
             (east - 507.0).abs() < 0.01,
             "landing again, read {east} yd east"
+        );
+    }
+
+    #[test]
+    fn a_batch_is_read_after_a_placement_where_the_game_put_the_player() {
+        let mut r = Reader::new();
+        r.appear(20, NEIGHBOUR, 7, 9.0);
+        let landing = Movement {
+            time: 1000,
+            ..at(100.0)
+        };
+        r.player.put(wow_to_bevy(landing.pos), 0.0);
+        r.claims.teleported(&landing);
+        r.take(21, |out| {
+            write_place(out, 1, true, &at(400.0));
+            write_vanish(out, NEIGHBOUR);
+            let intro = Intro::new(8, "Beside the spawn", &Appearance::default());
+            write_appear(out, NEIGHBOUR + 1, &intro, &Relay::of(&at(405.0)));
+        });
+        let put = bevy_to_wow(r.player.pos);
+        assert!((put[0] - STOOD[0] - 400.0).abs() < 0.01, "put at {put:?}");
+        assert!(r.player.rooted);
+        let east = r.east_of_where_it_stood(8).expect("in view");
+        assert!(
+            (east - 405.0).abs() < 0.01,
+            "the new neighbour read {east} yd east"
+        );
+        r.take(22, |out| {
+            write_move(out, NEIGHBOUR + 1, &Relay::of(&at(406.0)));
+        });
+        let east = r.east_of_where_it_stood(8).expect("in view");
+        assert!(
+            (east - 406.0).abs() < 0.01,
+            "with the landing given up for the placement, read {east} yd east"
         );
     }
 

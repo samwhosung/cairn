@@ -15,12 +15,15 @@ const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
              [--connect HOST:PORT | --host [PORT]] [--name NAME]
+             [--game NAME [--knobs FILE] [--overlay FILE]]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
          else can join it. --connect joins a running server, which places the player; --host
          also serves the world on 127.0.0.1:PORT (7777 by default), and each player who
          connects there appears beside the host. NAME is who the others see, the race's name
-         by default
+         by default. --game runs a game's rules (melee) on the window's own server, on its
+         own knobs or the --knobs FILE, with an --overlay FILE laid on them; the window takes
+         where the game puts the player, and shows nothing else of it yet
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
@@ -54,7 +57,7 @@ button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, 
 where the camera is if the server lets the player teleport, as the window's own server
 does; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 22] = [
+const FLAGS: [&str; 25] = [
     "age",
     "at",
     "az",
@@ -65,12 +68,15 @@ const FLAGS: [&str; 22] = [
     "eye",
     "face",
     "facial-hair",
+    "game",
     "hair",
     "hair-color",
+    "knobs",
     "look",
     "map",
     "name",
     "out",
+    "overlay",
     "race",
     "scale",
     "sex",
@@ -108,6 +114,16 @@ pub struct Args {
 pub struct Joining {
     pub how: Join,
     pub name: String,
+    pub game: Option<Chosen>,
+}
+
+/// A game to run on the window's own server: its name, a knobs file in place of its own, and
+/// one laid on them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chosen {
+    pub name: String,
+    pub knobs: Option<PathBuf>,
+    pub overlay: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,12 +255,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let look = look(&mut given, shot)?;
     let mode = match out {
         Some(path) => {
-            if given.contains_key("connect") || host.is_some() {
-                return Err("--connect and --host are for the window".into());
-            }
-            if given.contains_key("name") {
-                return Err("--name is for joining: --connect or --host".into());
-            }
+            shot_joins_nothing(&given, host)?;
             Mode::Shot(path)
         }
         None => Mode::Window(join(&mut given, host, look)?),
@@ -262,6 +273,22 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         world_age,
         look,
     })
+}
+
+fn shot_joins_nothing(given: &BTreeMap<String, String>, host: Option<u16>) -> Result<(), String> {
+    if given.contains_key("connect") || host.is_some() {
+        return Err("--connect and --host are for the window".into());
+    }
+    if given.contains_key("name") {
+        return Err("--name is for joining: --connect or --host".into());
+    }
+    if ["game", "knobs", "overlay"]
+        .iter()
+        .any(|k| given.contains_key(*k))
+    {
+        return Err("--game, --knobs and --overlay are for the window".into());
+    }
+    Ok(())
 }
 
 fn host_port(given: Option<String>) -> Result<u16, String> {
@@ -291,12 +318,27 @@ fn join(
         (None, Some(port)) => Join::Host(port),
         (None, None) => Join::Alone,
     };
+    let game = match given.remove("game") {
+        Some(_) if matches!(how, Join::Connect(_)) => {
+            return Err("--game runs on the window's own server: alone or --host".into());
+        }
+        Some(name) => Some(Chosen {
+            name,
+            knobs: given.remove("knobs").map(PathBuf::from),
+            overlay: given.remove("overlay").map(PathBuf::from),
+        }),
+        None if given.contains_key("knobs") || given.contains_key("overlay") => {
+            return Err("--knobs and --overlay are a game's: give --game".into());
+        }
+        None => None,
+    };
     match (given.remove("name"), how) {
         (Some(_), Join::Alone) => Err("--name is for joining: --connect or --host".into()),
         (Some(name), _) if name.trim().is_empty() => Err("--name wants a name".into()),
         (name, how) => Ok(Joining {
             how,
             name: name.map_or_else(|| look.race_title(), |n| n.trim().to_owned()),
+            game,
         }),
     }
 }
@@ -486,6 +528,7 @@ mod tests {
         let alone = Joining {
             how: Join::Alone,
             name: "Human".into(),
+            game: None,
         };
         assert_eq!(args.mode, Mode::Window(alone));
         assert!(!args.start_flying);
@@ -574,6 +617,7 @@ mod tests {
             Some(Joining {
                 how,
                 name: name.into(),
+                game: None,
             })
         };
         assert_eq!(joining(""), as_(Join::Alone, "Human"));
@@ -591,6 +635,30 @@ mod tests {
             joining("--race 7 --host 7100"),
             as_(Join::Host(7100), "Gnome")
         );
+    }
+
+    #[test]
+    fn a_window_that_serves_itself_may_run_a_game_on_knobs_it_names() {
+        let game = |line: &str| match parsed(line).expect("parses").mode {
+            Mode::Window(joining) => joining.game,
+            Mode::Shot(_) => None,
+        };
+        assert_eq!(game(""), None);
+        assert_eq!(
+            game("--host --game melee --overlay a.knobs"),
+            Some(Chosen {
+                name: "melee".into(),
+                knobs: None,
+                overlay: Some(PathBuf::from("a.knobs")),
+            })
+        );
+        for wrong in [
+            "--connect 127.0.0.1:7000 --game melee",
+            "--knobs a.knobs",
+            "shot --game melee --out a.png",
+        ] {
+            assert!(parsed(wrong).is_err(), "{wrong}");
+        }
     }
 
     #[test]

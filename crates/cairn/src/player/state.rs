@@ -103,6 +103,8 @@ pub struct Player {
     /// stroke. Stale out of the water.
     pub swim_stroke_speed: f32,
     pub stand_state: StandState,
+    /// Held where it stands by the game on the server: it may turn and fall, but not walk.
+    pub rooted: bool,
 }
 
 impl Default for Player {
@@ -136,6 +138,7 @@ impl Default for Player {
             liquid_surface: None,
             swim_stroke_speed: 0.0,
             stand_state: StandState::STAND,
+            rooted: false,
         }
     }
 }

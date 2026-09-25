@@ -128,7 +128,7 @@ fn welcomed(app: &mut App) -> bool {
         .is_some()
 }
 
-fn plays_through_its_server(app: &mut App) -> Result<f64, String> {
+fn plays_through_its_server(app: &mut App) -> Result<server::Summary, String> {
     if app.world().get_resource::<Net>().is_none() {
         return Err("no server".into());
     }
@@ -161,7 +161,7 @@ fn plays_through_its_server(app: &mut App) -> Result<f64, String> {
             summary.refused
         ));
     }
-    Ok(summary.claims_per_client)
+    Ok(summary)
 }
 
 #[test]
@@ -170,9 +170,24 @@ fn a_bare_window_plays_through_a_server_of_its_own_and_a_shot_has_none() {
     let played = plays_through_its_server(&mut window);
     let mut shot = running("shot --out a.png").expect("a shot");
     let control = plays_through_its_server(&mut shot);
+    let played = played.map(|s| s.claims_per_client);
+    let control = control.map(|s| s.claims_per_client);
     eprintln!("the window: {played:?}; the shot: {control:?}");
     assert!(played.is_ok_and(|judged_a_second| judged_a_second > 0.0));
     assert_eq!(control, Err("no server".into()));
+}
+
+#[test]
+fn a_window_serves_itself_the_game_it_names_and_plays_through_it() {
+    let rules = server::PHASES.iter().position(|&p| p == "rules");
+    let rules_ms = |argv: &str| {
+        let mut window = running(argv).expect("a window");
+        plays_through_its_server(&mut window).map(|s| rules.map(|p| s.phase_cpu[p]))
+    };
+    let (game, bare) = (rules_ms("--mute --game melee"), rules_ms("--mute"));
+    eprintln!("a tick's rules, with melee: {game:?} ms; without a game: {bare:?} ms");
+    assert!(game.is_ok_and(|ms| ms.is_some_and(|ms| ms > 0.0)));
+    assert_eq!(bare, Ok(Some(0.0)));
 }
 
 #[test]

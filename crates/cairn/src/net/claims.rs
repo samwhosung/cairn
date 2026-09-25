@@ -1,6 +1,6 @@
 //! The player's own movement, claimed to the server as the client's cadence says, the teleports
-//! it asks for, and the server's answers, a correction or a grant, with where the server holds the
-//! player until they come.
+//! it asks for, the server's answers, a correction or a grant, with where the server holds the
+//! player until they come, and where the game puts it.
 
 use std::collections::VecDeque;
 use std::f32::consts::TAU;
@@ -28,6 +28,7 @@ pub struct Claims {
     pub sent: u32,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub teleports: u32,
+    pub placements: u32,
 }
 
 struct Awaiting {
@@ -47,18 +48,29 @@ impl Claims {
             why_put_back: None,
             sent: 0,
             teleports: 0,
+            placements: 0,
         }
     }
 
     pub fn correct(&mut self, player: &mut Player, seq: u32, why: Why, movement: &Movement) {
+        self.put(player, seq, movement);
+        self.corrections += 1;
+        self.why_put_back = Some(why);
+    }
+
+    pub fn place(&mut self, player: &mut Player, seq: u32, rooted: bool, movement: &Movement) {
+        self.put(player, seq, movement);
+        player.rooted = rooted;
+        self.placements += 1;
+    }
+
+    fn put(&mut self, player: &mut Player, seq: u32, movement: &Movement) {
         let put = wow_to_bevy(movement.pos);
         let past_the_streamed_collision = put.distance(player.pos) > world::FARCLIP;
         player.put(put, movement.facing);
         player.settling |= past_the_streamed_collision;
         self.ack = seq;
         self.cadence.report_now();
-        self.corrections += 1;
-        self.why_put_back = Some(why);
         self.awaiting = None;
         self.claimed = movement.pos;
     }
@@ -97,7 +109,8 @@ pub fn movement_of(
     arc_began: Option<f32>,
 ) -> Movement {
     let secs = now.as_secs_f32();
-    let flags = if flying { 0 } else { player.move_flags };
+    let rooted = if player.rooted { flags::ROOT } else { 0 };
+    let flags = rooted | if flying { 0 } else { player.move_flags };
     let facing = player.face_yaw.rem_euclid(TAU);
     let airborne = |since: f32| ((secs - since).max(0.0) * 1000.0).round() as u32;
     let jump = if flags & flags::FALLING != 0 {
@@ -205,6 +218,27 @@ mod tests {
         claims.correct(&mut near, 1, Why::Speed, &put(3.0));
         claims.correct(&mut far, 2, Why::Teleport, &put(500.0));
         assert_eq!((near.settling, far.settling), (false, true));
+    }
+
+    #[test]
+    fn a_placed_body_stands_where_it_is_put_and_claims_its_root_until_freed() {
+        let mut claims = Claims::new(&Movement::default());
+        let mut player = running_jump();
+        let at = Movement {
+            pos: [40.0, 0.0, 5.0],
+            facing: 1.0,
+            ..Movement::default()
+        };
+        claims.place(&mut player, 3, true, &at);
+        assert_eq!(
+            (claims.ack, claims.placements, claims.corrections),
+            (3, 1, 0)
+        );
+        let m = movement_of(&player, false, Duration::from_millis(2000), None);
+        assert!((m.pos[0] - 40.0).abs() < 1e-4 && m.flags & flags::ROOT != 0);
+        claims.place(&mut player, 4, false, &at);
+        let m = movement_of(&player, false, Duration::from_millis(2100), None);
+        assert_eq!(m.flags & flags::ROOT, 0);
     }
 
     #[test]

@@ -1446,6 +1446,7 @@ dependencies = [
  "assert_no_alloc",
  "avian3d",
  "bevy",
+ "catalog",
  "mpq",
  "protocol",
  "server",

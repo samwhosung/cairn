@@ -145,7 +145,10 @@ pub fn control(
     };
     camera::apply_zoom_scroll(notches, dt, &mut rig);
 
-    let axes = input::move_axes(keys, &mut player, &rig, both_buttons);
+    let mut axes = input::move_axes(keys, &mut player, &rig, both_buttons);
+    if player.rooted {
+        (axes.fwd, axes.side, axes.translating) = (0, 0, false);
+    }
     let mut turn_delta = 0.0;
     if axes.turning {
         let turn = f32::from(i8::from(axes.turn_left) - i8::from(axes.turn_right));
@@ -174,7 +177,7 @@ pub fn control(
             flags::FORWARD
         } | if player.walking { WALK_MODE } else { 0 },
     );
-    let want_jump = keys.pressed_now(Binding::Jump);
+    let want_jump = keys.pressed_now(Binding::Jump) && !player.rooted;
 
     let surface_y = swim::surface_over_feet(&world.liquids, player.pos);
     player.liquid_surface = surface_y;
