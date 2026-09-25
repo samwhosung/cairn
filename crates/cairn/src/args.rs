@@ -71,9 +71,9 @@ does; Ctrl+Shift+F again walks on from where the body stood.
 Ctrl+Shift+N leaves a note about the spot under the pointer, or about the middle of the
 window while a held button hides the pointer or it is off the window: a directory named
 by its time (UTC) holding frame.png, the frame with the spot ringed, and note.txt, the
-camera it was drawn from, what the spot shows and the commands that open the view again.
-Notes go in the user's data directory (on macOS
-~/Library/Application Support/cairn/notes), or in --notes DIR.";
+camera it was drawn from, what the spot shows, the shot that draws the view again and the
+window that walks on from where it was taken. Notes go in the user's data directory (on
+macOS ~/Library/Application Support/cairn/notes), or in --notes DIR.";
 
 const FLAGS: [&str; 27] = [
     "age",
