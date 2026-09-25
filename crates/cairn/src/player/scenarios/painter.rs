@@ -24,7 +24,7 @@ use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
 use super::clock::Stepping;
-use super::walker::{Through, hosts, time_update};
+use super::walker::{Through, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
 use crate::player::camera::{CameraControl, CameraRig};
@@ -132,20 +132,14 @@ impl Painter {
         let tables = CharacterTables::load(&install).expect("the character tables");
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
-        let judge_on_drop = matches!(through, Some(Through::ItsOwn { .. } | Through::Hosts(_)));
-        let mut stepping = None;
-        let net = through.map(|t| match t {
-            Through::ItsOwn { record } => alone::own_server(map.id, pose, &look, record),
-            Through::Loopback { addr, name, look } => {
-                Net::connect(addr, crate::net::hello(name, &look))
+        let judge_on_drop = through.as_ref().is_some_and(Through::hosted);
+        let (net, stepping) = match through {
+            Some(through) => {
+                let (net, stepping) = through.join(map.id, pose, &look, STEP);
+                (Some(net), stepping)
             }
-            Through::Hosts(cfg) => hosts(*cfg, &look),
-            Through::Clock { clock, name, look } => {
-                let server = clock.borrow_mut().connect(false);
-                stepping = Some(Stepping::on(&clock));
-                Net::in_process(server, crate::net::hello(name, &look))
-            }
-        });
+            None => (None, None),
+        };
         let mut app = App::new();
         world::register_source(&mut app, &install);
         app.add_plugins(headless_plugins())
@@ -411,7 +405,7 @@ impl Painter {
     pub(super) fn timed_frame(&mut self) -> Duration {
         self.pace.wait(STEP);
         let t = Instant::now();
-        self.app.update();
+        self.frame();
         t.elapsed()
     }
 
@@ -452,7 +446,8 @@ impl Painter {
 impl Drop for Painter {
     fn drop(&mut self) {
         if self.judge_on_drop {
-            alone::assert_honest(&mut self.app, "painter");
+            let clock = self.stepping.as_ref().map(Stepping::clock);
+            alone::assert_honest(&mut self.app, clock, "painter");
         }
     }
 }

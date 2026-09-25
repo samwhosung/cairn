@@ -20,8 +20,8 @@ use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install, WorldCamera};
 
 use super::alone::{self, Judged, Pace};
-use super::clock::{Served, Stepping, step_at};
-use crate::net::{Net, NetPlugin};
+use super::clock::{self, Served, Stepping, step_at};
+use crate::net::{Net, NetPlugin, hello};
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerPlugin, Teleported};
 use crate::view::Pose;
@@ -43,9 +43,12 @@ pub struct Walker {
 }
 
 pub enum Through {
+    /// Its own server, as its host, on a clock of its own that its frames step.
     ItsOwn {
         record: Option<PathBuf>,
     },
+    /// Its own server on the wall clock, as a bare window runs one.
+    ItsOwnInRealTime,
     Loopback {
         addr: SocketAddr,
         name: String,
@@ -58,6 +61,41 @@ pub enum Through {
         name: String,
         look: CharacterLook,
     },
+}
+
+impl Through {
+    /// Whether the window hosts the server, which judges it once it is dropped.
+    pub fn hosted(&self) -> bool {
+        matches!(
+            self,
+            Self::ItsOwn { .. } | Self::ItsOwnInRealTime | Self::Hosts(_)
+        )
+    }
+
+    /// The window's connection on `map`, standing at `pose` as `look`, and the clock its frames
+    /// step by `step` when it has one.
+    pub fn join(
+        self,
+        map: u32,
+        pose: Pose,
+        look: &CharacterLook,
+        step: Duration,
+    ) -> (Net, Option<Stepping>) {
+        let on = |clock: &Served, host: bool, hello| {
+            let server = clock.borrow_mut().connect(host);
+            (Net::in_process(server, hello), Some(Stepping::on(clock)))
+        };
+        match self {
+            Self::ItsOwn { record } => {
+                let clock = clock::serve(&alone::own_config(map, pose, record), step);
+                on(&clock, true, hello("Walker".into(), look))
+            }
+            Self::ItsOwnInRealTime => (alone::own_server(map, pose, look), None),
+            Self::Loopback { addr, name, look } => (Net::connect(addr, hello(name, &look)), None),
+            Self::Hosts(cfg) => (hosts(*cfg, look), None),
+            Self::Clock { clock, name, look } => on(&clock, false, hello(name, &look)),
+        }
+    }
 }
 
 pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
@@ -222,7 +260,7 @@ impl Walker {
 
     pub fn stop_and_judge(&mut self) -> Option<Judged> {
         self.judge_on_drop = false;
-        alone::judge(&mut self.app)
+        alone::judge(&mut self.app, self.stepping.as_ref().map(Stepping::clock))
     }
 
     fn build(
@@ -246,19 +284,8 @@ impl Walker {
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let look = dressed.unwrap_or_else(|| CharacterLook::naked(1, 0));
         let over_loopback = matches!(through, Through::Loopback { .. });
-        let mut stepping = None;
-        let net = match through {
-            Through::ItsOwn { record } => alone::own_server(current.id, pose, &look, record),
-            Through::Loopback { addr, name, look } => {
-                Net::connect(addr, crate::net::hello(name, &look))
-            }
-            Through::Hosts(cfg) => hosts(*cfg, &look),
-            Through::Clock { clock, name, look } => {
-                let server = clock.borrow_mut().connect(false);
-                stepping = Some(Stepping::on(&clock));
-                Net::in_process(server, crate::net::hello(name, &look))
-            }
-        };
+        let judge_on_drop = through.hosted();
+        let (net, stepping) = through.join(current.id, pose, &look, step);
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin, InputPlugin));
         world::register_source(&mut app, &install);
@@ -284,7 +311,6 @@ impl Walker {
         }
         app.finish();
         app.cleanup();
-        let judge_on_drop = !over_loopback && stepping.is_none();
         let mut walker = Self {
             app,
             step,
@@ -293,21 +319,25 @@ impl Walker {
             stepping,
         };
         if judge_on_drop {
+            walker.await_welcome();
             walker.settle();
-            walker.pace.start();
+            if walker.stepping.is_none() {
+                walker.pace.start();
+            }
         }
         Some(walker)
     }
 
+    /// Frames with the game clock held until the server's welcome arrives.
     fn await_welcome(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(30);
+        hold_game_clocks(&mut [&mut *self]);
         while self.net().is_none_or(|n| n.welcome().is_none()) {
             assert!(Instant::now() < deadline, "no welcome from the server");
             self.frame();
-            if self.stepping.is_none() {
-                std::thread::sleep(self.step);
-            }
+            wait_a_step(&[&mut *self]);
         }
+        release_game_clocks(&mut [&mut *self]);
     }
 
     /// A frame a step on from the last, on the test's clock or the wall's.
@@ -561,13 +591,14 @@ impl Walker {
 }
 
 pub fn hosts(cfg: server::Config, look: &CharacterLook) -> Net {
-    Net::host(cfg, crate::net::hello("Host".into(), look)).expect("a server of its own")
+    Net::host(cfg, hello("Host".into(), look)).expect("a server of its own")
 }
 
 impl Drop for Walker {
     fn drop(&mut self) {
         if self.judge_on_drop {
-            alone::assert_honest(&mut self.app, "walker");
+            let clock = self.stepping.as_ref().map(Stepping::clock);
+            alone::assert_honest(&mut self.app, clock, "walker");
         }
     }
 }

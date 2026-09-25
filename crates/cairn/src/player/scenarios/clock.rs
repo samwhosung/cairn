@@ -116,6 +116,10 @@ impl Stepping {
         }
     }
 
+    pub fn clock(&self) -> &Served {
+        &self.clock
+    }
+
     /// Runs `app`'s next frame. A window whose last frame was at the clock's time moves the clock
     /// on a step first; any other catches up to it, as the other windows of a round do.
     pub fn frame(&mut self, app: &mut App) {

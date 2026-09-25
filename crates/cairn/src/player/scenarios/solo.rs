@@ -1,11 +1,10 @@
 use bevy::input::keyboard::KeyCode;
 use protocol::Why;
-use server::{InputOrder, Replay, Replicate, Summary};
+use server::{InputOrder, Replay, Replicate};
 use world::coords::wow_to_bevy;
 use world::unit::CharacterLook;
 
 use super::honest::{Stand, serve_over_loopback};
-use super::pair::{self, MEADOW_WALK, Script};
 use super::walker::Walker;
 use super::{MEADOW, horizontal};
 use crate::player::Mode;
@@ -144,29 +143,11 @@ fn a_solo_walk_with_a_landing_replays_to_the_same_world_at_every_tick() {
     };
     let replayed = server::replay(&log, &how).expect("a replay");
     eprintln!(
-        "replayed {} ticks to {:016x}: first mismatch {:?}",
-        replayed.ticks, replayed.hash, replayed.first_mismatch
+        "replayed {} of {} ticks to {:016x}: first mismatch {:?}",
+        replayed.ticks, judged.summary.ticks, replayed.hash, replayed.first_mismatch
     );
     assert_eq!(replayed.first_mismatch, None);
-    assert!(replayed.ticks > 100 && replayed.refusals.is_empty());
+    assert_eq!(replayed.ticks as usize, judged.summary.ticks);
+    assert!(replayed.refusals.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-#[ignore = "a measurement, for a release build; set WOW_DATA"]
-fn the_server_cost_of_one_walk_alone_and_of_the_same_over_loopback() {
-    let place = &MEADOW_WALK;
-    let Some(mut w) = Walker::new("Azeroth", place.a.feet, place.a.heading_deg, HZ) else {
-        return;
-    };
-    let mut script = Script::default();
-    for frame in 0..place.frames {
-        script.frame(&mut w, place.acts, frame);
-        w.run(1);
-    }
-    let alone = w.stop_and_judge().expect("its own server");
-    let over_loopback = pair::alone(place).expect("the install");
-    eprintln!("{}", Summary::header());
-    eprintln!("{}", alone.summary.row("one player alone, in-process"));
-    eprintln!("{}", over_loopback.row("one player over loopback"));
 }

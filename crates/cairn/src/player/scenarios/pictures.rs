@@ -298,10 +298,7 @@ fn the_walker_starts_where_a_bare_window_looks() {
 fn the_frame_cost_of_goldshire() {
     for round in 1..=2 {
         for (served, through) in [
-            (
-                "through its own server",
-                Some(Through::ItsOwn { record: None }),
-            ),
+            ("through its own server", Some(Through::ItsOwnInRealTime)),
             ("with no server", None),
         ] {
             let look = CharacterLook::naked(1, 0);

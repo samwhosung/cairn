@@ -529,7 +529,7 @@ fn the_frame_cost_of_walking_goldshire() {
     let mut costs: Vec<Duration> = (0..3600)
         .map(|_| {
             let t = Instant::now();
-            w.app.update();
+            w.run(1);
             t.elapsed()
         })
         .collect();

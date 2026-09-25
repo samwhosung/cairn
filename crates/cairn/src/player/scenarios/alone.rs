@@ -1,5 +1,5 @@
-//! A walker's own server, run in-process as a bare window runs one: joining it, holding the
-//! walker's frames to its clock, and what it made of the walk.
+//! A walker's own server, as a bare window runs one: joining it, on a test's clock or holding the
+//! walker's frames to the wall clock, and what it made of the walk.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -9,13 +9,21 @@ use protocol::Why;
 use server::Summary;
 use world::unit::CharacterLook;
 
+use super::clock::Served;
 use crate::net::{self, Net};
 use crate::view::Pose;
 
-pub fn own_server(map: u32, pose: Pose, look: &CharacterLook, record: Option<PathBuf>) -> Net {
-    let mut cfg = net::own_server(None, map, pose.target.to_array(), pose.heading);
-    cfg.record = record;
-    Net::host(cfg, net::hello("Walker".into(), look)).expect("the walker's own server")
+pub fn own_config(map: u32, pose: Pose, record: Option<PathBuf>) -> server::Config {
+    server::Config {
+        record,
+        ..net::own_server(None, map, pose.target.to_array(), pose.heading)
+    }
+}
+
+/// The server a bare window runs, on the wall clock.
+pub fn own_server(map: u32, pose: Pose, look: &CharacterLook) -> Net {
+    let hello = net::hello("Walker".into(), look);
+    Net::host(own_config(map, pose, None), hello).expect("the walker's own server")
 }
 
 /// Holds frames that each step the game clock by `step` to no faster than the wall clock, as a
@@ -64,13 +72,17 @@ impl Judged {
     }
 }
 
-/// Stops `app`'s own server once the claims sent have reached a tick and says what it made of
-/// them; `None` if the app has no server of its own left.
-pub fn judge(app: &mut App) -> Option<Judged> {
+/// Stops the server `app` hosts, on `clock` or on the wall clock, once the claims sent have reached
+/// a tick, and says what it made of them; `None` if the app has no server of its own left.
+pub fn judge(app: &mut App, clock: Option<&Served>) -> Option<Judged> {
     let mut net = app.world_mut().get_resource_mut::<Net>()?;
-    let two_ticks = net.welcome().map_or(0, |w| 2 * u64::from(w.tick_ms));
-    std::thread::sleep(Duration::from_millis(two_ticks));
-    let summary = net.stop_hosted()?.expect("the server stops");
+    let summary = if let Some(clock) = clock {
+        clock.borrow_mut().stop()
+    } else {
+        let two_ticks = net.welcome().map_or(0, |w| 2 * u64::from(w.tick_ms));
+        std::thread::sleep(Duration::from_millis(two_ticks));
+        net.stop_hosted()?.expect("the server stops")
+    };
     let judged = Judged {
         refused: Why::ALL
             .into_iter()
@@ -86,11 +98,11 @@ pub fn judge(app: &mut App) -> Option<Judged> {
     Some(judged)
 }
 
-pub fn assert_honest(app: &mut App, who: &str) {
+pub fn assert_honest(app: &mut App, clock: Option<&Served>, who: &str) {
     if std::thread::panicking() {
         return;
     }
-    let judged = judge(app);
+    let judged = judge(app, clock);
     assert!(
         judged.as_ref().is_some_and(Judged::honest),
         "the {who}'s own server put it back: {judged:?}"
