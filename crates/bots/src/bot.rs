@@ -1,3 +1,5 @@
+mod body;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -5,8 +7,8 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use protocol::{
-    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
-    Welcome, Wrapped,
+    Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, Show,
+    VERSION, Welcome, Whose, Wrapped,
 };
 use server::Spawn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,12 +16,14 @@ use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
-use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic, UnsentJudged};
+use crate::check::{Checks, Fights, Limits, RELAYED_EPSILON_YD, Traffic, UnsentJudged};
+use crate::fight::{SWING, Sight, Swing};
 use crate::ground::Ground;
 use crate::lie::Lie;
 use crate::mover::{Claims, Mover};
 use crate::region::Place;
 use crate::track::{RUN, Track, Walk, crowd_liar_lies, plan};
+use body::{Body, Told};
 
 const FRAME_MS: u64 = 50;
 const JOIN_GRACE_MS: u32 = 2000;
@@ -58,11 +62,16 @@ struct Claimed {
 pub struct Roles {
     pub liars: usize,
     pub checkers: usize,
+    pub fight: bool,
 }
 
 impl Roles {
     pub fn is_liar(&self, i: usize) -> bool {
         i < self.liars
+    }
+
+    pub fn is_fighter(&self, i: usize) -> bool {
+        self.fight && !self.is_liar(i)
     }
 
     pub fn is_checker(&self, i: usize) -> bool {
@@ -79,6 +88,7 @@ pub struct Crowd {
     pub limits: Limits,
     pub checks: Checks,
     pub traffic: Traffic,
+    pub fights: Fights,
     pub stop: AtomicBool,
 }
 
@@ -93,6 +103,7 @@ impl Crowd {
             limits: Limits::of_server(),
             checks: Checks::default(),
             traffic: Traffic::default(),
+            fights: Fights::default(),
             stop: AtomicBool::new(false),
         }
     }
@@ -178,36 +189,46 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         pos: welcome.spawn.pos,
         facing: welcome.spawn.facing,
     };
-    let walk = Walk {
-        start_ms: now + 100,
-        until_ms: crowd.walks_end_ms,
-        seed: u64::from(welcome.id) + 1,
-        run_speed: RUN,
-        long_runs: liar,
-    };
-    let track = plan(&crowd.place, &crowd.ground, &spawn, &walk);
-    let lies = if liar {
-        crowd_liar_lies(&track, walk.start_ms)
-    } else {
-        Vec::new()
-    };
     let id = welcome.id;
-    crowd.claimed(id, &welcome.spawn);
     let member = &crowd.by_id[id as usize];
+    let fights = crowd.roles.is_fighter(i);
+    let mut lies = Vec::new();
+    if !fights {
+        let walk = Walk {
+            start_ms: now + 100,
+            until_ms: crowd.walks_end_ms,
+            seed: u64::from(id) + 1,
+            run_speed: RUN,
+            long_runs: liar,
+        };
+        let track = plan(&crowd.place, &crowd.ground, &spawn, &walk);
+        if liar {
+            lies = crowd_liar_lies(&track, walk.start_ms);
+        }
+        let _ = member.track.set(track);
+    }
+    crowd.claimed(id, &welcome.spawn);
     member.lies.store(!lies.is_empty(), Ordering::Relaxed);
-    let _ = member.track.set(track);
     member.joined_ms.store(now, Ordering::Relaxed);
     crowd.traffic.welcomed.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::unbounded_channel();
-    let seen = Arc::new(AtomicU32::new(welcome.tick));
-    let writer = tokio::spawn(write(id, spawn, lies, w, crowd.clone(), rx, seen.clone()));
+    let shared = Arc::new(Shared {
+        tick: AtomicU32::new(welcome.tick),
+        eyes: fights.then(|| {
+            Mutex::new(Eyes {
+                sight: Sight::default(),
+                here: spawn.pos,
+            })
+        }),
+    });
+    let writer = tokio::spawn(write(id, spawn, lies, w, crowd.clone(), rx, shared.clone()));
     let mut reader = Reader {
         me: id,
         welcome,
         welcomed_at: now,
         crowd: crowd.clone(),
-        corrections: tx,
-        seen,
+        told: tx,
+        shared,
         view: crowd.roles.is_checker(i).then(View::default),
         open: false,
         unsent: Unsent::default(),
@@ -259,19 +280,34 @@ async fn welcomed(r: &mut OwnedReadHalf, frames: &mut Frames) -> Option<Welcome>
     }
 }
 
+struct Shared {
+    tick: AtomicU32,
+    eyes: Option<Mutex<Eyes>>,
+}
+
+struct Eyes {
+    sight: Sight,
+    here: [f32; 3],
+}
+
 async fn write(
     id: u32,
     spawn: Spawn,
     lies: Vec<Lie>,
     mut w: OwnedWriteHalf,
     crowd: Arc<Crowd>,
-    mut corrections: mpsc::UnboundedReceiver<u32>,
-    seen: Arc<AtomicU32>,
+    mut told: mpsc::UnboundedReceiver<Told>,
+    shared: Arc<Shared>,
 ) {
-    let Some(track) = crowd.track(id) else {
-        return;
+    let until_ms = crowd.walks_end_ms;
+    let mut body = match crowd.track(id) {
+        Some(track) => {
+            let mover = Mover::new(spawn.pos, spawn.facing, lies, Claims::ByCadence);
+            Body::walking(mover, track.clone(), until_ms)
+        }
+        None if shared.eyes.is_some() => Body::fighting(&spawn, now_ms(), until_ms),
+        None => return,
     };
-    let mut mover = Mover::new(spawn.pos, spawn.facing, lies, Claims::ByCadence);
     let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let (mut claims, mut bytes) = (Vec::<Movement>::new(), Vec::new());
@@ -279,19 +315,32 @@ async fn write(
     while !crowd.stop.load(Ordering::Relaxed) {
         frame += 1;
         let frame_at = ms_at(ticker.tick().await.into_std());
-        while let Ok(seq) = corrections.try_recv() {
-            mover.correct(seq);
+        while let Ok(word) = told.try_recv() {
+            body.take(word, frame_at);
         }
         claims.clear();
-        if mover
-            .frame(frame_at, track, &crowd.ground, &mut claims)
-            .lied
-        {
+        bytes.clear();
+        let (made, swing) = {
+            let mut eyes = shared
+                .eyes
+                .as_ref()
+                .map(|e| e.lock().unwrap_or_else(PoisonError::into_inner));
+            let sight = eyes.as_deref().map(|e| &e.sight);
+            let done = body.frame(frame_at, sight, &crowd.ground, &mut claims);
+            if let Some(eyes) = &mut eyes {
+                eyes.here = done.0.truth.pos;
+            }
+            done
+        };
+        if let Some(Swing) = swing {
+            ClientMessage::Action(SWING).write(&mut bytes);
+            Checks::count(&crowd.fights.swings_asked);
+        }
+        if made.lied {
             Checks::count(&crowd.checks.lying_frames);
         }
-        bytes.clear();
         if frame.is_multiple_of(FRAMES_PER_SEEN) {
-            ClientMessage::Seen(seen.load(Ordering::Relaxed)).write(&mut bytes);
+            ClientMessage::Seen(shared.tick.load(Ordering::Relaxed)).write(&mut bytes);
         }
         if claims.is_empty() && bytes.is_empty() {
             continue;
@@ -299,7 +348,7 @@ async fn write(
         for movement in &claims {
             crowd.claimed(id, movement);
             ClientMessage::Claim(Claim {
-                ack: mover.ack,
+                ack: body.mover.ack,
                 movement: *movement,
             })
             .write(&mut bytes);
@@ -339,8 +388,8 @@ struct Reader {
     welcome: Welcome,
     welcomed_at: u32,
     crowd: Arc<Crowd>,
-    corrections: mpsc::UnboundedSender<u32>,
-    seen: Arc<AtomicU32>,
+    told: mpsc::UnboundedSender<Told>,
+    shared: Arc<Shared>,
     view: Option<View>,
     open: bool,
     unsent: Unsent,
@@ -390,7 +439,7 @@ impl Reader {
             Checks::count(&traffic.gaps);
         }
         self.last_tick = Some(batch.tick);
-        self.seen.store(batch.tick, Ordering::Relaxed);
+        self.shared.tick.store(batch.tick, Ordering::Relaxed);
         self.open = crowd.checks.is_open();
         let ticks = batch.tick.saturating_sub(self.welcome.tick);
         let due = self.welcomed_at + ticks * u32::from(self.welcome.tick_ms);
@@ -403,7 +452,16 @@ impl Reader {
             self.late_ms.clear();
         }
         let here = self.view.as_ref().map_or([0.0; 3], |_| self.here(now));
+        let shared = self.shared.clone();
+        let mut eyes = shared
+            .eyes
+            .as_ref()
+            .map(|e| e.lock().unwrap_or_else(PoisonError::into_inner));
         for record in batch {
+            if let (Some(eyes), Ok(record)) = (&mut eyes, &record) {
+                let at = eyes.here;
+                eyes.sight.see(record, at);
+            }
             match record {
                 Ok(Record::Appear {
                     slot, id, state, ..
@@ -413,9 +471,15 @@ impl Reader {
                 Ok(Record::Turn { slot, .. }) => self.moved(slot, None, now, here),
                 Ok(Record::Vanish { slot }) => self.vanish(slot),
                 Ok(Record::Correct { seq, .. }) => self.corrected(seq),
-                Ok(Record::Place { seq, .. }) => {
-                    let _ = self.corrections.send(seq);
-                }
+                Ok(Record::Place {
+                    seq,
+                    rooted,
+                    movement,
+                }) => self.placed(seq, rooted, &movement),
+                Ok(Record::Show {
+                    whose: Whose::Own,
+                    show: Show::Play(anim),
+                }) => self.played(anim),
                 Ok(Record::Granted { .. } | Record::Game { .. } | Record::Show { .. }) => {}
                 Err(_) => self.unsent.decode_errors += 1,
             }
@@ -458,7 +522,27 @@ impl Reader {
         } else {
             &checks.honest_corrections
         });
-        let _ = self.corrections.send(seq);
+        let _ = self.told.send(Told::Corrected(seq));
+    }
+
+    fn placed(&self, seq: u32, rooted: bool, m: &Movement) {
+        let fights = &self.crowd.fights;
+        Checks::count(if rooted {
+            &fights.rooted
+        } else {
+            &fights.freed
+        });
+        let at = Spawn {
+            pos: m.pos,
+            facing: m.facing,
+        };
+        let _ = self.told.send(Told::Placed { seq, rooted, at });
+    }
+
+    fn played(&self, anim: u16) {
+        if anim == game::anim::ATTACK_UNARMED.0 {
+            Checks::count(&self.crowd.fights.swung);
+        }
     }
 
     fn judge_relayed(&mut self, id: u32, relayed: Pos) {

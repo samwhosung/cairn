@@ -25,12 +25,19 @@ use crate::region::Place;
 
 const USAGE: &str = "\
 usage: bots [--addr HOST:PORT | --in-process] [--scenario goldshire|elwynn] [--count N]
-            [--liars N] [--checkers N] [--settle S] [--secs S] [--threads N] [--label TEXT]
+            [--liars N] [--checkers N] [--fight] [--settle S] [--secs S] [--threads N]
+            [--label TEXT]
          run N bots (100 by default) against a server, each walking the scenario's
          terrain and claiming its movement as the client does; once all are in, wait
          S seconds (10), measure for S seconds (30) and print one row. The first
          --liars bots (1) lie about their speed and teleport; the next --checkers (all)
          check every position they are shown against where its bot really was.
+         --fight has every bot but the liars fight in the server's game instead of
+         walking: each runs at the nearest body it is shown that is not rooted and swings
+         with action 1 once in reach, stands where the game roots or places it, and
+         fights on once free, and what the fights came to is printed every 10 s to
+         stderr. Only the walkers' positions are checked. After the row, a line says what
+         the crowd asked of the server's game and what the game did to it.
          --in-process runs the server on this process's threads (--server-threads, 1,
          --unchecked to accept every claim) and prints its row too.
        bots scenario FILE [--threads N] [--racy] [--reversed] [--row] [--hashes FILE]
@@ -138,7 +145,7 @@ fn spawns(args: &[String]) -> Result<(), String> {
 }
 
 fn load(args: &[String]) -> Result<(), String> {
-    let f = flags(args, &["in-process", "unchecked"])?;
+    let f = flags(args, &["in-process", "unchecked", "fight"])?;
     let (place, ground) = place(&f)?;
     let count: usize = num(&f, "count", 100)?;
     let settle: u64 = num(&f, "settle", 10)?;
@@ -146,6 +153,7 @@ fn load(args: &[String]) -> Result<(), String> {
     let roles = Roles {
         liars: num(&f, "liars", 1)?,
         checkers: num(&f, "checkers", count)?,
+        fight: f.contains_key("fight"),
     };
     let running = if f.contains_key("in-process") {
         let cfg = server::Config {
@@ -183,14 +191,33 @@ fn load(args: &[String]) -> Result<(), String> {
         .build()
         .map_err(|e| format!("a runtime: {e}"))?;
     let label = f.get("label").cloned().unwrap_or_default();
+    let began = Instant::now();
+    if crowd.roles.fight {
+        rt.spawn(tell_fights(crowd.clone(), began));
+    }
     let window = rt.block_on(drive(addr, crowd.clone(), count, settle, secs));
     println!("{}", report(&label, &crowd, count, &window));
+    println!("{}", fights_line(&crowd, began));
     if let Some(running) = running {
         let summary = running.stop().map_err(|e| format!("stopping: {e}"))?;
         println!("{}", summary.row(&label));
     }
     rt.shutdown_background();
     Ok(())
+}
+
+fn fights_line(crowd: &Crowd, began: Instant) -> String {
+    let bots = crowd.traffic.welcomed.load(Ordering::Relaxed);
+    crowd.fights.line(bots, began.elapsed().as_secs_f64())
+}
+
+async fn tell_fights(crowd: Arc<Crowd>, began: Instant) {
+    let mut every = tokio::time::interval(Duration::from_secs(10));
+    every.tick().await;
+    while !crowd.stop.load(Ordering::Relaxed) {
+        every.tick().await;
+        eprintln!("{}", fights_line(&crowd, began));
+    }
 }
 
 struct Measured {

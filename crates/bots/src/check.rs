@@ -133,6 +133,27 @@ impl Checks {
     }
 }
 
+#[derive(Default)]
+pub struct Fights {
+    pub swings_asked: AtomicU64,
+    pub swung: AtomicU64,
+    pub rooted: AtomicU64,
+    pub freed: AtomicU64,
+}
+
+impl Fights {
+    pub fn line(&self, bots: u64, secs: f64) -> String {
+        let get = |n: &AtomicU64| n.load(Ordering::Relaxed);
+        format!(
+            "fights over {secs:.0} s with {bots} bots in: {} swings asked and {} shown; rooted {} times and placed free {} times",
+            get(&self.swings_asked),
+            get(&self.swung),
+            get(&self.rooted),
+            get(&self.freed),
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Counters {
     pub bytes_in: u64,
