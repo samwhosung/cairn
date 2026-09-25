@@ -29,6 +29,7 @@ gates enforce the rest.
 
 <!-- crates:start -->
 - [`adt`](crates/adt) — Reads World of Warcraft 1.12.1 ADT terrain tiles: heights, textures, liquids and placements
+- [`atlas`](crates/atlas) — Draws a zone of World of Warcraft 1.12.1 from above: the ground in its textures' colours, hill shading and water, and doodads and buildings as marks
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`bots`](crates/bots) — Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict
 - [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, or renders one shot of it to a PNG

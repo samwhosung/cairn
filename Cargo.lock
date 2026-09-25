@@ -309,6 +309,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas"
+version = "0.0.0"
+dependencies = [
+ "blp",
+ "dbc",
+ "image",
+ "mpq",
+ "rayon",
+ "terrain",
+]
+
+[[package]]
 name = "atomic-arena"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
