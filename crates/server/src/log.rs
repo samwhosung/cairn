@@ -13,6 +13,7 @@ const CLAIM: u8 = 2;
 const LEAVE: u8 = 3;
 const HOST_JOIN: u8 = 4;
 const TELEPORT: u8 = 5;
+const ACTION: u8 = 6;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Header {
@@ -59,6 +60,7 @@ impl LogWriter {
                 Input::HostJoin(h) => (HOST_JOIN, ClientMessage::Hello(h.clone())),
                 Input::Claim(c) => (CLAIM, ClientMessage::Claim(*c)),
                 Input::Teleport(c) => (TELEPORT, ClientMessage::Teleport(*c)),
+                Input::Action(number) => (ACTION, ClientMessage::Action(*number)),
                 Input::Leave => {
                     self.buf.push(LEAVE);
                     continue;
@@ -139,12 +141,13 @@ impl LogReader {
             let tag = read_u8(&mut self.input)?;
             let input = match tag {
                 LEAVE => Input::Leave,
-                JOIN | HOST_JOIN | CLAIM | TELEPORT => {
+                JOIN | HOST_JOIN | CLAIM | TELEPORT | ACTION => {
                     match (tag, ClientMessage::read(&self.frame()?)) {
                         (JOIN, Ok(ClientMessage::Hello(h))) => Input::Join(h),
                         (HOST_JOIN, Ok(ClientMessage::Hello(h))) => Input::HostJoin(h),
                         (CLAIM, Ok(ClientMessage::Claim(c))) => Input::Claim(c),
                         (TELEPORT, Ok(ClientMessage::Teleport(c))) => Input::Teleport(c),
+                        (ACTION, Ok(ClientMessage::Action(number))) => Input::Action(number),
                         _ => return Err(bad("a logged message is not what its tag says")),
                     }
                 }

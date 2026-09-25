@@ -47,6 +47,8 @@ pub enum ClientMessage {
     Seen(u32),
     /// Where the client asks its mover to be put: somewhere its movement did not take it.
     Teleport(Claim),
+    /// An action of the game the server runs, by the number the game gives it.
+    Action(u32),
 }
 
 impl ClientMessage {
@@ -67,6 +69,11 @@ impl ClientMessage {
                 out.extend_from_slice(&tick.to_le_bytes());
                 finish_frame(out, start);
             }
+            Self::Action(number) => {
+                let start = begin_frame(out, Kind::Action);
+                out.extend_from_slice(&number.to_le_bytes());
+                finish_frame(out, start);
+            }
         }
     }
 
@@ -82,6 +89,7 @@ impl ClientMessage {
             Kind::Claim => Self::Claim(Claim::read(&mut r)?),
             Kind::Teleport => Self::Teleport(Claim::read(&mut r)?),
             Kind::Seen => Self::Seen(r.u32()?),
+            Kind::Action => Self::Action(r.u32()?),
             other => return Err(Error::Unexpected(other as u8)),
         };
         r.finish()?;
@@ -201,6 +209,7 @@ mod tests {
             ClientMessage::Claim(claim),
             ClientMessage::Seen(77),
             ClientMessage::Teleport(claim),
+            ClientMessage::Action(3),
         ] {
             let mut out = Vec::new();
             msg.write(&mut out);

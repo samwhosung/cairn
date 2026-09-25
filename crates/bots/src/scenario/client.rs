@@ -269,6 +269,7 @@ impl Client {
                     Input::Claim(claim)
                 }
                 Ok(ClientMessage::Teleport(claim)) => Input::Teleport(claim),
+                Ok(ClientMessage::Action(number)) => Input::Action(number),
                 Err(_) => {
                     self.tally.decode_errors += 1;
                     continue;
@@ -331,7 +332,12 @@ impl Client {
                 Ok(Record::Vanish { slot }) => {
                     self.watching.remove(&slot);
                 }
-                Ok(Record::Turn { .. } | Record::Granted { .. }) => {}
+                Ok(
+                    Record::Turn { .. }
+                    | Record::Granted { .. }
+                    | Record::Place { .. }
+                    | Record::Game { .. },
+                ) => {}
                 Err(_) => {
                     self.tally.decode_errors += 1;
                     break;

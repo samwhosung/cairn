@@ -117,6 +117,7 @@ impl Client {
                     continue;
                 }
                 Record::Turn { .. } | Record::Granted { .. } => continue,
+                Record::Place { .. } | Record::Game { .. } => unreachable!("no game runs here"),
                 Record::Move { slot, pos, .. } => (slot, pos),
                 Record::State { slot, state } => (slot, state.pos),
             };
@@ -136,6 +137,12 @@ impl Client {
             }
         }
         seen
+    }
+
+    fn act(&mut self, number: u32) {
+        let mut bytes = Vec::new();
+        ClientMessage::Action(number).write(&mut bytes);
+        self.stream.write_all(&bytes).expect("an action");
     }
 
     fn claim(&mut self, ack: u32, time: u32, pos: [f32; 3]) {
@@ -373,6 +380,7 @@ fn a_recorded_run_replays_with_every_batch_and_dumps_the_first_clients_frames() 
     let mut a = Client::join(running.addr(), "Ada");
     let mut b = Client::join(running.addr(), "Bo");
     a.records_until(40, |g| *g == Got::Appear(b.id));
+    b.act(1);
     b.claim(0, 1000, [10.0, 0.0, 0.0]);
     let seen = a.records_until(40, |g| matches!(g, Got::Move(..)));
     assert!(seen.iter().any(|g| matches!(g, Got::Move(..))), "{seen:?}");

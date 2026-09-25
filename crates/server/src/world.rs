@@ -30,6 +30,8 @@ pub enum Input {
     HostJoin(Hello),
     Claim(Claim),
     Teleport(Claim),
+    /// An action of the game the server runs, by its number.
+    Action(u32),
     Leave,
 }
 
@@ -229,7 +231,7 @@ impl World {
             .filter_map(|s| {
                 let id = *self.id_of.get(&s.conn)?;
                 match &s.input {
-                    Input::Join(_) | Input::HostJoin(_) => None,
+                    Input::Join(_) | Input::HostJoin(_) | Input::Action(_) => None,
                     Input::Claim(claim) => Some(Act::Claim {
                         id,
                         received_ms: s.received_ms,

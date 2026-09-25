@@ -15,6 +15,8 @@ const APPEAR: u8 = 1;
 const VANISH: u8 = 2;
 const CORRECT: u8 = 3;
 const GRANTED: u8 = 4;
+const PLACE: u8 = 5;
+const GAME: u8 = 6;
 
 /// How many slots a client's view has: one for each entity in it.
 pub const SLOTS: u16 = 1 << KIND_SHIFT;
@@ -23,7 +25,7 @@ pub const SLOTS: u16 = 1 << KIND_SHIFT;
 /// move, a turn or a state has its kind in the top two bits; every other record shares the fourth
 /// kind and names itself in the next byte. The low 14 bits are a slot, the client's own number for
 /// an entity in its view, given by the appear that brings the entity in and free again once it
-/// vanishes; a correct's and a grant's are 0.
+/// vanishes; a correct's, a grant's and a place's are 0.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Record<'a> {
     /// An entity came into view and holds `slot` from now on.
@@ -56,6 +58,16 @@ pub enum Record<'a> {
     /// The server took every teleport of this client's up to `movement`'s clock that no correction
     /// answered, and holds its mover here at the end of the tick that took them.
     Granted { movement: Movement },
+    /// The game put this client's mover here, rooted or free: a rooted mover may turn and fall but
+    /// not move over the ground. Its claims count again once they acknowledge `seq`.
+    Place {
+        seq: u32,
+        rooted: bool,
+        movement: Movement,
+    },
+    /// The state of the entity in `slot` that the game running on the server shows, as that game
+    /// encodes it; a client that does not know the game passes over it.
+    Game { slot: u16, state: &'a [u8] },
 }
 
 /// Why the server refused a claim or a teleport.
@@ -107,7 +119,8 @@ impl fmt::Display for Why {
 
 /// One tick's news for one client: its records, read one by one as the batch is iterated. The
 /// tick is the time of every record in it. Every entity's position in it reads right around where
-/// the server holds the client's own mover, which a correction or a grant, coming first, names.
+/// the server holds the client's own mover, which a correction, a grant or a placement, coming
+/// first, names.
 pub struct Batch<'a> {
     pub tick: u32,
     records: Reader<'a>,
@@ -156,6 +169,18 @@ impl<'a> Batch<'a> {
                 GRANTED => Record::Granted {
                     movement: Movement::read(r)?,
                 },
+                PLACE => Record::Place {
+                    seq: r.u32()?,
+                    rooted: r.u8()? != 0,
+                    movement: Movement::read(r)?,
+                },
+                GAME => {
+                    let len = usize::from(r.u16()?);
+                    Record::Game {
+                        slot,
+                        state: r.bytes(len)?,
+                    }
+                }
                 other => return Err(Error::UnknownRecord(other)),
             },
         })
@@ -237,6 +262,27 @@ pub fn write_granted(out: &mut Vec<u8>, movement: &Movement) {
     head(out, OTHER, 0);
     out.push(GRANTED);
     movement.write(out);
+}
+
+pub fn write_place(out: &mut Vec<u8>, seq: u32, rooted: bool, movement: &Movement) {
+    head(out, OTHER, 0);
+    out.push(PLACE);
+    out.extend_from_slice(&seq.to_le_bytes());
+    out.push(u8::from(rooted));
+    movement.write(out);
+}
+
+/// Appends a record and returns how many of its bytes it copied from `state`.
+///
+/// # Panics
+/// If `state` is longer than 65,535 bytes.
+pub fn write_game(out: &mut Vec<u8>, slot: u16, state: &[u8]) -> usize {
+    let len = u16::try_from(state.len()).expect("a game's state of one entity fits in 64 KiB");
+    head(out, OTHER, slot);
+    out.push(GAME);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(state);
+    state.len()
 }
 
 #[cfg(test)]
@@ -352,6 +398,46 @@ mod tests {
         finish_frame(&mut bytes, start);
         let (_, got) = records_of(&bytes);
         assert_eq!(got, vec![Ok(Record::Granted { movement: landed })]);
+    }
+
+    #[test]
+    fn a_place_and_a_game_state_come_back_and_the_state_is_passed_over_by_its_length() {
+        let placed = running([-9439.1, 51.2, 57.25], 1.0);
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 5);
+        write_place(&mut bytes, 4, true, &placed);
+        let state = [7u8, 0, 0, 0, 1];
+        assert_eq!(write_game(&mut bytes, 12, &state), 5);
+        write_game(&mut bytes, 13, &[]);
+        write_vanish(&mut bytes, 12);
+        finish_frame(&mut bytes, start);
+        let (_, got) = records_of(&bytes);
+        let got: Vec<Record<'_>> = got.into_iter().map(|r| r.expect("valid")).collect();
+        assert_eq!(
+            got,
+            [
+                Record::Place {
+                    seq: 4,
+                    rooted: true,
+                    movement: placed
+                },
+                Record::Game {
+                    slot: 12,
+                    state: &state
+                },
+                Record::Game {
+                    slot: 13,
+                    state: &[]
+                },
+                Record::Vanish { slot: 12 },
+            ]
+        );
+        let mut cut = Vec::new();
+        let start = begin_batch(&mut cut, 5);
+        write_game(&mut cut, 1, &state);
+        cut.pop();
+        finish_frame(&mut cut, start);
+        assert_eq!(records_of(&cut).1, vec![Err(Error::Truncated)]);
     }
 
     #[test]

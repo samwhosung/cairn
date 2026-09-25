@@ -174,6 +174,7 @@ impl Client {
                 | Record::State { slot, .. } => Got::Move(self.slots[&slot]),
                 Record::Correct { seq, why, .. } => Got::Correct(seq, why),
                 Record::Granted { movement } => Got::Granted(movement.pos),
+                Record::Place { .. } | Record::Game { .. } => unreachable!("no game runs here"),
             });
         }
         got

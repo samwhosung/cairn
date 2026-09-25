@@ -326,6 +326,7 @@ async fn read(
                 }
                 Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
                 Ok(Some(Ok(ClientMessage::Teleport(c)))) if joined => Input::Teleport(c),
+                Ok(Some(Ok(ClientMessage::Action(number)))) if joined => Input::Action(number),
                 Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
                     let now = shared.latest_tick.load(Ordering::Relaxed);
                     behind.store(now.saturating_sub(tick), Ordering::Relaxed);

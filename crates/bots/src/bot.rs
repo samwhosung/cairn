@@ -413,7 +413,10 @@ impl Reader {
                 Ok(Record::Turn { slot, .. }) => self.moved(slot, None, now, here),
                 Ok(Record::Vanish { slot }) => self.vanish(slot),
                 Ok(Record::Correct { seq, .. }) => self.corrected(seq),
-                Ok(Record::Granted { .. }) => {}
+                Ok(Record::Place { seq, .. }) => {
+                    let _ = self.corrections.send(seq);
+                }
+                Ok(Record::Granted { .. } | Record::Game { .. }) => {}
                 Err(_) => self.unsent.decode_errors += 1,
             }
         }
