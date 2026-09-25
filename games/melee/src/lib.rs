@@ -1,6 +1,6 @@
 //! Melee, a game on cairn: every player fights every other hand to hand, and the dead rise at their spawn.
 
-use game::{Game, Id, Kind, Letter, Out, Tick, World, anim};
+use game::{Game, Id, Kind, Letter, Out, Outcome, Tick, World, anim};
 
 pub const SWING: u32 = 1;
 
@@ -172,7 +172,10 @@ fn swing(id: Id, me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
     if let Some(target) = nearest_in_front(id, w) {
         let damage = w.range(id, DAMAGE_ROLL, k.damage_min, k.damage_max) * k.damage_scale;
         out.send(target, Msg::Hit(damage));
+        out.attack(Some(target), Outcome::Hit);
         out.count("hits", 1);
+    } else {
+        out.attack(None, Outcome::Miss);
     }
 }
 

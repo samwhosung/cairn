@@ -1,7 +1,9 @@
 use std::f32::consts::PI;
 use std::ops::Range;
 
-use game::{BodyOrder, Bytes, Delivery, Engine, Hosted, Id, Knobs as _, Shows, Spot, Turn, anim};
+use game::{
+    BodyOrder, Bytes, Delivery, Engine, Hosted, Id, Knobs as _, Outcome, Shows, Spot, Turn, anim,
+};
 use melee::{Fighter, Knobs, Life, Melee, SWING, Score};
 
 const QUICK: &str = "swing_ms = 50\ndamage_min = 30\ndamage_max = 30\nrespawn_s = 1\n";
@@ -81,9 +83,10 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
         fight(&mut e, &bodies, tick..tick + 1);
         shown.push(e.shows().clone());
     }
+    let landed = vec![(0, Some(1), Outcome::Hit)];
     let wounded = Shows {
         played: vec![(0, anim::ATTACK_UNARMED), (1, anim::COMBAT_WOUND)],
-        attacked: vec![],
+        attacked: landed.clone(),
         held: vec![],
         idled: vec![],
     };
@@ -95,7 +98,7 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
     assert_eq!(shown[..3], [first, wounded.clone(), wounded]);
     let killed = Shows {
         played: vec![(0, anim::ATTACK_UNARMED), (1, anim::DEATH)],
-        attacked: vec![],
+        attacked: landed,
         held: vec![(1, Some(anim::DEAD))],
         idled: vec![(1, None)],
     };
@@ -105,7 +108,7 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
     );
     let missed = Shows {
         played: vec![(0, anim::ATTACK_UNARMED)],
-        attacked: vec![],
+        attacked: vec![(0, None, Outcome::Miss)],
         held: vec![],
         idled: vec![],
     };
