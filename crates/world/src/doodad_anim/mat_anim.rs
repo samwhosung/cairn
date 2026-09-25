@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
@@ -173,11 +173,11 @@ impl<V: MaterialChannel> MatAnimEntry<V> {
 }
 
 #[derive(Resource)]
-pub(crate) struct AnimMaterials<V>(HashMap<AssetId<ModelMaterial>, MatAnimEntry<V>>);
+pub(crate) struct AnimMaterials<V>(BTreeMap<AssetId<ModelMaterial>, MatAnimEntry<V>>);
 
 impl<V> Default for AnimMaterials<V> {
     fn default() -> Self {
-        Self(HashMap::new())
+        Self(BTreeMap::new())
     }
 }
 

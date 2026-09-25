@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -56,7 +56,7 @@ enum Wdl {
 pub(crate) struct Horizon {
     wdl: Wdl,
     material: Option<Handle<WdlMaterial>>,
-    spawned: HashMap<(u32, u32), Entity>,
+    spawned: BTreeMap<(u32, u32), Entity>,
 }
 
 impl Horizon {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
@@ -71,7 +71,7 @@ struct Tile {
 #[derive(Resource, Default)]
 pub(crate) struct Streamer {
     wdt: Option<Handle<WdtIndex>>,
-    tiles: HashMap<(u32, u32), Tile>,
+    tiles: BTreeMap<(u32, u32), Tile>,
 }
 
 impl Streamer {

@@ -3,7 +3,7 @@
 //! are. Map doodads weld under the tile that first placed them and go with that tile; a WMO's
 //! props weld under the building and go with it.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 
@@ -63,8 +63,8 @@ impl WeldAcc {
 #[derive(Default)]
 pub(super) struct HullWelds {
     frame: u32,
-    tiles: HashMap<(u32, u32), WeldAcc>,
-    props: HashMap<u32, WeldAcc>,
+    tiles: BTreeMap<(u32, u32), WeldAcc>,
+    props: BTreeMap<u32, WeldAcc>,
 }
 
 impl HullWelds {

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -20,8 +20,8 @@ pub const GLOBAL_WMO_ID: u32 = u32::MAX;
 /// any tile that names it is resident.
 #[derive(Resource, Default)]
 pub struct Placements {
-    by_id: HashMap<u32, Placement>,
-    tiles: HashMap<(u32, u32), Vec<u32>>,
+    by_id: BTreeMap<u32, Placement>,
+    tiles: BTreeMap<(u32, u32), Vec<u32>>,
     global_wmo: bool,
 }
 

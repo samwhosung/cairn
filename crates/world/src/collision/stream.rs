@@ -1,7 +1,7 @@
 //! Streams colliders with the terrain's window around the camera. A placement straddling tiles is
 //! kept once, by unique id, while any of its tiles is.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
@@ -79,8 +79,8 @@ pub(super) struct Placement {
 pub(crate) struct CollisionStreamer {
     wdt: Option<Handle<WdtIndex>>,
     indexed: bool,
-    pub(super) tiles: HashMap<(u32, u32), Tile>,
-    pub(super) placements: HashMap<u32, Placement>,
+    pub(super) tiles: BTreeMap<(u32, u32), Tile>,
+    pub(super) placements: BTreeMap<u32, Placement>,
     pub(super) welds: HullWelds,
     wanted: Vec<(u32, u32)>,
 }
