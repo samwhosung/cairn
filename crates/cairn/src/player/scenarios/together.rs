@@ -126,13 +126,13 @@ fn the_others_flags(p: &mut Painter) -> Option<u32> {
 }
 
 fn wait_until_the_other(p: &mut Painter, what: &str, flags_say: impl Fn(u32) -> bool) {
-    let deadline = Instant::now() + STATE_TIMEOUT;
+    let deadline = p.clock().elapsed() + STATE_TIMEOUT;
     while !the_others_flags(p).is_some_and(&flags_say) {
         assert!(
-            Instant::now() < deadline,
+            p.clock().elapsed() < deadline,
             "the other player was never seen {what}"
         );
-        wait(p, 0.0);
+        p.run(1);
     }
 }
 
@@ -220,30 +220,34 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         let r = runner(server.addr(), running);
         let deadline = Instant::now() + LOAD_TIMEOUT;
         let mut settled = false;
+        p.clock().pause();
         while !(settled && p.arrived() && others_dressed_and_skinned(&mut p)) {
             assert!(Instant::now() < deadline, "the pair never arrived");
             settled |= r.ready.try_recv().is_ok();
             wait(&mut p, 0.0);
         }
+        p.clock().unpause();
+        p.on_its_own_clock();
         if scene.night {
             p.set_time(0, 30);
         }
         p.orbit(0.0, 6.0);
-        wait(&mut p, 2.5);
+        p.wait(2.5);
         shoot_the_other(&mut p, &format!("{name}-1-standing"));
+        p.level_with_the_wall();
         let _ = r.cue.send(());
         let running = |f: u32| f & flags::FORWARD != 0 && f & flags::FALLING == 0;
         wait_until_the_other(&mut p, "running", running);
-        wait(&mut p, 0.3);
+        p.wait(0.3);
         shoot_the_other(&mut p, &format!("{name}-2-running"));
         wait_until_the_other(&mut p, "in the air", |f| f & flags::FALLING != 0);
-        wait(&mut p, 0.2);
+        p.wait(0.5);
         shoot_the_other(&mut p, &format!("{name}-3-jumping"));
         wait_until_the_other(&mut p, "landed", |f| f & flags::FALLING == 0);
-        wait(&mut p, 0.8);
+        p.wait(0.8);
         shoot_the_other(&mut p, &format!("{name}-4-landed"));
         p.tilt_up(-0.6);
-        wait(&mut p, 0.3);
+        p.wait(0.3);
         shoot_the_other(&mut p, &format!("{name}-5-the-ground-it-ran-over"));
         let _ = r.cue.send(());
         drop(p);

@@ -16,6 +16,7 @@ use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::time::{Real, TimeUpdateStrategy};
 use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
@@ -228,8 +229,25 @@ impl Painter {
         }
     }
 
-    fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
+    pub(super) fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
         self.app.world_mut().resource_mut::<Time<Virtual>>()
+    }
+
+    /// Bevy steps the real clock by the step too, and the other players' moves replay on that
+    /// clock: each frame shows one step of them, however long the frame takes.
+    pub(super) fn on_its_own_clock(&mut self) {
+        self.app
+            .insert_resource(TimeUpdateStrategy::ManualDuration(STEP));
+        self.pace.start();
+    }
+
+    /// Relayed moves are stamped by the wall clock, which a painter on its own falls behind by
+    /// whatever its frames take beyond a step.
+    pub(super) fn level_with_the_wall(&mut self) {
+        self.app
+            .world_mut()
+            .resource_mut::<Time<Real>>()
+            .update_with_instant(Instant::now());
     }
 
     fn stand_on(&mut self, xy: [f32; 2]) {
@@ -337,14 +355,14 @@ impl Painter {
         rig.pitch = radians;
     }
 
-    fn run(&mut self, frames: usize) {
+    pub(super) fn run(&mut self, frames: usize) {
         for _ in 0..frames {
             self.pace.wait(STEP);
             self.app.update();
         }
     }
 
-    fn wait(&mut self, secs: f32) {
+    pub(super) fn wait(&mut self, secs: f32) {
         self.run((secs / STEP.as_secs_f32()).round() as usize);
     }
 
