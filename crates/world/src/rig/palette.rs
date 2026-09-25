@@ -13,8 +13,10 @@ use crate::light::{LightBuffer, RIG_ORIGIN_OFFSET, RIG_PALETTE_OFFSET, RIG_TABLE
 /// The width of the rig slot field in a part's `MeshTag`.
 pub const RIG_SLOT_BITS: u32 = 11;
 pub const MAX_RIG_SLOTS: usize = 1 << RIG_SLOT_BITS;
+/// The dwarf male's, the most of any playable character.
+const LARGEST_CHARACTER_BONES: usize = 142;
 /// Bones every live rig together may hold.
-pub const MAX_PALETTE_BONES: usize = 131_072;
+pub const MAX_PALETTE_BONES: usize = MAX_RIG_SLOTS * LARGEST_CHARACTER_BONES;
 pub const BONE_ROWS: u64 = 3;
 pub const BONE_BYTES: u64 = BONE_ROWS * 16;
 
@@ -313,6 +315,15 @@ mod tests {
         assert_eq!(p.rows[3 * base as usize].map(f32::to_bits), [0; 4]);
         assert_eq!(p.origins[slot as usize].map(f32::to_bits), [0; 4]);
         assert!(p.dirty.contains(&(base, 2)));
+    }
+
+    #[test]
+    fn a_crowd_of_the_largest_characters_runs_out_of_slots_before_bones() {
+        let mut p = RigPalettes::default();
+        let slots = p.free_slots();
+        let ibp: Arc<[Mat4]> = vec![Mat4::IDENTITY; LARGEST_CHARACTER_BONES].into();
+        let crowd = std::iter::from_fn(|| RigSkin::allocate(&mut p, ibp.clone())).count();
+        assert_eq!(crowd, slots);
     }
 
     #[test]
