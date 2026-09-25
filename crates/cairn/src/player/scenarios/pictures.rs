@@ -41,6 +41,8 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
 
 const ATTACK_UNARMED: u16 = 16;
+const COMBAT_WOUND: u16 = 9;
+const FROM_ITS_SIDE: f32 = std::f32::consts::FRAC_PI_2;
 
 pub(super) const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 pub(super) const EAST: f32 = 270.0;
@@ -571,13 +573,13 @@ fn the_walker_runs_on_snow_strafes_and_sits() {
 }
 
 /// Told straight to the body, as no game runs here: the shots come out alike every run.
-fn swing(p: &mut Painter) {
+fn show(p: &mut Painter, anim: u16) {
     let world = p.app.world_mut();
     let mut own = world
         .query_filtered::<&mut UnitShow, With<PlayerBody>>()
         .single_mut(world)
         .expect("the window's body");
-    own.play = Some(ATTACK_UNARMED);
+    own.play = Some(anim);
 }
 
 #[test]
@@ -586,28 +588,48 @@ fn the_walker_swings_standing_and_on_the_run() {
     let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
         return;
     };
-    let from_its_side = std::f32::consts::FRAC_PI_2;
-    p.orbit(from_its_side, 5.0);
+    p.orbit(FROM_ITS_SIDE, 5.0);
     p.wait(2.0);
-    swing(&mut p);
+    show(&mut p, ATTACK_UNARMED);
     p.wait(0.3);
     p.shoot("swing-1-standing");
     p.wait(1.0);
     p.key(KeyCode::KeyW, ButtonState::Pressed);
     p.wait(1.5);
-    swing(&mut p);
+    show(&mut p, ATTACK_UNARMED);
     p.wait(0.3);
-    p.orbit(from_its_side, 5.0);
+    p.orbit(FROM_ITS_SIDE, 5.0);
     p.shoot("swing-2-running");
     p.key(KeyCode::KeyW, ButtonState::Released);
-    p.orbit(-from_its_side, 5.0);
+    p.orbit(-FROM_ITS_SIDE, 5.0);
     p.wait(1.5);
-    swing(&mut p);
+    show(&mut p, ATTACK_UNARMED);
     p.wait(0.2);
     p.key(KeyCode::KeyW, ButtonState::Pressed);
     p.wait(0.35);
-    p.orbit(from_its_side, 5.0);
+    p.orbit(FROM_ITS_SIDE, 5.0);
     p.shoot("swing-3-standing-then-running");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_is_hit_standing_and_runs_on() {
+    let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    p.orbit(FROM_ITS_SIDE, 5.0);
+    p.wait(2.0);
+    show(&mut p, COMBAT_WOUND);
+    p.wait(0.25);
+    p.shoot("wound-1-standing");
+    p.orbit(-FROM_ITS_SIDE, 5.0);
+    p.wait(1.5);
+    show(&mut p, COMBAT_WOUND);
+    p.wait(0.15);
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    p.wait(0.3);
+    p.orbit(FROM_ITS_SIDE, 5.0);
+    p.shoot("wound-2-running-on");
 }
 
 #[test]
