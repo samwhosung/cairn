@@ -51,9 +51,8 @@ pub struct Fighter {
     pub kills: u32,
     pub deaths: u32,
     pub swing_pending: bool,
-    pub ready_at: Tick,
-    /// While it stands ready, when it calms down unless it swings or is hit again first.
-    pub calms_at: Option<Tick>,
+    pub swings_again_at: Tick,
+    pub stands_ready_until: Option<Tick>,
 }
 
 impl Game for Melee {
@@ -83,8 +82,8 @@ impl Game for Melee {
             kills: score.kills,
             deaths: score.deaths,
             swing_pending: false,
-            ready_at: 0,
-            calms_at: None,
+            swings_again_at: 0,
+            stands_ready_until: None,
         }
     }
 
@@ -138,7 +137,7 @@ impl Kind<Melee> for Fighter {
             match letter.msg {
                 Msg::Swing if me.life == Life::Alive => {
                     me.swing_pending = true;
-                    out.wake_at(me.ready_at.max(w.tick()));
+                    out.wake_at(me.swings_again_at.max(w.tick()));
                 }
                 Msg::Hit(damage) if me.life == Life::Alive => {
                     me.health = me.health.saturating_sub(damage);
@@ -160,13 +159,13 @@ impl Kind<Melee> for Fighter {
 }
 
 fn swing(id: Id, me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
-    if w.tick() < me.ready_at {
-        out.wake_at(me.ready_at);
+    if w.tick() < me.swings_again_at {
+        out.wake_at(me.swings_again_at);
         return;
     }
     let k = w.knobs();
     me.swing_pending = false;
-    me.ready_at = w.after_ms(k.swing_ms);
+    me.swings_again_at = w.after_ms(k.swing_ms);
     out.play(anim::ATTACK_UNARMED);
     stand_ready(me, w, out);
     out.count("swings", 1);
@@ -178,18 +177,18 @@ fn swing(id: Id, me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
 }
 
 fn stand_ready(me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
-    if me.calms_at.is_none() {
+    if me.stands_ready_until.is_none() {
         out.idle(Some(anim::READY_UNARMED));
     }
-    let calms_at = w.after_ms(w.knobs().ready_ms);
-    me.calms_at = Some(calms_at);
-    out.wake_at(calms_at);
+    let until = w.after_ms(w.knobs().ready_ms);
+    me.stands_ready_until = Some(until);
+    out.wake_at(until);
 }
 
 fn calm_down_once_quiet(me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
-    match me.calms_at {
+    match me.stands_ready_until {
         Some(at) if w.tick() >= at => {
-            me.calms_at = None;
+            me.stands_ready_until = None;
             out.idle(None);
         }
         Some(at) => out.wake_at(at),
@@ -230,7 +229,7 @@ fn die(me: &mut Fighter, killer: Id, w: &World<'_, Melee>, out: &mut Out<Melee>)
     me.life = Life::Dead { rises_at };
     me.deaths += 1;
     me.swing_pending = false;
-    if me.calms_at.take().is_some() {
+    if me.stands_ready_until.take().is_some() {
         out.idle(None);
     }
     if let Some(at) = rises_at {
