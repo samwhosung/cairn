@@ -249,13 +249,11 @@ mod tests {
         running.stop().expect("the server stops");
     }
 
-    /// The two ways to a server, as the window takes them.
-    enum Way {
+    enum Route {
         InProcess,
         Loopback,
     }
 
-    /// A claim the server refuses, so the next batch answers it with a correction.
     fn malformed(ack: u32) -> ClientMessage {
         ClientMessage::Claim(protocol::Claim {
             ack,
@@ -266,8 +264,7 @@ mod tests {
         })
     }
 
-    /// The correction's sequence number in `bytes`, if it is a batch that carries one.
-    fn corrected(bytes: &[u8]) -> Option<u32> {
+    fn correction_seq(bytes: &[u8]) -> Option<u32> {
         let Ok(protocol::ServerMessage::Batch(batch)) = protocol::ServerMessage::read(bytes) else {
             return None;
         };
@@ -289,7 +286,7 @@ mod tests {
         const FRAME: Duration = Duration::from_millis(16);
         eprintln!("{}", server::load_average());
         for tick_ms in [1u16, 50] {
-            for way in [Way::InProcess, Way::Loopback] {
+            for way in [Route::InProcess, Route::Loopback] {
                 let running = server::start(server::Config {
                     addr: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
                     tick_threads: 1,
@@ -304,11 +301,11 @@ mod tests {
                     appearance: Appearance::default(),
                 };
                 let (name, link) = match way {
-                    Way::InProcess => (
+                    Route::InProcess => (
                         "in-process",
                         Link::in_process(running.connect_host(), hello),
                     ),
-                    Way::Loopback => (
+                    Route::Loopback => (
                         "over loopback",
                         Link::open(running.addr().expect("a listener"), hello),
                     ),
@@ -332,7 +329,7 @@ mod tests {
                         'answer: loop {
                             for a in link.arrivals() {
                                 if let Arrival::Frame { bytes, arrived } = a
-                                    && let Some(seq) = corrected(&bytes)
+                                    && let Some(seq) = correction_seq(&bytes)
                                 {
                                     ack = seq;
                                     trips.push(arrived - sent);

@@ -86,7 +86,6 @@ pub fn judge(app: &mut App) -> Option<Judged> {
     Some(judged)
 }
 
-/// Fails unless `app`'s own server refused nothing of its walk and never put it back.
 pub fn assert_honest(app: &mut App, who: &str) {
     if std::thread::panicking() {
         return;

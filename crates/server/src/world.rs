@@ -50,12 +50,17 @@ pub struct Body {
     pub clock: Option<ClockPin>,
     pub clock_spent_ms: u32,
     pub correction_seq: u32,
-    /// The tick of the latest refusal, and why.
-    pub corrected: Option<(u32, Why)>,
+    pub corrected: Option<Correction>,
     pub moved_at: u32,
     pub flags_changed_at: u32,
     pub refused: u32,
     pub stale: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Correction {
+    pub tick: u32,
+    pub why: Why,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -378,7 +383,7 @@ impl Judge<'_> {
                     });
                 }
                 body.correction_seq = body.correction_seq.wrapping_add(1);
-                body.corrected = Some((tick, why));
+                body.corrected = Some(Correction { tick, why });
                 body.refused += 1;
                 done.refused[why as usize] += 1;
             }
@@ -409,7 +414,7 @@ fn hash_body(id: u32, b: &Body) -> u64 {
         pin.server_ms,
         b.clock_spent_ms,
         b.correction_seq,
-        b.corrected.map_or(u32::MAX, |(tick, _)| tick),
+        b.corrected.map_or(u32::MAX, |c| c.tick),
         b.moved_at,
         b.flags_changed_at,
         b.refused,

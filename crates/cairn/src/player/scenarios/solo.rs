@@ -1,6 +1,3 @@
-//! The window alone through its own server: a landing granted there, refused on another's, and
-//! replayed.
-
 use bevy::input::keyboard::KeyCode;
 use protocol::Why;
 use server::{InputOrder, Replay, Replicate, Summary};

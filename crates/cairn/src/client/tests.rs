@@ -102,7 +102,6 @@ fn an_ordering_cycle_stops_the_client() {
 
 const WELCOME_WITHIN: Duration = Duration::from_secs(10);
 
-/// A client as `App::run` would start it.
 fn running(argv: &str) -> Result<App, String> {
     let mut app = assembled(argv)?;
     app.finish();

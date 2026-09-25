@@ -205,10 +205,10 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     let me = bodies[o.id as usize];
     let mut out = Vec::with_capacity(o.size_hint);
     let start = begin_batch(&mut out, tick);
-    if let Some((at, why)) = me.corrected
-        && at == tick
+    if let Some(c) = me.corrected
+        && c.tick == tick
     {
-        write_correct(&mut out, me.correction_seq, why, &me.movement);
+        write_correct(&mut out, me.correction_seq, c.why, &me.movement);
         built.corrections += 1;
     }
     let mut pass = Pass {
