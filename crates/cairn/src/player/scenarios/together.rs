@@ -1,6 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::mpsc;
+use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,11 +13,12 @@ use world::coords::bevy_to_wow;
 use world::rig::ModelAnimations;
 use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
-use super::honest::{Stand, serve_over_loopback};
+use super::clock::Served;
+use super::honest::{Stand, serve};
 use super::painter::{Painter, frame_costs, rig_census};
 use super::pair::Act;
 use super::pictures::{EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS};
-use super::walker::Walker;
+use super::walker::{Walker, ready};
 use crate::net::{OtherPlayer, RemoteMotion};
 use crate::player::state::Player;
 
@@ -39,43 +40,47 @@ const RUN_AND_JUMP: [(f32, Act); 4] = [
     (1.3, Act::Release(KeyCode::KeyW)),
 ];
 
+/// The other player's client, on the painter's clock: once told to go, it runs and jumps as its
+/// own game clock says.
 struct Runner {
-    ready: mpsc::Receiver<()>,
-    cue: mpsc::Sender<()>,
+    w: Walker,
+    go: Option<Duration>,
+    next: usize,
 }
 
-/// The other player's client, on a thread of its own so that a shot never stalls it.
-fn runner(server: SocketAddr, look: CharacterLook) -> Runner {
-    let (ready, is_ready) = mpsc::channel();
-    let (cue, cued) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let Some(mut w) = Walker::welcomed_over_loopback(server, "Runner", look, HZ) else {
-            return;
-        };
-        super::walker::ready(&mut [&mut w]);
-        let _ = ready.send(());
-        while cued.try_recv().is_err() {
-            w.run(1);
+impl Runner {
+    fn joined(clock: &Served, look: CharacterLook) -> Self {
+        let mut w = Walker::welcomed(clock, "Runner", look).expect("the install");
+        ready(&mut [&mut w]);
+        Self {
+            w,
+            go: None,
+            next: 0,
         }
-        let clock = |w: &Walker| w.app.world().resource::<Time<Virtual>>().elapsed();
-        let go = clock(&w);
-        for (at, act) in RUN_AND_JUMP {
-            while clock(&w).saturating_sub(go).as_secs_f32() < at {
-                w.run(1);
+    }
+
+    fn go(&mut self) {
+        self.go = Some(self.clock());
+    }
+
+    fn clock(&self) -> Duration {
+        self.w.app.world().resource::<Time<Virtual>>().elapsed()
+    }
+
+    fn frame(&mut self) {
+        if let Some(go) = self.go {
+            while let Some(&(at, act)) = RUN_AND_JUMP.get(self.next)
+                && self.clock().saturating_sub(go).as_secs_f32() >= at
+            {
+                match act {
+                    Act::Press(key) => self.w.press(key),
+                    Act::Release(key) => self.w.release(key),
+                    _ => {}
+                }
+                self.next += 1;
             }
-            match act {
-                Act::Press(key) => w.press(key),
-                Act::Release(key) => w.release(key),
-                _ => {}
-            }
         }
-        while matches!(cued.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-            w.run(1);
-        }
-    });
-    Runner {
-        ready: is_ready,
-        cue,
+        self.w.run(1);
     }
 }
 
@@ -89,6 +94,25 @@ pub(super) fn wait(p: &mut Painter, secs: f32) {
             return;
         }
     }
+}
+
+/// Frames until the other player is in view, then frames that hold the clock until the painter's
+/// world has arrived and the other is dressed, with the painter's game clock held throughout.
+pub(super) fn arrive(p: &mut Painter) {
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    p.clock().pause();
+    while yards_to_the_other(p).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the other player never came into view"
+        );
+        p.run(1);
+    }
+    while !(p.arrived() && others_dressed_and_skinned(p)) {
+        assert!(Instant::now() < deadline, "the pair never arrived");
+        p.hold();
+    }
+    p.clock().unpause();
 }
 
 pub(super) fn others_dressed_and_skinned(p: &mut Painter) -> bool {
@@ -219,21 +243,14 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         let name = scene.name;
         let (at, painter) = scene.painter;
         let (start, running) = scene.runner;
-        let server = serve_over_loopback(&[at, start]);
-        let Some(mut p) = Painter::joined(server.addr(), at.feet, at.heading_deg, painter) else {
+        let clock = serve(&[at, start], HZ);
+        let Some(mut p) = Painter::on_clock(&clock, at.feet, at.heading_deg, painter) else {
             return;
         };
-        let r = runner(server.addr(), running);
-        let deadline = Instant::now() + LOAD_TIMEOUT;
-        let mut settled = false;
-        p.clock().pause();
-        while !(settled && p.arrived() && others_dressed_and_skinned(&mut p)) {
-            assert!(Instant::now() < deadline, "the pair never arrived");
-            settled |= r.ready.try_recv().is_ok();
-            wait(&mut p, 0.0);
-        }
-        p.clock().unpause();
-        p.keep_time_by_its_frames();
+        let runner = Rc::new(RefCell::new(Runner::joined(&clock, running)));
+        let beside = runner.clone();
+        p.beside(move || beside.borrow_mut().frame());
+        arrive(&mut p);
         if scene.night {
             p.set_time(0, 30);
         }
@@ -244,8 +261,7 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         let in_the_air = |f: u32| f & flags::FALLING != 0;
         let landed = |f: u32| f & flags::FALLING == 0;
         shoot_the_other(&mut p, &format!("{name}-1-standing"), standing);
-        p.level_with_the_wall();
-        let _ = r.cue.send(());
+        runner.borrow_mut().go();
         wait_until_the_other(&mut p, "running", running);
         p.wait(0.3);
         shoot_the_other(&mut p, &format!("{name}-2-running"), running);
@@ -258,9 +274,9 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         p.tilt_up(-0.6);
         p.wait(0.3);
         shoot_the_other(&mut p, &format!("{name}-5-the-ground-it-ran-over"), landed);
-        let _ = r.cue.send(());
         drop(p);
-        server.stop().expect("the server stops");
+        drop(runner);
+        clock.borrow_mut().stop();
     }
 }
 

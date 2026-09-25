@@ -55,11 +55,12 @@ pub enum Through {
         look: CharacterLook,
     },
     Hosts(Box<server::Config>),
-    /// A guest of the server on a test's clock.
+    /// The server on a test's clock, as its host or a guest.
     Clock {
         clock: Served,
         name: String,
         look: CharacterLook,
+        host: bool,
     },
 }
 
@@ -68,7 +69,10 @@ impl Through {
     pub fn hosted(&self) -> bool {
         matches!(
             self,
-            Self::ItsOwn { .. } | Self::ItsOwnInRealTime | Self::Hosts(_)
+            Self::ItsOwn { .. }
+                | Self::ItsOwnInRealTime
+                | Self::Hosts(_)
+                | Self::Clock { host: true, .. }
         )
     }
 
@@ -93,7 +97,12 @@ impl Through {
             Self::ItsOwnInRealTime => (alone::own_server(map, pose, look), None),
             Self::Loopback { addr, name, look } => (Net::connect(addr, hello(name, &look)), None),
             Self::Hosts(cfg) => (hosts(*cfg, look), None),
-            Self::Clock { clock, name, look } => on(&clock, false, hello(name, &look)),
+            Self::Clock {
+                clock,
+                name,
+                look,
+                host,
+            } => on(&clock, host, hello(name, &look)),
         }
     }
 }
@@ -234,6 +243,7 @@ impl Walker {
             clock: clock.clone(),
             name: name.to_owned(),
             look,
+            host: false,
         };
         let mut walker = Self::build("Azeroth", [0.0; 3], 0.0, hz, None, through)?;
         walker.await_welcome();

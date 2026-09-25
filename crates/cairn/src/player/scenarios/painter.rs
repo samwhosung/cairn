@@ -23,7 +23,7 @@ use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
-use super::clock::Stepping;
+use super::clock::{Served, Stepping};
 use super::walker::{Through, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
@@ -46,6 +46,7 @@ pub(super) struct Painter {
     pace: Pace,
     judge_on_drop: bool,
     stepping: Option<Stepping>,
+    beside: Vec<Box<dyn FnMut()>>,
 }
 
 impl Painter {
@@ -82,6 +83,22 @@ impl Painter {
             addr: server,
             name: "Painter".into(),
             look: look.clone(),
+        };
+        Self::welcomed(through, feet, heading_deg, look)
+    }
+
+    /// A painter joining the server on `clock` as a guest, as [`Painter::joined`] does one's.
+    pub(super) fn on_clock(
+        clock: &Served,
+        feet: [f32; 3],
+        heading_deg: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
+        let through = Through::Clock {
+            clock: clock.clone(),
+            name: "Painter".into(),
+            look: look.clone(),
+            host: false,
         };
         Self::welcomed(through, feet, heading_deg, look)
     }
@@ -184,6 +201,7 @@ impl Painter {
             pace: Pace::default(),
             judge_on_drop,
             stepping,
+            beside: Vec::new(),
         };
         painter.hold();
         let camera = painter
@@ -249,16 +267,25 @@ impl Painter {
         }
     }
 
+    /// Runs `window`, another client on this painter's clock, a frame after each of the painter's
+    /// own that moves the clock on.
+    pub(super) fn beside(&mut self, window: impl FnMut() + 'static) {
+        self.beside.push(Box::new(window));
+    }
+
     /// A frame a step on from the last, on the test's clock or the wall's.
     fn frame(&mut self) {
         match &mut self.stepping {
             Some(stepping) => stepping.frame(&mut self.app),
             None => self.app.update(),
         }
+        for window in &mut self.beside {
+            window();
+        }
     }
 
     /// A frame that moves a test's clock nothing on.
-    fn hold(&mut self) {
+    pub(super) fn hold(&mut self) {
         match &mut self.stepping {
             Some(stepping) => stepping.hold(&mut self.app),
             None => self.app.update(),

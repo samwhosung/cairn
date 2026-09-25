@@ -1,8 +1,5 @@
-use std::io;
-use std::net::SocketAddr;
-
 use bevy::input::keyboard::KeyCode;
-use server::{Config, Running, Spawn, Summary, Why};
+use server::{Config, Spawn, Why};
 use world::unit::CharacterLook;
 
 use super::clock::{self, Served};
@@ -19,18 +16,6 @@ pub struct Stand {
     pub heading_deg: f32,
 }
 
-pub struct LoopbackServer(Running);
-
-impl LoopbackServer {
-    pub fn addr(&self) -> SocketAddr {
-        self.0.addr().expect("the server listens")
-    }
-
-    pub fn stop(self) -> io::Result<Summary> {
-        self.0.stop()
-    }
-}
-
 pub fn config(stands: &[Stand]) -> Config {
     Config {
         tick_threads: 1,
@@ -44,10 +29,6 @@ pub fn config(stands: &[Stand]) -> Config {
             .collect(),
         ..Config::default()
     }
-}
-
-pub fn serve_over_loopback(stands: &[Stand]) -> LoopbackServer {
-    LoopbackServer(server::start(config(stands)).expect("a server"))
 }
 
 /// A server whose players join beside `stands` in turn, on a clock their windows step `hz` times
