@@ -47,7 +47,7 @@ fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
     let (ready_tx, ready_rx) = mpsc::channel();
     let (cue, cued) = mpsc::channel();
     thread::spawn(move || {
-        let Some(mut w) = Walker::welcomed(server, "Fighter", look, HZ) else {
+        let Some(mut w) = Walker::welcomed_over_loopback(server, "Fighter", look, HZ) else {
             return;
         };
         w.aim(WEST);

@@ -30,22 +30,23 @@ impl LoopbackServer {
     }
 }
 
-pub fn serve(stands: &[Stand]) -> LoopbackServer {
-    LoopbackServer(
-        server::start(Config {
-            tick_threads: 1,
-            io_threads: 1,
-            spawns: stands
-                .iter()
-                .map(|s| Spawn {
-                    pos: s.feet,
-                    facing: s.heading_deg.to_radians(),
-                })
-                .collect(),
-            ..Config::default()
-        })
-        .expect("a server"),
-    )
+pub fn config(stands: &[Stand]) -> Config {
+    Config {
+        tick_threads: 1,
+        io_threads: 1,
+        spawns: stands
+            .iter()
+            .map(|s| Spawn {
+                pos: s.feet,
+                facing: s.heading_deg.to_radians(),
+            })
+            .collect(),
+        ..Config::default()
+    }
+}
+
+pub fn serve_over_loopback(stands: &[Stand]) -> LoopbackServer {
+    LoopbackServer(server::start(config(stands)).expect("a server"))
 }
 
 struct Scenario {
@@ -140,9 +141,9 @@ const SCENARIOS: [Scenario; 7] = [
 fn an_honest_client_walking_the_scenarios_is_never_put_back() {
     let mut refused = Vec::new();
     for walk in &SCENARIOS {
-        let server = serve(&[walk.at]);
+        let server = serve_over_loopback(&[walk.at]);
         let look = CharacterLook::naked(1, 0);
-        let Some(mut w) = Walker::joined(server.addr(), "Walker", look, HZ) else {
+        let Some(mut w) = Walker::joined_over_loopback(server.addr(), "Walker", look, HZ) else {
             return;
         };
         (walk.walk)(&mut w);

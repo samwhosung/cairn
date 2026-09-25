@@ -80,6 +80,12 @@ impl Net {
         ))
     }
 
+    /// Joins through `server`, a connection from inside a server's process that the test drives.
+    #[cfg(test)]
+    pub fn in_process(server: server::InProcess, hello: Hello) -> Self {
+        Self::over(Link::in_process(server, hello), None)
+    }
+
     fn over(link: Link, hosted: Option<server::Running>) -> Self {
         Self {
             link,

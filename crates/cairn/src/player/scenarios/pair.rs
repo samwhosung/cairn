@@ -6,16 +6,19 @@ use bevy::input::keyboard::KeyCode;
 use world::unit::CharacterLook;
 
 use super::MEADOW;
-use super::honest::{Stand, serve};
+use super::clock::{self, Served};
+use super::honest::{self, Stand};
 use super::walker::{Walker, ready};
 use crate::net::{Faults, OtherPlayer, RemoteMotion};
 use crate::player::state::{GRAVITY, RUN_SPEED};
 
 pub const HZ: f32 = 60.0;
-const CLAIM_TO_VIEW_SECS: f32 = 0.15;
-const NEAR_TIER_SECS: f32 = 0.05;
+const TICK_MS: u16 = 50;
+/// A claim waits at most a tick for the server, whose batch at that tick carries it to a watcher
+/// this near, and the watcher's frame at the tick takes it in: frames at `HZ` fall on the ticks,
+/// and moves that arrive a tick apart replay as they arrive.
+const HEARD_LATE_SECS: f32 = TICK_MS as f32 / 1000.0;
 const HEARTBEAT_SECS: f32 = protocol::HEARTBEAT_MS as f32 / 1000.0;
-const HEARD_LATE_SECS: f32 = CLAIM_TO_VIEW_SECS + NEAR_TIER_SECS;
 const REVERSAL: f32 = 2.0 * RUN_SPEED;
 pub const BOUND_ACROSS: f32 = REVERSAL * HEARD_LATE_SECS + STEP_ACROSS;
 /// Up, a fall without a jump is heard only at the next heartbeat.
@@ -254,15 +257,30 @@ pub struct Walked {
     pub server: server::Summary,
 }
 
+fn serve(stands: &[Stand]) -> Served {
+    let cfg = server::Config {
+        tick_ms: TICK_MS,
+        ..honest::config(stands)
+    };
+    clock::serve(&cfg, clock::step_at(HZ))
+}
+
 pub fn walk(place: &Place, looks: [CharacterLook; 2], b_faults: Faults) -> Option<Walked> {
-    let server = serve(&[place.a, place.b]);
+    let clock = serve(&[place.a, place.b]);
     let [look_a, look_b] = looks;
-    let mut a = Walker::welcomed(server.addr(), "A", look_a, HZ)?;
-    let mut b = Walker::welcomed(server.addr(), "B", look_b, HZ)?;
+    let mut a = Walker::welcomed(&clock, "A", look_a)?;
+    let mut b = Walker::welcomed(&clock, "B", look_b)?;
     let id = |w: &Walker| w.net().and_then(|n| n.welcome()).map(|w| w.id);
     let (id_a, id_b) = (id(&a).expect("A joined"), id(&b).expect("B joined"));
     *b.net_mut().expect("B joined").faults() = b_faults;
     ready(&mut [&mut a, &mut b]);
+    for _ in 0..(5.0 * HZ) as u32 {
+        if copy_of(&mut a, id_b).is_some() && copy_of(&mut b, id_a).is_some() {
+            break;
+        }
+        a.run(1);
+        b.run(1);
+    }
     let (mut script_a, mut script_b) = (Script::default(), Script::default());
     let mut walked = Walked {
         a_seen_by_b: Watch::default(),
@@ -298,55 +316,28 @@ pub fn walk(place: &Place, looks: [CharacterLook; 2], b_faults: Faults) -> Optio
         }
     }
     drop(b);
-    walked.server = server.stop().expect("the server stops");
+    walked.server = clock.borrow_mut().stop();
     Some(walked)
 }
 
 pub fn alone(place: &Place) -> Option<server::Summary> {
-    let server = serve(&[place.a]);
-    let mut a = Walker::joined(server.addr(), "A", CharacterLook::naked(1, 0), HZ)?;
+    let clock = serve(&[place.a]);
+    let mut a = Walker::joined(&clock, "A", CharacterLook::naked(1, 0))?;
     let mut script = Script::default();
     for frame in 0..place.frames {
         script.frame(&mut a, place.acts, frame);
         a.run(1);
     }
     drop(a);
-    Some(server.stop().expect("the server stops"))
+    Some(clock.borrow_mut().stop())
 }
 
 fn human() -> CharacterLook {
     CharacterLook::naked(1, 0)
 }
 
-/// Runs the test `name` of this module again in a process of its own, where its clients share
-/// the engine's task pools with no other test's, and fails if it fails there. `true` in that
-/// process.
-fn alone_in_a_process(name: &str) -> bool {
-    const ALONE: &str = "CAIRN_TEST_ALONE";
-    let module = module_path!().split_once("::").map_or("", |(_, m)| m);
-    let test = format!("{module}::{name}");
-    if std::env::var(ALONE).is_ok_and(|t| t == test) {
-        return true;
-    }
-    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args([test.as_str(), "--exact", "--nocapture"])
-        .env(ALONE, &test)
-        .output()
-        .expect("the test runs in a process of its own");
-    print!("{}", String::from_utf8_lossy(&out.stdout));
-    eprint!("{}", String::from_utf8_lossy(&out.stderr));
-    assert!(
-        out.status.success(),
-        "{test} failed in a process of its own"
-    );
-    false
-}
-
 #[test]
 fn two_clients_see_each_other_walk_run_turn_jump_fall_and_swim() {
-    if !alone_in_a_process("two_clients_see_each_other_walk_run_turn_jump_fall_and_swim") {
-        return;
-    }
     for place in [&MEADOW_WALK, &CANAL] {
         let Some(w) = walk(place, [human(), human()], Faults::default()) else {
             return;

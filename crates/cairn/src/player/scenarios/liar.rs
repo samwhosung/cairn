@@ -10,11 +10,14 @@ use server::{Config, Limits, Spawn};
 use world::unit::CharacterLook;
 
 use super::MEADOW;
-use super::pair::{BOUND_ACROSS, HZ, copy_of};
+use super::pair::{HZ, copy_of};
 use super::walker::Walker;
 use crate::player::state::RUN_SPEED;
 
 const LIE: f32 = 3.0;
+/// How far a watcher's copy of a player may stand from where the server holds it, over a socket on
+/// the wall clock: a reversal heard late by a claim's way to the view and the near tier's refresh.
+const COPY_OFF_YD: f32 = 2.0 * RUN_SPEED * (0.15 + 0.05) + 1.0 / 128.0;
 
 struct Liar {
     stream: TcpStream,
@@ -145,7 +148,7 @@ fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
     })
     .expect("a server");
     let addr = server.addr().expect("the server listens");
-    let mut honest = Walker::joined(addr, "B", CharacterLook::naked(1, 0), HZ)?;
+    let mut honest = Walker::joined_over_loopback(addr, "B", CharacterLook::naked(1, 0), HZ)?;
     let mut liar = Liar::join(addr, every);
     let from = spawn(3.0).pos;
     let mut beyond = f32::MIN;
@@ -156,7 +159,7 @@ fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
         honest.run(1);
         if let Some((seen, _)) = copy_of(&mut honest, liar.id) {
             let t = begun.elapsed().as_secs_f32();
-            let honest_reach = RUN_SPEED * 1.1 * t + 0.5 + BOUND_ACROSS;
+            let honest_reach = RUN_SPEED * 1.1 * t + 0.5 + COPY_OFF_YD;
             let off = (seen[0] - from[0]).hypot(seen[1] - from[1]);
             beyond = beyond.max(off - honest_reach);
         }

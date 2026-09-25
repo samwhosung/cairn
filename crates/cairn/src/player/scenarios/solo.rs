@@ -4,7 +4,7 @@ use server::{InputOrder, Replay, Replicate, Summary};
 use world::coords::wow_to_bevy;
 use world::unit::CharacterLook;
 
-use super::honest::{Stand, serve};
+use super::honest::{Stand, serve_over_loopback};
 use super::pair::{self, MEADOW_WALK, Script};
 use super::walker::Walker;
 use super::{MEADOW, horizontal};
@@ -65,8 +65,9 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
         feet: [MEADOW[0], MEADOW[1], 59.86],
         heading_deg: 0.0,
     };
-    let server = serve(&[stand]);
-    let Some(mut w) = Walker::joined(server.addr(), "Guest", CharacterLook::naked(1, 0), HZ) else {
+    let server = serve_over_loopback(&[stand]);
+    let look = CharacterLook::naked(1, 0);
+    let Some(mut w) = Walker::joined_over_loopback(server.addr(), "Guest", look, HZ) else {
         return;
     };
     let stood = w.wow();

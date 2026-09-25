@@ -308,6 +308,11 @@ impl Stepper {
         self.clients.push(&mut inputs);
     }
 
+    /// Bytes the connections from inside the process have sent.
+    pub fn bytes_in(&self) -> u64 {
+        self.clients.bytes_in.load(Ordering::Relaxed)
+    }
+
     /// Hands each connection from inside the process what the server has sent it since the last
     /// call, as written at `at`, and closes those the server has let go.
     pub fn hand_over(&mut self, at: Instant) {

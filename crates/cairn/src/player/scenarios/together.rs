@@ -13,7 +13,7 @@ use world::coords::bevy_to_wow;
 use world::rig::ModelAnimations;
 use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
-use super::honest::{Stand, serve};
+use super::honest::{Stand, serve_over_loopback};
 use super::painter::{Painter, frame_costs, rig_census};
 use super::pair::Act;
 use super::pictures::{EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS};
@@ -49,7 +49,7 @@ fn runner(server: SocketAddr, look: CharacterLook) -> Runner {
     let (ready, is_ready) = mpsc::channel();
     let (cue, cued) = mpsc::channel::<()>();
     thread::spawn(move || {
-        let Some(mut w) = Walker::welcomed(server, "Runner", look, HZ) else {
+        let Some(mut w) = Walker::welcomed_over_loopback(server, "Runner", look, HZ) else {
             return;
         };
         super::walker::ready(&mut [&mut w]);
@@ -219,7 +219,7 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         let name = scene.name;
         let (at, painter) = scene.painter;
         let (start, running) = scene.runner;
-        let server = serve(&[at, start]);
+        let server = serve_over_loopback(&[at, start]);
         let Some(mut p) = Painter::joined(server.addr(), at.feet, at.heading_deg, painter) else {
             return;
         };

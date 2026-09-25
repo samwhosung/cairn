@@ -20,6 +20,7 @@ use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install, WorldCamera};
 
 use super::alone::{self, Judged, Pace};
+use super::clock::{Served, Stepping, step_at};
 use crate::net::{Net, NetPlugin};
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerPlugin, Teleported};
@@ -38,6 +39,7 @@ pub struct Walker {
     step: Duration,
     pace: Pace,
     judge_on_drop: bool,
+    stepping: Option<Stepping>,
 }
 
 pub enum Through {
@@ -50,6 +52,12 @@ pub enum Through {
         look: CharacterLook,
     },
     Hosts(Box<server::Config>),
+    /// A guest of the server on a test's clock.
+    Clock {
+        clock: Served,
+        name: String,
+        look: CharacterLook,
+    },
 }
 
 pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
@@ -60,12 +68,16 @@ pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
     }
 }
 
+/// On a test's clock, a settle holds the clock too, so that a world's streaming takes no test time.
 fn settle_all(walkers: &mut [&mut Walker]) {
     let deadline = Instant::now() + Duration::from_secs(300);
     hold_game_clocks(walkers);
     while !walkers.iter().all(|w| w.settled()) {
         assert!(Instant::now() < deadline, "the collision never settled");
-        round(walkers);
+        for w in walkers.iter_mut() {
+            w.hold();
+        }
+        wait_a_step(walkers);
     }
     release_game_clocks(walkers);
 }
@@ -91,16 +103,21 @@ pub fn ready(walkers: &mut [&mut Walker]) {
     settle_all(walkers);
     round(walkers);
     round(walkers);
-    for w in walkers.iter_mut() {
+    for w in walkers.iter_mut().filter(|w| w.stepping.is_none()) {
         w.pace.start();
     }
 }
 
 fn round(walkers: &mut [&mut Walker]) {
     for w in walkers.iter_mut() {
-        w.app.update();
+        w.frame();
     }
-    std::thread::sleep(walkers.iter().map(|w| w.step).max().unwrap_or_default());
+    wait_a_step(walkers);
+}
+
+fn wait_a_step(walkers: &[&mut Walker]) {
+    let on_the_wall = walkers.iter().filter(|w| w.stepping.is_none());
+    std::thread::sleep(on_the_wall.map(|w| w.step).max().unwrap_or_default());
 }
 
 impl Walker {
@@ -148,16 +165,47 @@ impl Walker {
 
     /// A client on Azeroth that joins the server at `server` as `look` and stands where its
     /// welcome places it, stepped at `hz` and paced to the wall clock.
-    pub fn joined(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
-        let mut walker = Self::welcomed(server, name, look, hz)?;
+    pub fn joined_over_loopback(
+        server: SocketAddr,
+        name: &str,
+        look: CharacterLook,
+        hz: f32,
+    ) -> Option<Self> {
+        let mut walker = Self::welcomed_over_loopback(server, name, look, hz)?;
+        ready(&mut [&mut walker]);
+        Some(walker)
+    }
+
+    /// [`Walker::joined_over_loopback`], but not yet [`ready`].
+    pub fn welcomed_over_loopback(
+        server: SocketAddr,
+        name: &str,
+        look: CharacterLook,
+        hz: f32,
+    ) -> Option<Self> {
+        let through = Through::Loopback {
+            addr: server,
+            name: name.to_owned(),
+            look,
+        };
+        let mut walker = Self::build("Azeroth", [0.0; 3], 0.0, hz, None, through)?;
+        walker.await_welcome();
+        Some(walker)
+    }
+
+    /// A client on Azeroth that joins the server on `clock` as a guest of `look` and stands where
+    /// its welcome places it, stepped with the clock.
+    pub fn joined(clock: &Served, name: &str, look: CharacterLook) -> Option<Self> {
+        let mut walker = Self::welcomed(clock, name, look)?;
         ready(&mut [&mut walker]);
         Some(walker)
     }
 
     /// [`Walker::joined`], but not yet [`ready`].
-    pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
-        let through = Through::Loopback {
-            addr: server,
+    pub fn welcomed(clock: &Served, name: &str, look: CharacterLook) -> Option<Self> {
+        let hz = 1.0 / clock.borrow().step().as_secs_f32();
+        let through = Through::Clock {
+            clock: clock.clone(),
             name: name.to_owned(),
             look,
         };
@@ -194,16 +242,22 @@ impl Walker {
             .is_some()
             .then(|| CharacterTables::load(&install).expect("the character tables"));
         let current = CurrentMap::find(&install.0, map).expect("the map");
-        let step = Duration::from_secs_f64(1.0 / f64::from(hz));
+        let step = step_at(hz);
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let look = dressed.unwrap_or_else(|| CharacterLook::naked(1, 0));
         let over_loopback = matches!(through, Through::Loopback { .. });
+        let mut stepping = None;
         let net = match through {
             Through::ItsOwn { record } => alone::own_server(current.id, pose, &look, record),
             Through::Loopback { addr, name, look } => {
                 Net::connect(addr, crate::net::hello(name, &look))
             }
             Through::Hosts(cfg) => hosts(*cfg, &look),
+            Through::Clock { clock, name, look } => {
+                let server = clock.borrow_mut().connect(false);
+                stepping = Some(Stepping::on(&clock));
+                Net::in_process(server, crate::net::hello(name, &look))
+            }
         };
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin, InputPlugin));
@@ -230,13 +284,15 @@ impl Walker {
         }
         app.finish();
         app.cleanup();
+        let judge_on_drop = !over_loopback && stepping.is_none();
         let mut walker = Self {
             app,
             step,
             pace: Pace::default(),
-            judge_on_drop: !over_loopback,
+            judge_on_drop,
+            stepping,
         };
-        if !over_loopback {
+        if judge_on_drop {
             walker.settle();
             walker.pace.start();
         }
@@ -247,8 +303,26 @@ impl Walker {
         let deadline = Instant::now() + Duration::from_secs(30);
         while self.net().is_none_or(|n| n.welcome().is_none()) {
             assert!(Instant::now() < deadline, "no welcome from the server");
-            self.app.update();
-            std::thread::sleep(self.step);
+            self.frame();
+            if self.stepping.is_none() {
+                std::thread::sleep(self.step);
+            }
+        }
+    }
+
+    /// A frame a step on from the last, on the test's clock or the wall's.
+    fn frame(&mut self) {
+        match &mut self.stepping {
+            Some(stepping) => stepping.frame(&mut self.app),
+            None => self.app.update(),
+        }
+    }
+
+    /// A frame that moves a test's clock nothing on.
+    fn hold(&mut self) {
+        match &mut self.stepping {
+            Some(stepping) => stepping.hold(&mut self.app),
+            None => self.app.update(),
         }
     }
 
@@ -380,7 +454,7 @@ impl Walker {
         (0..n)
             .map(|_| {
                 self.pace.wait(self.step);
-                self.app.update();
+                self.frame();
                 let p = self.player();
                 Frame {
                     wow: bevy_to_wow(p.pos),
@@ -476,13 +550,13 @@ impl Walker {
                 Collider::trimesh(corners, faces),
             ))
             .id();
-        self.app.update();
+        self.frame();
         e
     }
 
     pub fn remove(&mut self, e: Entity) {
         self.app.world_mut().despawn(e);
-        self.app.update();
+        self.frame();
     }
 }
 

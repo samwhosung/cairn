@@ -23,6 +23,7 @@ use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
+use super::clock::Stepping;
 use super::walker::{Through, hosts, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
@@ -44,6 +45,7 @@ pub(super) struct Painter {
     out: PathBuf,
     pace: Pace,
     judge_on_drop: bool,
+    stepping: Option<Stepping>,
 }
 
 impl Painter {
@@ -131,12 +133,18 @@ impl Painter {
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
         let judge_on_drop = matches!(through, Some(Through::ItsOwn { .. } | Through::Hosts(_)));
+        let mut stepping = None;
         let net = through.map(|t| match t {
             Through::ItsOwn { record } => alone::own_server(map.id, pose, &look, record),
             Through::Loopback { addr, name, look } => {
                 Net::connect(addr, crate::net::hello(name, &look))
             }
             Through::Hosts(cfg) => hosts(*cfg, &look),
+            Through::Clock { clock, name, look } => {
+                let server = clock.borrow_mut().connect(false);
+                stepping = Some(Stepping::on(&clock));
+                Net::in_process(server, crate::net::hello(name, &look))
+            }
         });
         let mut app = App::new();
         world::register_source(&mut app, &install);
@@ -181,8 +189,9 @@ impl Painter {
             out: PathBuf::from(out),
             pace: Pace::default(),
             judge_on_drop,
+            stepping,
         };
-        painter.app.update();
+        painter.hold();
         let camera = painter
             .app
             .world_mut()
@@ -194,7 +203,7 @@ impl Painter {
         if joins {
             painter.await_welcome();
         }
-        if !over_loopback {
+        if !over_loopback && painter.stepping.is_none() {
             painter.pace.start();
         }
         Some(painter)
@@ -239,7 +248,32 @@ impl Painter {
             .is_none()
         {
             assert!(Instant::now() < deadline, "no welcome from the server");
-            self.app.update();
+            self.frame();
+            if self.stepping.is_none() {
+                std::thread::sleep(STEP);
+            }
+        }
+    }
+
+    /// A frame a step on from the last, on the test's clock or the wall's.
+    fn frame(&mut self) {
+        match &mut self.stepping {
+            Some(stepping) => stepping.frame(&mut self.app),
+            None => self.app.update(),
+        }
+    }
+
+    /// A frame that moves a test's clock nothing on.
+    fn hold(&mut self) {
+        match &mut self.stepping {
+            Some(stepping) => stepping.hold(&mut self.app),
+            None => self.app.update(),
+        }
+    }
+
+    /// Waits out a step of the wall clock after a frame on it; nothing on a test's.
+    fn pause_after_frame(&self) {
+        if self.stepping.is_none() {
             std::thread::sleep(STEP);
         }
     }
@@ -267,8 +301,8 @@ impl Painter {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         while self.app.world().resource::<Player>().settling {
             assert!(Instant::now() < deadline, "the collision never settled");
-            self.app.update();
-            std::thread::sleep(STEP);
+            self.hold();
+            self.pause_after_frame();
         }
         let from = wow_to_bevy([xy[0], xy[1], 500.0]);
         let ground = self
@@ -295,8 +329,8 @@ impl Painter {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         while !self.arrived() {
             assert!(Instant::now() < deadline, "the world never arrived");
-            self.app.update();
-            std::thread::sleep(STEP);
+            self.hold();
+            self.pause_after_frame();
         }
     }
 
@@ -370,7 +404,7 @@ impl Painter {
     pub(super) fn run(&mut self, frames: usize) {
         for _ in 0..frames {
             self.pace.wait(STEP);
-            self.app.update();
+            self.frame();
         }
     }
 
@@ -387,7 +421,13 @@ impl Painter {
 
     pub(super) fn shoot(&mut self, name: &str) {
         self.clock().pause();
-        self.run(FRAMES_TO_REACH_THE_IMAGE);
+        for _ in 0..FRAMES_TO_REACH_THE_IMAGE {
+            if self.stepping.is_some() {
+                self.hold();
+            } else {
+                self.run(1);
+            }
+        }
         let shot: Arc<Mutex<Option<Image>>> = Arc::default();
         let into = shot.clone();
         self.app
@@ -399,7 +439,7 @@ impl Painter {
         let deadline = Instant::now() + Duration::from_secs(30);
         while shot.lock().expect("the shot").is_none() {
             assert!(Instant::now() < deadline, "no frame came back");
-            self.app.update();
+            self.hold();
         }
         let image = shot.lock().expect("the shot").take().expect("a frame");
         let path = self.out.join(format!("{name}.png"));
