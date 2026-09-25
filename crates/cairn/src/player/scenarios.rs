@@ -507,6 +507,56 @@ fn a_wmo_wall_is_slid_along_and_never_tunnelled_at_any_frame_rate() {
     }
 }
 
+/// The ends of a fence north-east of Goldshire that stands across the border between two tiles,
+/// so both tiles place it.
+const BORDER_FENCE: [[f32; 2]; 2] = [[-9400.34, -2.10], [-9403.73, 0.70]];
+
+const PAST_THE_BORDER: f32 = 515.0;
+
+fn fence_stops(w: &mut Walker) -> bool {
+    let [a, b] = BORDER_FENCE;
+    let mid = [f32::midpoint(a[0], b[0]), f32::midpoint(a[1], b[1])];
+    let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let normal = [(b[1] - a[1]) / length, (a[0] - b[0]) / length];
+    let start = [mid[0] + 3.0 * normal[0], mid[1] + 3.0 * normal[1]];
+    w.teleport(Vec3::new(start[0], start[1], 500.0));
+    let ground = w
+        .ground_under(start[0], start[1], 500.0)
+        .expect("ground by the fence");
+    w.teleport(Vec3::new(start[0], start[1], ground));
+    w.aim((-normal[1]).atan2(-normal[0]).to_degrees());
+    w.press(KeyCode::KeyW);
+    w.run(90);
+    w.release(KeyCode::KeyW);
+    let end = w.wow();
+    let stop = (end[0] - mid[0]) * normal[0] + (end[1] - mid[1]) * normal[1];
+    (0.0..2.0 * CAPSULE_RADIUS).contains(&stop)
+}
+
+#[test]
+fn a_fence_on_a_tile_border_stands_after_either_tile_leaves() {
+    let Some(mut w) = Walker::on_ground(GOLDSHIRE, 0.0, 60.0) else {
+        return;
+    };
+    assert!(fence_stops(&mut w), "the fence stops a body at first");
+    for side in [PAST_THE_BORDER, -PAST_THE_BORDER, PAST_THE_BORDER] {
+        let x = BORDER_FENCE[0][0];
+        w.teleport(Vec3::new(x, side, 500.0));
+        assert!(
+            w.ground_under(x, side / 2.0, 500.0).is_some(),
+            "the near tile stays"
+        );
+        assert!(
+            w.ground_under(x, -side / 2.0, 500.0).is_none(),
+            "the far tile has left"
+        );
+        assert!(
+            fence_stops(&mut w),
+            "the fence did not stop the body once it had been to y {side}"
+        );
+    }
+}
+
 /// Goldshire's crossroads, north of the inn.
 const GOLDSHIRE: [f32; 2] = [-9450.0, 60.0];
 

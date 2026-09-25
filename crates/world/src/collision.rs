@@ -105,7 +105,6 @@ impl Plugin for CollisionPlugin {
                     colliders::finish_colliders,
                     stream::stream_collision.run_if(resource_exists::<crate::CurrentMap>),
                     stream::spawn_placement_colliders,
-                    weld::flush_welds,
                     liquid::maintain_water_index,
                     stream::publish_residency,
                 )

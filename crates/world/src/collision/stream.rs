@@ -1,7 +1,7 @@
 //! Streams colliders with the terrain's window around the camera. A placement straddling tiles is
 //! kept once, by unique id, while any of its tiles is.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::asset::LoadState;
 use bevy::prelude::*;
@@ -10,7 +10,7 @@ use terrain::{Doodad, WmoInstance};
 use super::assets::{M2Hull, TileCollision, WmoHull};
 use super::colliders::{PendingCollider, build_collider_task, placement_collider_data};
 use super::liquid::{PlacedRooms, SwimSurface, waterline_collider};
-use super::weld::HullWelds;
+use super::weld::{Trimesh, spawn_batch, weld};
 use super::{GroundDecalSurface, camera_layers, liquid_layers, walk_layers};
 use crate::CurrentMap;
 use crate::coords::{bevy_to_wow, placement_rotation, wmo_doodad_local, wow_to_bevy};
@@ -51,10 +51,10 @@ enum TileState {
     Failed,
 }
 
-pub(super) struct Tile {
+struct Tile {
     state: TileState,
-    pub(super) entities: Vec<Entity>,
-    placements: Vec<u32>,
+    entities: Vec<Entity>,
+    placements: BTreeSet<u32>,
     requested: u64,
 }
 
@@ -65,30 +65,32 @@ impl Tile {
 }
 
 enum PlacementModel {
-    M2(Handle<M2Hull>),
+    M2 {
+        hull: Handle<M2Hull>,
+        welded: bool,
+        inherited: bool,
+    },
     Wmo {
         hull: Handle<WmoHull>,
         doodad_set: u16,
     },
 }
 
-pub(super) struct Placement {
+struct Placement {
     model: Option<PlacementModel>,
     transform: Transform,
     refs: u32,
     owner: (u32, u32),
-    pub(super) entities: Vec<Entity>,
-    /// A building's props whose hulls are still loading, at their world transforms.
-    props: Vec<(Handle<M2Hull>, Transform)>,
+    entities: Vec<Entity>,
+    unwelded_props: Vec<(Handle<M2Hull>, Transform)>,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct CollisionStreamer {
     wdt: Option<Handle<WdtIndex>>,
     indexed: bool,
-    pub(super) tiles: BTreeMap<(u32, u32), Tile>,
-    pub(super) placements: BTreeMap<u32, Placement>,
-    pub(super) welds: HullWelds,
+    tiles: BTreeMap<(u32, u32), Tile>,
+    placements: BTreeMap<u32, Placement>,
     wanted: Vec<(u32, u32)>,
     requests: u64,
 }
@@ -127,19 +129,7 @@ pub(super) fn stream_collision(
         .filter(|&key| !window.keeps(key))
         .collect();
     for key in released {
-        let Some(tile) = streamer.tiles.remove(&key) else {
-            continue;
-        };
-        despawn_all(&mut commands, tile.entities);
-        for uid in tile.placements {
-            let gone = streamer.placements.get_mut(&uid).is_some_and(|p| {
-                p.refs -= 1;
-                p.refs == 0
-            });
-            if gone && let Some(p) = streamer.placements.remove(&uid) {
-                despawn_all(&mut commands, p.entities);
-            }
-        }
+        release(&mut commands, streamer, key);
     }
 
     streamer.wanted = window
@@ -155,7 +145,7 @@ pub(super) fn stream_collision(
                     "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
                 ))),
                 entities: Vec::new(),
-                placements: Vec::new(),
+                placements: BTreeSet::new(),
                 requested: *requests,
             }
         });
@@ -201,6 +191,48 @@ pub(super) fn stream_collision(
         for w in &tc.wmos {
             register_wmo(streamer, &server, w, key);
         }
+    }
+}
+
+fn release(commands: &mut Commands<'_, '_>, streamer: &mut CollisionStreamer, key: (u32, u32)) {
+    let Some(tile) = streamer.tiles.remove(&key) else {
+        return;
+    };
+    despawn_all(commands, tile.entities);
+    for uid in tile.placements {
+        let gone = streamer.placements.get_mut(&uid).is_some_and(|p| {
+            p.refs -= 1;
+            p.refs == 0
+        });
+        if gone && let Some(p) = streamer.placements.remove(&uid) {
+            despawn_all(commands, p.entities);
+        } else if streamer
+            .placements
+            .get(&uid)
+            .is_some_and(|p| p.owner == key)
+        {
+            rehome(streamer, uid);
+        }
+    }
+}
+
+fn rehome(streamer: &mut CollisionStreamer, uid: u32) {
+    let heir = streamer
+        .tiles
+        .iter()
+        .filter(|(_, t)| t.placements.contains(&uid))
+        .min_by_key(|(_, t)| t.requested)
+        .map(|(&key, _)| key);
+    let (Some(heir), Some(p)) = (heir, streamer.placements.get_mut(&uid)) else {
+        return;
+    };
+    p.owner = heir;
+    if let Some(PlacementModel::M2 {
+        welded, inherited, ..
+    }) = &mut p.model
+    {
+        *welded = false;
+        *inherited = true;
     }
 }
 
@@ -288,7 +320,9 @@ fn claim(streamer: &mut CollisionStreamer, uid: u32, tile: (u32, u32)) -> bool {
     let Some(t) = streamer.tiles.get_mut(&tile) else {
         return false;
     };
-    t.placements.push(uid);
+    if !t.placements.insert(uid) {
+        return false;
+    }
     if let Some(p) = streamer.placements.get_mut(&uid) {
         p.refs += 1;
         return false;
@@ -308,7 +342,11 @@ fn register_doodad(
     streamer.placements.insert(
         d.unique_id,
         Placement {
-            model: Some(PlacementModel::M2(server.load(m2_url(&d.model)))),
+            model: Some(PlacementModel::M2 {
+                hull: server.load(m2_url(&d.model)),
+                welded: false,
+                inherited: false,
+            }),
             transform: Transform {
                 translation: wow_to_bevy(d.position),
                 rotation: placement_rotation(d.rotation),
@@ -317,7 +355,7 @@ fn register_doodad(
             refs: 1,
             owner: tile,
             entities: Vec::new(),
-            props: Vec::new(),
+            unwelded_props: Vec::new(),
         },
     );
 }
@@ -346,12 +384,11 @@ fn register_wmo(
             refs: 1,
             owner: tile,
             entities: Vec::new(),
-            props: Vec::new(),
+            unwelded_props: Vec::new(),
         },
     );
 }
 
-/// Turns loaded hulls into colliders.
 pub(super) fn spawn_placement_colliders(
     mut commands: Commands<'_, '_>,
     server: Res<'_, AssetServer>,
@@ -359,44 +396,108 @@ pub(super) fn spawn_placement_colliders(
     wmos: Res<'_, Assets<WmoHull>>,
     mut streamer: ResMut<'_, CollisionStreamer>,
 ) {
-    let streamer = &mut *streamer;
-    for (&uid, p) in &mut streamer.placements {
-        match &p.model {
-            Some(PlacementModel::M2(handle)) => {
-                if let Some(hull) = m2s.get(handle) {
-                    if let Some((verts, tris)) =
-                        placement_collider_data(hull.0.as_ref(), &p.transform)
-                    {
-                        streamer.welds.add_tile(p.owner, verts, tris);
-                    }
-                    p.model = None;
-                } else if server.load_state(handle).is_failed() {
-                    p.model = None;
-                }
+    for p in streamer.placements.values_mut() {
+        if let Some(PlacementModel::Wmo { hull, doodad_set }) = &p.model {
+            if let Some(wmo) = wmos.get(hull) {
+                p.entities
+                    .extend(spawn_wmo(&mut commands, wmo, &p.transform));
+                p.entities
+                    .extend(spawn_wmo_liquids(&mut commands, hull, wmo, &p.transform));
+                p.unwelded_props = wmo_props(&server, wmo, *doodad_set, p.transform);
+                p.model = None;
+            } else if server.load_state(hull).is_failed() {
+                p.model = None;
             }
-            Some(PlacementModel::Wmo { hull, doodad_set }) => {
-                if let Some(wmo) = wmos.get(hull) {
-                    p.entities
-                        .extend(spawn_wmo(&mut commands, wmo, &p.transform));
-                    p.entities
-                        .extend(spawn_wmo_liquids(&mut commands, hull, wmo, &p.transform));
-                    p.props = wmo_props(&server, wmo, *doodad_set, p.transform);
-                    p.model = None;
-                } else if server.load_state(hull).is_failed() {
-                    p.model = None;
-                }
-            }
-            None => {}
         }
-        p.props.retain(|(handle, transform)| {
-            if let Some(hull) = m2s.get(handle) {
-                if let Some((verts, tris)) = placement_collider_data(hull.0.as_ref(), transform) {
-                    streamer.welds.add_prop(uid, verts, tris);
-                }
-                return false;
+        weld_props(&mut commands, &server, &m2s, p);
+    }
+    weld_owned_doodads(&mut commands, &server, &m2s, &mut streamer);
+}
+
+fn resolved(server: &AssetServer, m2s: &Assets<M2Hull>, hull: &Handle<M2Hull>) -> bool {
+    m2s.contains(hull) || server.load_state(hull).is_failed()
+}
+
+fn hull_data(m2s: &Assets<M2Hull>, hull: &Handle<M2Hull>, at: &Transform) -> Option<Trimesh> {
+    placement_collider_data(m2s.get(hull)?.0.as_ref(), at)
+}
+
+fn weld_props(
+    commands: &mut Commands<'_, '_>,
+    server: &AssetServer,
+    m2s: &Assets<M2Hull>,
+    p: &mut Placement,
+) {
+    if p.unwelded_props.is_empty()
+        || !p
+            .unwelded_props
+            .iter()
+            .all(|(hull, _)| resolved(server, m2s, hull))
+    {
+        return;
+    }
+    let hulls = p
+        .unwelded_props
+        .drain(..)
+        .filter_map(|(hull, at)| hull_data(m2s, &hull, &at));
+    p.entities
+        .extend(weld(hulls).into_iter().map(|b| spawn_batch(commands, b)));
+}
+
+fn weld_owned_doodads(
+    commands: &mut Commands<'_, '_>,
+    server: &AssetServer,
+    m2s: &Assets<M2Hull>,
+    streamer: &mut CollisionStreamer,
+) {
+    let CollisionStreamer {
+        tiles, placements, ..
+    } = streamer;
+    let mut groups: BTreeMap<((u32, u32), bool), Vec<u32>> = BTreeMap::new();
+    for (&uid, p) in placements.iter() {
+        if let Some(PlacementModel::M2 {
+            welded: false,
+            inherited,
+            ..
+        }) = p.model
+        {
+            groups.entry((p.owner, inherited)).or_default().push(uid);
+        }
+    }
+    for ((owner, _), uids) in groups {
+        let Some(tile) = tiles.get_mut(&owner) else {
+            continue;
+        };
+        let doodad = |uid: &u32| match placements.get(uid) {
+            Some(Placement {
+                model: Some(PlacementModel::M2 { hull, .. }),
+                transform,
+                ..
+            }) => Some((hull, transform)),
+            _ => None,
+        };
+        if !uids
+            .iter()
+            .filter_map(doodad)
+            .all(|(hull, _)| resolved(server, m2s, hull))
+        {
+            continue;
+        }
+        let hulls = uids
+            .iter()
+            .filter_map(doodad)
+            .filter_map(|(hull, at)| hull_data(m2s, hull, at));
+        tile.entities
+            .extend(weld(hulls).into_iter().map(|b| spawn_batch(commands, b)));
+        for uid in &uids {
+            if let Some(Placement {
+                model: Some(PlacementModel::M2 { welded, .. }),
+                ..
+            }) = placements.get_mut(uid)
+            {
+                *welded = true;
             }
-            !server.load_state(handle).is_failed()
-        });
+        }
     }
 }
 
@@ -450,10 +551,12 @@ fn wmo_props(
 
 pub(super) fn publish_residency(
     streamer: Res<'_, CollisionStreamer>,
+    server: Res<'_, AssetServer>,
+    m2s: Res<'_, Assets<M2Hull>>,
     pending: Query<'_, '_, (), With<PendingCollider>>,
     mut residency: ResMut<'_, CollisionResidency>,
 ) {
-    let loading_tiles = streamer
+    let unspawned_tiles = streamer
         .wanted
         .iter()
         .filter(|key| {
@@ -463,12 +566,23 @@ pub(super) fn publish_residency(
                 .is_none_or(|t| matches!(t.state, TileState::Unspawned(_)))
         })
         .count();
-    let loading_hulls: usize = streamer
+    let unwelded: usize = streamer
         .placements
         .values()
-        .map(|p| usize::from(p.model.is_some()) + p.props.len())
+        .map(|p| {
+            let waiting = |hull: &Handle<M2Hull>| 1 + usize::from(!resolved(&server, &m2s, hull));
+            let model = match &p.model {
+                None | Some(PlacementModel::M2 { welded: true, .. }) => 0,
+                Some(PlacementModel::M2 { hull, .. }) => waiting(hull),
+                Some(PlacementModel::Wmo { .. }) => 1,
+            };
+            model
+                + p.unwelded_props
+                    .iter()
+                    .map(|(hull, _)| waiting(hull))
+                    .sum::<usize>()
+        })
         .sum();
-    residency.pending =
-        loading_tiles + loading_hulls + streamer.welds.unflushed() + pending.count();
+    residency.pending = unspawned_tiles + unwelded + pending.count();
     residency.indexed = streamer.indexed;
 }
