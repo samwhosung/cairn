@@ -136,13 +136,17 @@ fn wait_until_the_other(p: &mut Painter, what: &str, flags_say: impl Fn(u32) -> 
     }
 }
 
-fn shoot_the_other(p: &mut Painter, name: &str) {
+fn shoot_the_other(p: &mut Painter, name: &str, flags_say: impl Fn(u32) -> bool) {
     let across = yards_to_the_other(p);
     assert!(
         across.is_some_and(|yd| yd < SUBJECT_WITHIN_YD),
         "{name}: the other player is {across:?} yd away"
     );
     p.shoot(name);
+    assert!(
+        the_others_flags(p).is_some_and(flags_say),
+        "{name}: the other player had moved on before the shot was taken"
+    );
 }
 
 struct Scene {
@@ -233,22 +237,25 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
         }
         p.orbit(0.0, 6.0);
         p.wait(2.5);
-        shoot_the_other(&mut p, &format!("{name}-1-standing"));
+        let standing = |f: u32| f == 0;
+        let running = |f: u32| f & flags::FORWARD != 0 && f & flags::FALLING == 0;
+        let in_the_air = |f: u32| f & flags::FALLING != 0;
+        let landed = |f: u32| f & flags::FALLING == 0;
+        shoot_the_other(&mut p, &format!("{name}-1-standing"), standing);
         p.level_with_the_wall();
         let _ = r.cue.send(());
-        let running = |f: u32| f & flags::FORWARD != 0 && f & flags::FALLING == 0;
         wait_until_the_other(&mut p, "running", running);
         p.wait(0.3);
-        shoot_the_other(&mut p, &format!("{name}-2-running"));
-        wait_until_the_other(&mut p, "in the air", |f| f & flags::FALLING != 0);
+        shoot_the_other(&mut p, &format!("{name}-2-running"), running);
+        wait_until_the_other(&mut p, "in the air", in_the_air);
         p.wait(0.5);
-        shoot_the_other(&mut p, &format!("{name}-3-jumping"));
-        wait_until_the_other(&mut p, "landed", |f| f & flags::FALLING == 0);
+        shoot_the_other(&mut p, &format!("{name}-3-jumping"), in_the_air);
+        wait_until_the_other(&mut p, "landed", landed);
         p.wait(0.8);
-        shoot_the_other(&mut p, &format!("{name}-4-landed"));
+        shoot_the_other(&mut p, &format!("{name}-4-landed"), landed);
         p.tilt_up(-0.6);
         p.wait(0.3);
-        shoot_the_other(&mut p, &format!("{name}-5-the-ground-it-ran-over"));
+        shoot_the_other(&mut p, &format!("{name}-5-the-ground-it-ran-over"), landed);
         let _ = r.cue.send(());
         drop(p);
         server.stop().expect("the server stops");
