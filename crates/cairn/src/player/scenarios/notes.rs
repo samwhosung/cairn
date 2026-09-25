@@ -6,6 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::CharacterLook;
 use world::{CurrentMap, FOV_Y, Install, PlacedModel, Placements, WorldCamera};
@@ -20,6 +21,8 @@ use crate::player::state::{Player, TURN_RATE};
 const WRITTEN_WITHIN: Duration = Duration::from_secs(60);
 const SHOT_WITHIN: Duration = Duration::from_secs(300);
 const INN_CHIMNEY_BEHIND_THE_LAMPPOST: UVec2 = UVec2::new(505, 100);
+const RETINA: u32 = 2;
+const MAGENTA: [u8; 3] = [255, 0, 255];
 
 struct Written {
     dir: PathBuf,
@@ -104,8 +107,27 @@ fn numbers(list: &str) -> Vec<f32> {
         .collect()
 }
 
-fn leave_note(p: &mut Painter, at: UVec2) -> Written {
+fn aim_at_pixel(p: &mut Painter, at: UVec2) {
     p.app.insert_resource(Pointer::Over(at));
+}
+
+fn window(p: &mut Painter) -> Mut<'_, Window> {
+    let world = p.app.world_mut();
+    world
+        .query_filtered::<&mut Window, With<PrimaryWindow>>()
+        .single_mut(world)
+        .expect("the window")
+}
+
+fn move_the_pointer_to(p: &mut Painter, points: Vec2) {
+    window(p).set_cursor_position(Some(points));
+}
+
+fn mistake_points_for_pixels(p: &mut Painter, points: Vec2) {
+    window(p).set_physical_cursor_position(Some(points.as_dvec2()));
+}
+
+fn leave_note(p: &mut Painter) -> Written {
     let before = p.app.world().resource::<Notes>().written.len();
     let usual = (0..30).map(|_| p.timed_frame()).max().unwrap_or_default();
     let chord = [KeyCode::ControlLeft, KeyCode::ShiftLeft, KeyCode::KeyN];
@@ -219,6 +241,20 @@ fn pixels_off(spot: UVec2, drawn: Vec2) -> f32 {
     (spot.as_vec2() + 0.5 - drawn).abs().max_element()
 }
 
+fn ring_centre(frame: &Image) -> Vec2 {
+    let (width, data) = (frame.width(), frame.data.as_deref().expect("pixels"));
+    let (mut sum, mut count) = (Vec2::ZERO, 0.0);
+    for (i, px) in data.as_chunks::<4>().0.iter().enumerate() {
+        if px[..3] == MAGENTA {
+            let (x, y) = (i as u32 % width, i as u32 / width);
+            sum += Vec2::new(x as f32, y as f32) + 0.5;
+            count += 1.0;
+        }
+    }
+    assert!(count > 0.0, "no ring in the frame");
+    sum / count
+}
+
 fn load(path: &Path) -> Image {
     let bytes = std::fs::read(path).expect("the frame");
     Image::from_buffer(
@@ -295,10 +331,13 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     let lamp = nearest_placed(&p, stand.xy, "lamppost");
     let pole = lamp.foot_wow + Vec3::Z * 3.0;
     let aim = drawn_by_the_painter(&mut p, pole.to_array()).as_uvec2();
-    let note = leave_note(&mut p, aim);
+    aim_at_pixel(&mut p, aim);
+    let note = leave_note(&mut p);
     let named = format!("doodad, unique id {}, {}", lamp.unique_id, lamp.file);
     assert_eq!(note.line("met: "), named);
     assert_eq!(note.spot(), aim);
+    let ring = ring_centre(&load(&note.dir.join("frame.png")));
+    assert_eq!(ring, aim.as_vec2() + 0.5, "the ring is round the spot");
     let feet = Vec3::from(bevy_to_wow(p.app.world().resource::<Player>().pos));
     let walk = note.line("walk there: cairn ").split_whitespace();
     let stands = args::parse(walk.map(str::to_owned)).expect("the window takes them");
@@ -316,7 +355,8 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     );
 
     let inn = nearest_placed(&p, stand.xy, ".wmo");
-    let chimney = leave_note(&mut p, INN_CHIMNEY_BEHIND_THE_LAMPPOST);
+    aim_at_pixel(&mut p, INN_CHIMNEY_BEHIND_THE_LAMPPOST);
+    let chimney = leave_note(&mut p);
     let building = format!(
         "building, unique id {}, {}, group ",
         inn.unique_id, inn.file
@@ -330,7 +370,8 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     p.orbit(std::f32::consts::PI, 8.0);
     p.tilt_up(0.9);
     p.wait(1.0);
-    let sky = leave_note(&mut p, UVec2::new(SIZE.x - 60, 60));
+    aim_at_pixel(&mut p, UVec2::new(SIZE.x - 60, 60));
+    let sky = leave_note(&mut p);
     assert!(sky.line("met: ").starts_with("nothing within the far clip"));
     drop(p);
 
@@ -356,7 +397,8 @@ fn a_note_taken_while_the_camera_turns_keeps_the_frame_its_camera_drew() {
     p.wait(2.0);
     p.key(KeyCode::KeyA, ButtonState::Pressed);
     p.wait(0.25);
-    let note = leave_note(&mut p, UVec2::new(SIZE.x / 3, SIZE.y / 3));
+    aim_at_pixel(&mut p, UVec2::new(SIZE.x / 3, SIZE.y / 3));
+    let note = leave_note(&mut p);
     p.key(KeyCode::KeyA, ButtonState::Released);
     drop(p);
 
@@ -414,7 +456,8 @@ fn a_camera_pulled_in_by_a_wall_is_noted_as_drawn_and_the_one_asked_for_misses()
         control.distance, control.boom_length
     );
     assert!(pulled_in > 5.0, "the wall pulls the camera in: {pulled_in}");
-    let note = leave_note(&mut p, UVec2::new(SIZE.x / 5, SIZE.y / 3));
+    aim_at_pixel(&mut p, UVec2::new(SIZE.x / 5, SIZE.y / 3));
+    let note = leave_note(&mut p);
     drop(p);
 
     let (spot, point) = (note.spot(), note.point_wow());
@@ -432,4 +475,74 @@ fn a_camera_pulled_in_by_a_wall_is_noted_as_drawn_and_the_one_asked_for_misses()
         "through the camera as asked, {pulled_in:.3} yd back, it is drawn at {drawn}: {off:.3} px"
     );
     assert!(off > 1.0, "the camera as asked: {off} px");
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn on_a_retina_window_the_note_rings_names_and_reopens_the_lamppost_on_the_frames_own_pixel() {
+    let stand = FACING_A_GOLDSHIRE_LAMPPOST;
+    let Some(mut p) = Painter::new(stand.xy, stand.heading, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    let frame_px = p.draw_for_a_window_at(RETINA);
+    let window_points = frame_px / RETINA;
+    p.orbit(0.0, 8.0);
+    p.tilt_up(-0.1);
+    p.wait(2.0);
+    let lamp = nearest_placed(&p, stand.xy, "lamppost");
+    let pole = lamp.foot_wow + Vec3::Z * 3.0;
+    let points = drawn_by_the_painter(&mut p, pole.to_array());
+    let pixel = (points * RETINA as f32).as_uvec2();
+    move_the_pointer_to(&mut p, points);
+    let note = leave_note(&mut p);
+    let named = format!("doodad, unique id {}, {}", lamp.unique_id, lamp.file);
+    let frame = load(&note.dir.join("frame.png"));
+    let ring = ring_centre(&frame);
+    eprintln!(
+        "the pointer at {points} points is pixel {pixel} of a {frame_px} frame; noted at {}, \
+         ringed round {ring}",
+        note.spot()
+    );
+    assert_eq!(note.line("met: "), named);
+    assert_eq!(note.spot(), pixel, "the frame's own pixel");
+    assert_eq!(frame.size(), frame_px);
+    assert_eq!(ring, pixel.as_vec2() + 0.5, "the ring is round the spot");
+    let (frame_size, window_size) = (
+        format!("{}x{}", frame_px.x, frame_px.y),
+        format!("{}x{}", window_points.x, window_points.y),
+    );
+    assert!(
+        note.see_it()
+            .ends_with(&format!("--size {frame_size} --out view.png"))
+    );
+    let walk_there = note.line("walk there: cairn ");
+    assert!(walk_there.ends_with(&format!("--size {window_size}")));
+
+    mistake_points_for_pixels(&mut p, points);
+    let mixed = leave_note(&mut p);
+    let mixed_ring = ring_centre(&load(&mixed.dir.join("frame.png")));
+    eprintln!(
+        "the points taken for pixels: noted at {}, ringed round {mixed_ring}, met {}",
+        mixed.spot(),
+        mixed.line("met: ")
+    );
+    assert_ne!(mixed.spot(), pixel, "the points taken for pixels");
+    assert_ne!(mixed.line("met: "), named, "the points taken for pixels");
+    drop(p);
+
+    let out = pictures().join("notes-retina-reopened.png");
+    let drawn = shoot_and_project(note.see_it(), &out, note.point_wow());
+    let off = pixels_off(note.spot(), drawn);
+    eprintln!("reopened at {frame_size}, the lamppost's point is drawn at {drawn}: {off:.3} px");
+    assert!(off <= 1.0, "{off} px");
+
+    let at_window_size = note.see_it().replace(&frame_size, &window_size);
+    let out = pictures().join("notes-retina-reopened-at-the-window-size.png");
+    let drawn = shoot_and_project(&at_window_size, &out, note.point_wow());
+    let off = pixels_off(note.spot(), drawn);
+    eprintln!("reopened at {window_size}, it is drawn at {drawn}: {off:.3} px");
+    assert!(
+        off > 1.0,
+        "the window's points taken for the frame's pixels: {off} px"
+    );
 }

@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bevy::camera::RenderTarget;
+use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::ecs::system::RunSystemOnce;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::time::{Real, TimeUpdateStrategy};
+use bevy::window::{PrimaryWindow, WindowResolution};
 use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
@@ -236,6 +237,34 @@ impl Painter {
             painter.pace.start();
         }
         Some(painter)
+    }
+
+    pub(super) fn draw_for_a_window_at(&mut self, pixels_to_the_point: u32) -> UVec2 {
+        let px = SIZE * pixels_to_the_point;
+        let frame = Image::new_target_texture(px.x, px.y, TextureFormat::Bgra8UnormSrgb, None);
+        self.target = self
+            .app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(frame);
+        let scale = pixels_to_the_point as f32;
+        let view = RenderTarget::Image(ImageRenderTarget {
+            handle: self.target.clone(),
+            scale_factor: scale,
+        });
+        let world = self.app.world_mut();
+        let camera = world
+            .query_filtered::<Entity, With<WorldCamera>>()
+            .single(world)
+            .expect("the follow camera");
+        world.entity_mut(camera).insert(view);
+        let resolution = WindowResolution::new(px.x, px.y).with_scale_factor_override(scale);
+        let window = Window {
+            resolution,
+            ..Window::default()
+        };
+        world.spawn((window, PrimaryWindow));
+        px
     }
 
     fn await_welcome(&mut self) {
