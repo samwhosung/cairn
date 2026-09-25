@@ -135,9 +135,11 @@ fn leave_note(p: &mut Painter) -> Written {
         p.key(key, ButtonState::Pressed);
     }
     let pressed = p.timed_frame();
+    let world_clock = p.clock().elapsed();
     for key in chord {
         p.key(key, ButtonState::Released);
     }
+    p.clock().pause();
     let deadline = Instant::now() + WRITTEN_WITHIN;
     let (mut frames, mut writing) = (0, Duration::ZERO);
     while p.app.world().resource::<Notes>().written.len() == before {
@@ -145,13 +147,16 @@ fn leave_note(p: &mut Painter) -> Written {
         writing = writing.max(p.timed_frame());
         frames += 1;
     }
+    p.clock().unpause();
     let dir = p.app.world().resource::<Notes>().written[before].clone();
     let text = std::fs::read_to_string(dir.join("note.txt")).expect("the note's text");
     let ms = |d: Duration| d.as_secs_f64() * 1e3;
     eprintln!(
-        "{}\n{text}the chord's frame took {:.2} ms and the {frames} frames until the note was \
-         written at most {:.2}; the 30 before at most {:.2}; load {}",
+        "{}\n{text}taken {:.4} s into the world's clock; the chord's frame took {:.2} ms and \
+         the {frames} frames until the note was written at most {:.2}; the 30 before at most \
+         {:.2}; load {}",
         dir.display(),
+        world_clock.as_secs_f64(),
         ms(pressed),
         ms(writing),
         ms(usual),
