@@ -28,6 +28,7 @@ const DEATH: u16 = 1;
 const DEAD: u16 = 6;
 const COMBAT_WOUND: u16 = 9;
 const ATTACK_UNARMED: u16 = 16;
+const READY_UNARMED: u16 = 25;
 const NORTH: f32 = 0.0;
 const WEST: f32 = 90.0;
 
@@ -70,10 +71,16 @@ fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Laid {
+    OverTheWholeBody,
+    AboveTheSpine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Plays {
     show: UnitShow,
     clip: Option<u16>,
-    above_the_spine: Option<u16>,
+    wound: Option<Laid>,
     played_out: bool,
 }
 
@@ -88,14 +95,22 @@ fn plays<F: bevy::ecs::query::QueryFilter>(p: &mut Painter) -> Option<Plays> {
     let (show, tr, anims, player) = q.iter(world).next()?;
     let node = tr.get_main_animation();
     let clip = node.and_then(|n| anims.clips.iter().find(|c| c.node == n));
-    let above_the_spine = anims
+    let plays = |n| player.animation(n).is_some();
+    let wound = anims
         .clips
         .iter()
-        .find(|c| c.upper_node.is_some_and(|n| player.animation(n).is_some()));
+        .filter(|c| c.anim_id == COMBAT_WOUND)
+        .find_map(|c| {
+            if c.upper_node.is_some_and(plays) {
+                Some(Laid::AboveTheSpine)
+            } else {
+                plays(c.node).then_some(Laid::OverTheWholeBody)
+            }
+        });
     Some(Plays {
         show: *show,
         clip: clip.map(|c| c.anim_id),
-        above_the_spine: above_the_spine.map(|c| c.anim_id),
+        wound,
         played_out: node
             .and_then(|n| player.animation(n))
             .is_some_and(bevy::animation::ActiveAnimation::is_finished),
@@ -169,15 +184,20 @@ impl Fight {
 
 fn plays_clip(who: Option<Plays>, clip: u16) -> (bool, String) {
     (
-        who.is_some_and(|w| w.clip == Some(clip) || w.above_the_spine == Some(clip)),
+        who.is_some_and(|w| w.clip == Some(clip)),
         format!("{who:?}"),
     )
 }
 
-fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
+fn stands_ready(who: Option<Plays>) -> bool {
+    who.is_some_and(|w| {
+        w.show.idle == Some(READY_UNARMED) && w.clip == Some(READY_UNARMED) && w.wound.is_none()
+    })
+}
+
+fn meet(show: bool, three_yards_east: [f32; 3]) -> Option<(Painter, Fighter)> {
     let (human, orc) = (CharacterLook::naked(1, 0), CharacterLook::naked(2, 0));
     let feet = [GOLDSHIRE[0], GOLDSHIRE[1], 57.0];
-    let three_yards_east = [GOLDSHIRE[0], GOLDSHIRE[1] - 3.0, 57.0];
     let over = game::KnobsFile::parse(THREE_BLOWS_KILL, "the fight").expect("knobs");
     let cfg = server::Config {
         game: Some(catalog::load("melee", None, &over.lines, 0).expect("melee")),
@@ -211,6 +231,12 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     p.level_with_the_wall();
     p.orbit(0.0, 6.0);
     p.wait(2.0);
+    Some((p, other))
+}
+
+fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
+    let three_yards_east = [GOLDSHIRE[0], GOLDSHIRE[1] - 3.0, 57.0];
+    let (p, other) = meet(show, three_yards_east)?;
     let mut f = Fight {
         p,
         name,
@@ -232,7 +258,11 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     f.swing();
     f.p.wait(0.3);
     f.shoot("3-the-other-is-hit", |p| {
-        plays_clip(the_other(p), COMBAT_WOUND)
+        let other = the_other(p);
+        let held = other.is_some_and(|o| {
+            o.clip == Some(READY_UNARMED) && o.wound == Some(Laid::OverTheWholeBody)
+        });
+        (held, format!("{other:?}"))
     });
     f.p.wait(2.2);
     f.swing();
@@ -264,12 +294,21 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     f.shoot("5-the-other-stands-at-its-spawn", |p| {
         let (other, stands) = (the_other(p), where_the_other_stands(p));
         let at_spawn = placed(stands);
-        let stands_again = other.is_some_and(|o| o.show.pose.is_none() && o.clip == Some(STAND));
+        let stands_again = other.is_some_and(|o| {
+            o.show.pose.is_none() && o.show.idle.is_none() && o.clip == Some(STAND)
+        });
         let held = lay_dead && stands_again && at_spawn;
         (
             held,
             format!("{other:?} at {stands:?}, lay dead {lay_dead}"),
         )
+    });
+    f.swing();
+    f.p.wait(1.8);
+    f.shoot("6-both-stand-ready", |p| {
+        let (other, own) = (the_other(p), its_own(p));
+        let held = stands_ready(other) && stands_ready(own);
+        (held, format!("{other:?}, its own {own:?}"))
     });
     let _ = other.cue.send(Cue::Done);
     Some(f.checked)
