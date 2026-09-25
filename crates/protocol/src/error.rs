@@ -11,7 +11,6 @@ pub enum Error {
     FrameLength(usize),
     UnknownKind(u8),
     UnknownRecord(u8),
-    /// A correction's reason past [`crate::Why::ALL`].
     UnknownWhy(u8),
     /// A name that is not UTF-8.
     Name,

@@ -9,6 +9,7 @@ use protocol::{ClientMessage, Frames, VERSION};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc};
 
 use crate::world::{Input, Stamped};
@@ -80,10 +81,14 @@ impl Outbox {
     }
 }
 
+enum Admitting {
+    Open(HashMap<u32, Outbox>),
+    Stopped,
+}
+
 pub struct Shared {
     inbox: Mutex<Vec<Stamped>>,
-    /// `None` once the tick that admits connections has ended.
-    unadmitted: Mutex<Option<HashMap<u32, Outbox>>>,
+    admitting: Mutex<Admitting>,
     next_conn: AtomicU32,
     pub latest_tick: AtomicU32,
     pub bytes_in: AtomicU64,
@@ -101,7 +106,7 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             inbox: Mutex::new(Vec::new()),
-            unadmitted: Mutex::new(Some(HashMap::new())),
+            admitting: Mutex::new(Admitting::Open(HashMap::new())),
             next_conn: AtomicU32::new(0),
             latest_tick: AtomicU32::new(0),
             bytes_in: AtomicU64::new(0),
@@ -121,25 +126,29 @@ impl Shared {
         inputs
     }
 
-    /// Keeps a new connection's outbox for the tick that admits it, or closes the connection if
-    /// that tick has ended.
     pub fn hold_outbox(&self, conn: u32, outbox: Outbox) {
-        if let Some(held) = self.unadmitted().as_mut() {
-            held.insert(conn, outbox);
+        match &mut *self.admitting() {
+            Admitting::Open(held) => {
+                held.insert(conn, outbox);
+            }
+            Admitting::Stopped => drop(outbox),
         }
     }
 
     pub fn take_outbox(&self, conn: u32) -> Option<Outbox> {
-        self.unadmitted().as_mut()?.remove(&conn)
+        match &mut *self.admitting() {
+            Admitting::Open(held) => held.remove(&conn),
+            Admitting::Stopped => None,
+        }
     }
 
     /// Closes every connection not yet admitted, and every one that comes after.
-    pub fn close(&self) {
-        *self.unadmitted() = None;
+    pub fn stop_admitting(&self) {
+        *self.admitting() = Admitting::Stopped;
     }
 
-    fn unadmitted(&self) -> MutexGuard<'_, Option<HashMap<u32, Outbox>>> {
-        self.unadmitted
+    fn admitting(&self) -> MutexGuard<'_, Admitting> {
+        self.admitting
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -171,9 +180,13 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
         let _ = socket.set_nodelay(true);
         let (reader, writer) = socket.into_split();
         let incoming = Incoming::Socket(reader, vec![0; READ_BUF]);
-        open(&shared, Standing::Guest, incoming, |rx, outbox| {
-            write(writer, rx, outbox.on_written())
-        });
+        open(
+            &shared,
+            &Handle::current(),
+            Standing::Guest,
+            incoming,
+            |rx, outbox| write(writer, rx, outbox.on_written()),
+        );
     }
 }
 
@@ -185,7 +198,8 @@ pub struct InProcess {
 }
 
 impl InProcess {
-    /// Hands the server bytes as a socket would carry them.
+    /// Hands the server bytes as a socket would carry them; `BrokenPipe` once the server has let
+    /// the connection go.
     pub fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
         self.to_server
             .send(bytes)
@@ -199,12 +213,11 @@ impl InProcess {
     }
 }
 
-/// Opens the host's connection. It spawns onto the server's runtime, so call it inside one.
-pub fn host_joins(shared: &Arc<Shared>) -> InProcess {
+pub fn connect_host(shared: &Arc<Shared>, runtime: &Handle) -> InProcess {
     let (to_server, from_client) = mpsc::unbounded_channel();
     let (to_client, from_server) = std_mpsc::channel();
     let incoming = Incoming::Here(from_client, Vec::new());
-    open(shared, Standing::Host, incoming, |rx, outbox| {
+    open(shared, runtime, Standing::Host, incoming, |rx, outbox| {
         hand_over(rx, to_client, outbox.on_written())
     });
     InProcess {
@@ -213,7 +226,6 @@ pub fn host_joins(shared: &Arc<Shared>) -> InProcess {
     }
 }
 
-/// Whether a connection joins as the server's host, who may teleport, or as a guest.
 #[derive(Clone, Copy)]
 enum Standing {
     Guest,
@@ -226,7 +238,6 @@ enum Incoming {
 }
 
 impl Incoming {
-    /// The bytes that came in next, or `None` once the other end has gone.
     async fn next(&mut self) -> Option<&[u8]> {
         match self {
             Self::Socket(r, buf) => match r.read(buf).await {
@@ -241,10 +252,9 @@ impl Incoming {
     }
 }
 
-/// Holds a new connection's outbox for the tick that admits it and runs its reading and its
-/// `writing` until either end hangs up.
 fn open<W: Future<Output = ()> + Send + 'static>(
     shared: &Arc<Shared>,
+    runtime: &Handle,
     standing: Standing,
     incoming: Incoming,
     writing: impl FnOnce(mpsc::UnboundedReceiver<Vec<u8>>, &Outbox) -> W,
@@ -252,10 +262,10 @@ fn open<W: Future<Output = ()> + Send + 'static>(
     let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
     let (outbox, rx) = Outbox::channel();
     let (behind, hung_up) = (outbox.behind.clone(), outbox.hung_up());
-    let writer = tokio::spawn(writing(rx, &outbox));
+    let writer = runtime.spawn(writing(rx, &outbox));
     shared.hold_outbox(conn, outbox);
-    let reader = tokio::spawn(read(conn, incoming, standing, behind, shared.clone()));
-    tokio::spawn(async move {
+    let reader = runtime.spawn(read(conn, incoming, standing, behind, shared.clone()));
+    runtime.spawn(async move {
         hung_up.await;
         reader.abort();
         writer.abort();

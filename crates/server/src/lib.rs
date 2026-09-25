@@ -57,10 +57,10 @@ pub fn start(cfg: Config) -> io::Result<Running> {
         }
         None => None,
     };
-    let ends = ClosesWhenDropped(shared.clone());
+    let admitting = StopsAdmitting(shared.clone());
     let tick = std::thread::Builder::new()
         .name("world".into())
-        .spawn(move || serve::run(&cfg, &ends.0))?;
+        .spawn(move || serve::run(&cfg, &admitting.0))?;
     Ok(Running {
         addr,
         shared,
@@ -69,25 +69,22 @@ pub fn start(cfg: Config) -> io::Result<Running> {
     })
 }
 
-/// Held by the tick: however it ends, the connections it would have admitted close.
-struct ClosesWhenDropped(Arc<Shared>);
+struct StopsAdmitting(Arc<Shared>);
 
-impl Drop for ClosesWhenDropped {
+impl Drop for StopsAdmitting {
     fn drop(&mut self) {
-        self.0.close();
+        self.0.stop_admitting();
     }
 }
 
 impl Running {
-    /// Where players connect, when the server listens.
     pub fn addr(&self) -> Option<SocketAddr> {
         self.addr
     }
 
-    /// Joins as the server's host, from this process and with no socket; the host may teleport.
-    pub fn host_joins(&self) -> InProcess {
-        let _in = self.runtime.enter();
-        net::host_joins(&self.shared)
+    /// Opens the host's connection; once its hello is in, the host may teleport.
+    pub fn connect_host(&self) -> InProcess {
+        net::connect_host(&self.shared, self.runtime.handle())
     }
 
     /// Stops ticking, closes every connection, and returns what was measured; like
@@ -116,7 +113,7 @@ pub struct Replayed {
     pub hash: u64,
     /// The first tick whose world hash differs from the recorded one.
     pub first_mismatch: Option<u32>,
-    /// Every refused claim, when the replay was asked to keep them.
+    /// Every refused claim or teleport, when the replay was asked to keep them.
     pub refusals: Vec<Refusal>,
     /// Every replayed tick summarized over the time it stands for, one tick's length each.
     /// Nothing counts as received, and batches count as sent when they are built.

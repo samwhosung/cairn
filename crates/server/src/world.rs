@@ -27,7 +27,6 @@ pub struct Stamped {
 #[derive(Clone, Debug)]
 pub enum Input {
     Join(Hello),
-    /// A join from the process that runs the server, which lets its host teleport.
     HostJoin(Hello),
     Claim(Claim),
     Teleport(Claim),
@@ -51,9 +50,8 @@ pub struct Body {
     pub clock: Option<ClockPin>,
     pub clock_spent_ms: u32,
     pub correction_seq: u32,
-    pub corrected_at: Option<u32>,
-    /// Why the latest refused claim or teleport was refused.
-    pub refused_for: Option<Why>,
+    /// The tick of the latest refusal, and why.
+    pub corrected: Option<(u32, Why)>,
     pub moved_at: u32,
     pub flags_changed_at: u32,
     pub refused: u32,
@@ -71,7 +69,7 @@ pub enum Act {
         id: u32,
         received_ms: u32,
         claim: Claim,
-        may: bool,
+        may_teleport: bool,
     },
     Leave {
         id: u32,
@@ -94,7 +92,7 @@ pub struct Stepped {
     pub refusals: Vec<Refusal>,
 }
 
-/// A refused claim, and the last accepted movement it was judged against.
+/// A refused claim or teleport, and the last accepted movement it was judged against.
 #[derive(Clone, Debug)]
 pub struct Refusal {
     pub tick: u32,
@@ -118,7 +116,7 @@ pub struct World {
     next: Vec<Body>,
     names: Vec<String>,
     looks: Vec<Appearance>,
-    hosts: Vec<bool>,
+    may_teleport: Vec<bool>,
     id_of: HashMap<u32, u32>,
     spawns: Vec<Spawn>,
     rules: Rules,
@@ -141,7 +139,7 @@ impl World {
             next: Vec::new(),
             names: Vec::new(),
             looks: Vec::new(),
-            hosts: Vec::new(),
+            may_teleport: Vec::new(),
             id_of: HashMap::new(),
             spawns,
             rules,
@@ -203,7 +201,8 @@ impl World {
             self.next.push(body);
             self.names.push(hello.name.clone());
             self.looks.push(hello.appearance);
-            self.hosts.push(matches!(s.input, Input::HostJoin(_)));
+            self.may_teleport
+                .push(matches!(s.input, Input::HostJoin(_)));
             self.id_of.insert(s.conn, id);
             admitted.push(Admitted {
                 conn: s.conn,
@@ -230,7 +229,7 @@ impl World {
                         id,
                         received_ms: s.received_ms,
                         claim: *claim,
-                        may: self.hosts[id as usize],
+                        may_teleport: self.may_teleport[id as usize],
                     }),
                     Input::Leave => Some(Act::Leave { id }),
                 }
@@ -337,10 +336,12 @@ impl Judge<'_> {
             Act::Teleport {
                 received_ms,
                 claim,
-                may,
+                may_teleport,
                 ..
             } => {
-                let verdict = self.rules.judge_teleport(body, &claim, received_ms, may);
+                let verdict = self
+                    .rules
+                    .judge_teleport(body, &claim, received_ms, may_teleport);
                 (received_ms, claim, verdict)
             }
             Act::Leave { .. } => {
@@ -377,8 +378,7 @@ impl Judge<'_> {
                     });
                 }
                 body.correction_seq = body.correction_seq.wrapping_add(1);
-                body.corrected_at = Some(tick);
-                body.refused_for = Some(why);
+                body.corrected = Some((tick, why));
                 body.refused += 1;
                 done.refused[why as usize] += 1;
             }
@@ -409,7 +409,7 @@ fn hash_body(id: u32, b: &Body) -> u64 {
         pin.server_ms,
         b.clock_spent_ms,
         b.correction_seq,
-        b.corrected_at.unwrap_or(u32::MAX),
+        b.corrected.map_or(u32::MAX, |(tick, _)| tick),
         b.moved_at,
         b.flags_changed_at,
         b.refused,

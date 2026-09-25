@@ -33,24 +33,24 @@ pub struct Frame {
     pub flags: u32,
 }
 
-/// Whether a walker's own server has yet to say what it made of the walk: dropping the walker
-/// then asks, and fails unless no claim was refused.
 pub struct Walker {
     pub app: App,
     step: Duration,
     pace: Pace,
-    unjudged: bool,
+    judge_on_drop: bool,
 }
 
-/// How a client reaches its server.
 pub enum Through {
-    /// Its own, in-process, as a bare window; `Some` names where it records its inputs.
-    ItsOwn(Option<PathBuf>),
-    /// Another's, over loopback, as `name` looking like `look`.
-    Loopback(SocketAddr, String, CharacterLook),
+    ItsOwn {
+        record: Option<PathBuf>,
+    },
+    Loopback {
+        addr: SocketAddr,
+        name: String,
+        look: CharacterLook,
+    },
 }
 
-/// Over loopback a client keeps the wall clock, as a window does; alone, a fixed step.
 pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
     if over_loopback {
         TimeUpdateStrategy::Automatic
@@ -106,7 +106,14 @@ impl Walker {
     /// A client on `map` whose body starts with its feet at `feet` (WoW), facing `heading_deg`
     /// (0 north, 90 west), stepped at `hz`. `None` without `WOW_DATA`.
     pub fn new(map: &str, feet: [f32; 3], heading_deg: f32, hz: f32) -> Option<Self> {
-        Self::build(map, feet, heading_deg, hz, None, Through::ItsOwn(None))
+        Self::build(
+            map,
+            feet,
+            heading_deg,
+            hz,
+            None,
+            Through::ItsOwn { record: None },
+        )
     }
 
     pub fn dressed(
@@ -122,7 +129,7 @@ impl Walker {
             heading_deg,
             hz,
             Some(look),
-            Through::ItsOwn(None),
+            Through::ItsOwn { record: None },
         )
     }
 
@@ -134,7 +141,7 @@ impl Walker {
             heading_deg,
             hz,
             None,
-            Through::ItsOwn(Some(log)),
+            Through::ItsOwn { record: Some(log) },
         )
     }
 
@@ -148,7 +155,11 @@ impl Walker {
 
     /// [`Walker::joined`], but not yet [`ready`].
     pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
-        let through = Through::Loopback(server, name.to_owned(), look);
+        let through = Through::Loopback {
+            addr: server,
+            name: name.to_owned(),
+            look,
+        };
         let mut walker = Self::build("Azeroth", [0.0; 3], 0.0, hz, None, through)?;
         walker.await_welcome();
         Some(walker)
@@ -160,9 +171,8 @@ impl Walker {
             && self.app.world().resource::<CollisionResidency>().settled()
     }
 
-    /// What the walker's own server made of its walk, which dropping it no longer asks.
-    pub fn judged(&mut self) -> Option<Judged> {
-        self.unjudged = false;
+    pub fn stop_and_judge(&mut self) -> Option<Judged> {
+        self.judge_on_drop = false;
         alone::judge(&mut self.app)
     }
 
@@ -186,10 +196,12 @@ impl Walker {
         let step = Duration::from_secs_f64(1.0 / f64::from(hz));
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let look = dressed.unwrap_or_else(|| CharacterLook::naked(1, 0));
-        let over_loopback = matches!(through, Through::Loopback(..));
+        let over_loopback = matches!(through, Through::Loopback { .. });
         let net = match through {
-            Through::ItsOwn(record) => alone::own_server(current.id, pose, &look, record),
-            Through::Loopback(addr, name, as_) => Net::connect(addr, crate::net::hello(name, &as_)),
+            Through::ItsOwn { record } => alone::own_server(current.id, pose, &look, record),
+            Through::Loopback { addr, name, look } => {
+                Net::connect(addr, crate::net::hello(name, &look))
+            }
         };
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin, InputPlugin));
@@ -220,7 +232,7 @@ impl Walker {
             app,
             step,
             pace: Pace::default(),
-            unjudged: !over_loopback,
+            judge_on_drop: !over_loopback,
         };
         if !over_loopback {
             walker.settle();
@@ -474,12 +486,8 @@ impl Walker {
 
 impl Drop for Walker {
     fn drop(&mut self) {
-        if self.unjudged && !std::thread::panicking() {
-            let judged = self.judged();
-            assert!(
-                judged.as_ref().is_some_and(Judged::honest),
-                "the walker's own server put it back: {judged:?}"
-            );
+        if self.judge_on_drop {
+            alone::assert_honest(&mut self.app, "walker");
         }
     }
 }

@@ -39,7 +39,7 @@ fn assembled(argv: &str) -> Result<App, String> {
         directory: "Azeroth".into(),
     };
     let mut app = App::new();
-    assemble(&mut app, args, &install, map, without_a_window)?;
+    assemble(&mut app, args, &install, map, without_a_window).map_err(|e| e.to_string())?;
     Ok(app)
 }
 
@@ -129,8 +129,6 @@ fn welcomed(app: &mut App) -> bool {
         .is_some()
 }
 
-/// Welcomed where its camera looks, it runs and claims, and its server judges the claims: the
-/// claims it accepted, or why not.
 fn plays_through_its_server(app: &mut App) -> Result<f64, String> {
     if app.world().get_resource::<Net>().is_none() {
         return Err("no server".into());
@@ -174,7 +172,7 @@ fn a_bare_window_plays_through_a_server_of_its_own_and_a_shot_has_none() {
     let mut shot = running("shot --out a.png").expect("a shot");
     let control = plays_through_its_server(&mut shot);
     eprintln!("the window: {played:?}; the shot: {control:?}");
-    assert!(played.is_ok_and(|claims_a_second| claims_a_second > 0.0));
+    assert!(played.is_ok_and(|judged_a_second| judged_a_second > 0.0));
     assert_eq!(control, Err("no server".into()));
 }
 

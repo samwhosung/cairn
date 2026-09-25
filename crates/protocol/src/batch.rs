@@ -59,16 +59,11 @@ pub enum Record<'a> {
 #[repr(u8)]
 pub enum Why {
     Malformed,
-    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
-    /// slack and the budget left allow.
     Clock,
-    /// Further over the ground than the speed allows.
     Speed,
     Climb,
     Fall,
-    /// A jump launched faster than a run.
     Launch,
-    /// A teleport from a player the server does not let teleport.
     Teleport,
 }
 

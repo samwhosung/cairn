@@ -19,7 +19,7 @@ pub struct Claims {
     arc_began: Option<f32>,
     pub corrections: u32,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
-    pub told: Option<Why>,
+    pub why_put_back: Option<Why>,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub sent: u32,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
@@ -33,7 +33,7 @@ impl Claims {
             ack: 0,
             arc_began: None,
             corrections: 0,
-            told: None,
+            why_put_back: None,
             sent: 0,
             teleports: 0,
         }
@@ -42,17 +42,12 @@ impl Claims {
     pub fn correct(&mut self, player: &mut Player, seq: u32, why: Why, movement: &Movement) {
         let put = wow_to_bevy(movement.pos);
         let past_the_streamed_collision = put.distance(player.pos) > world::FARCLIP;
-        player.pos = put;
-        player.face_yaw = movement.facing;
-        player.model_yaw = movement.facing;
-        player.vel_y = 0.0;
-        player.horiz_vel = Vec3::ZERO;
-        player.airborne_since = None;
+        player.put(put, movement.facing);
         player.settling |= past_the_streamed_collision;
         self.ack = seq;
         self.cadence.report_now();
         self.corrections += 1;
-        self.told = Some(why);
+        self.why_put_back = Some(why);
     }
 }
 

@@ -59,8 +59,7 @@ impl Link {
         })
     }
 
-    /// Joins over `server`'s channels, `hello` first.
-    pub fn here(server: InProcess, hello: Hello) -> Self {
+    pub fn in_process(server: InProcess, hello: Hello) -> Self {
         let link = Self(Way::Here(Mutex::new(Here {
             server,
             frames: Frames::default(),
@@ -222,7 +221,7 @@ mod tests {
             name: "Host".into(),
             appearance: Appearance::default(),
         };
-        let link = Link::here(running.host_joins(), hello);
+        let link = Link::in_process(running.connect_host(), hello);
         thread::sleep(Duration::from_millis(600));
         let read = Instant::now();
         let stamps: Vec<Instant> = link

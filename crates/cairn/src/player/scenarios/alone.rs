@@ -11,11 +11,6 @@ use world::unit::CharacterLook;
 use crate::net::{self, Net};
 use crate::view::Pose;
 
-/// Long enough for claims already sent to reach a tick of a server ticking at 20 Hz.
-const TWO_TICKS: Duration = Duration::from_millis(100);
-
-/// Serves `map` to one player whose body starts at `pose`, as a bare window does, and joins it as
-/// `look`; `record` names where the server writes its inputs.
 pub fn own_server(map: u32, pose: Pose, look: &CharacterLook, record: Option<PathBuf>) -> Net {
     let mut cfg = net::own_server(None, map, pose.target.to_array(), pose.heading);
     cfg.record = record;
@@ -42,12 +37,9 @@ impl Pace {
     }
 }
 
-/// What a walker's own server made of its walk.
 #[derive(Debug)]
 pub struct Judged {
-    /// Claims and teleports refused, by why.
     pub refused: Vec<(Why, u64)>,
-    /// How often the client was put back.
     pub corrections: u32,
     pub claims: u32,
     pub teleports: u32,
@@ -63,7 +55,8 @@ impl Judged {
 /// them; `None` if the app has no server of its own left.
 pub fn judge(app: &mut App) -> Option<Judged> {
     let mut net = app.world_mut().get_resource_mut::<Net>()?;
-    std::thread::sleep(TWO_TICKS);
+    let two_ticks = net.welcome().map_or(0, |w| 2 * u64::from(w.tick_ms));
+    std::thread::sleep(Duration::from_millis(two_ticks));
     let summary = net.stop_hosted()?.expect("the server stops");
     let judged = Judged {
         refused: Why::ALL
@@ -77,4 +70,16 @@ pub fn judge(app: &mut App) -> Option<Judged> {
     };
     eprintln!("its own server: {judged:?}");
     Some(judged)
+}
+
+/// Fails unless `app`'s own server refused nothing of its walk and never put it back.
+pub fn assert_honest(app: &mut App, who: &str) {
+    if std::thread::panicking() {
+        return;
+    }
+    let judged = judge(app);
+    assert!(
+        judged.as_ref().is_some_and(Judged::honest),
+        "the {who}'s own server put it back: {judged:?}"
+    );
 }

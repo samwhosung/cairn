@@ -438,7 +438,6 @@ fn teleport_to(time: u32, pos: [f32; 3]) -> Vec<u8> {
     bytes
 }
 
-/// Every frame the host's connection has been handed within `for_`, until one `until` wants.
 fn host_frames(
     host: &InProcess,
     for_: Duration,
@@ -464,7 +463,7 @@ fn host_frames(
 }
 
 fn host_joins(running: &Running) -> (InProcess, u32) {
-    let host = running.host_joins();
+    let host = running.connect_host();
     host.send(hello("Host"))
         .expect("the server takes the hello");
     let welcomed = host_frames(&host, Duration::from_secs(5), |m| {
@@ -553,7 +552,7 @@ fn a_server_whose_tick_fails_closes_every_connection_it_would_have_admitted() {
         ..Config::default()
     })
     .expect("a server");
-    let host = running.host_joins();
+    let host = running.connect_host();
     let _ = host.send(hello("Host"));
     let mut guest = TcpStream::connect(running.addr().expect("a listener")).expect("connect");
     guest

@@ -6,6 +6,7 @@ mod others;
 mod relay;
 mod remote;
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -58,7 +59,7 @@ impl Net {
             None => format!("the window's own server did not start: {e}"),
         })?;
         Ok(Self::over(
-            Link::here(hosted.host_joins(), hello),
+            Link::in_process(hosted.connect_host(), hello),
             Some(hosted),
         ))
     }
@@ -79,16 +80,14 @@ impl Net {
         self.hosted.as_ref().and_then(server::Running::addr)
     }
 
-    /// Stops the server this window runs and returns what it measured.
     #[cfg(test)]
     pub fn stop_hosted(&mut self) -> Option<std::io::Result<server::Summary>> {
         self.hosted.take().map(server::Running::stop)
     }
 
-    /// Why the server last put the player back.
     #[cfg(test)]
-    pub fn told(&self) -> Option<protocol::Why> {
-        self.claims.as_ref().and_then(|c| c.told)
+    pub fn why_put_back(&self) -> Option<protocol::Why> {
+        self.claims.as_ref().and_then(|c| c.why_put_back)
     }
 
     #[cfg(test)]
@@ -157,7 +156,16 @@ pub fn own_server(port: Option<u16>, map: u32, start: [f32; 3], heading: f32) ->
     }
 }
 
-/// Joins as `joining` says. A window alone whose server fails to start walks on without one.
+#[derive(Debug)]
+pub struct CannotHost(String);
+
+impl fmt::Display for CannotHost {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A window alone whose server fails to start walks on without one.
 pub fn join(
     app: &mut App,
     joining: &Joining,
@@ -165,11 +173,13 @@ pub fn join(
     map: u32,
     start: [f32; 3],
     heading: f32,
-) -> Result<(), String> {
+) -> Result<(), CannotHost> {
     let hello = hello(joining.name.clone(), look);
     let net = match joining.how {
         Join::Connect(addr) => Net::connect(addr, hello),
-        Join::Host(port) => Net::host(own_server(Some(port), map, start, heading), hello)?,
+        Join::Host(port) => {
+            Net::host(own_server(Some(port), map, start, heading), hello).map_err(CannotHost)?
+        }
         Join::Alone => match Net::host(own_server(None, map, start, heading), hello) {
             Ok(net) => net,
             Err(e) => {
@@ -232,7 +242,8 @@ fn receive(
                 return alone(&mut commands, &mut net, why);
             }
             Ok(ServerMessage::Welcome(w)) => {
-                place(&mut player, &w);
+                player.put(wow_to_bevy(w.spawn.pos), w.spawn.facing);
+                player.settling = true;
                 for mut rig in &mut rigs {
                     rig.yaw = w.spawn.facing;
                 }
@@ -294,16 +305,6 @@ fn real_ms_at(real: &Time<Real>, instant: Instant) -> f64 {
     };
     let ms = |d: Duration| d.as_secs_f64() * 1000.0;
     now_ms + ms(instant.saturating_duration_since(now)) - ms(now.saturating_duration_since(instant))
-}
-
-fn place(player: &mut Player, welcome: &Welcome) {
-    player.pos = wow_to_bevy(welcome.spawn.pos);
-    player.face_yaw = welcome.spawn.facing;
-    player.model_yaw = welcome.spawn.facing;
-    player.vel_y = 0.0;
-    player.horiz_vel = Vec3::ZERO;
-    player.airborne_since = None;
-    player.settling = true;
 }
 
 fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {

@@ -56,7 +56,7 @@ fn main() -> AppExit {
         }
     };
     let mut app = App::new();
-    if args.mode == args::Mode::Window {
+    if matches!(args.mode, args::Mode::Window(_)) {
         let tables = match CharacterTables::load(&install) {
             Ok(tables) => tables,
             Err(e) => {

@@ -140,6 +140,18 @@ impl Default for Player {
     }
 }
 
+impl Player {
+    /// Stands the body at `pos`, at rest, facing and drawn facing `facing`.
+    pub fn put(&mut self, pos: Vec3, facing: f32) {
+        self.pos = pos;
+        self.face_yaw = facing;
+        self.model_yaw = facing;
+        self.vel_y = 0.0;
+        self.horiz_vel = Vec3::ZERO;
+        self.airborne_since = None;
+    }
+}
+
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn forward_axis(forward: bool, backward: bool, both_buttons: bool, autorun: bool) -> i32 {
     i32::from(forward) + i32::from(both_buttons) + i32::from(autorun) - i32::from(backward)

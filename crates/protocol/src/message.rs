@@ -13,8 +13,9 @@ pub struct Hello {
     pub appearance: Appearance,
 }
 
-/// Where a client says its mover is now. `ack` is the sequence number of the last correction
-/// the client has taken; the server ignores claims that do not carry its latest one.
+/// Where a client says its mover is now, or, sent as a teleport, asks it to be put. `ack` is the
+/// sequence number of the last correction the client has taken; the server ignores claims that do
+/// not carry its latest one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Claim {
     pub ack: u32,

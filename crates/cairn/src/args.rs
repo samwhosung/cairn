@@ -102,8 +102,6 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
-    /// How the window joins a server; a shot joins none.
-    pub join: Option<Joining>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,7 +161,7 @@ impl Look {
 
 #[derive(Debug, PartialEq)]
 pub enum Mode {
-    Window,
+    Window(Joining),
     Shot(PathBuf),
 }
 
@@ -239,20 +237,30 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, shot)?;
-    let join = join(&mut given, host, look, shot)?;
+    let mode = match out {
+        Some(path) => {
+            if given.contains_key("connect") || host.is_some() {
+                return Err("--connect and --host are for the window".into());
+            }
+            if given.contains_key("name") {
+                return Err("--name is for joining: --connect or --host".into());
+            }
+            Mode::Shot(path)
+        }
+        None => Mode::Window(join(&mut given, host, look)?),
+    };
     Ok(Args {
         pose: pose(&given)?,
         size,
         map,
         time,
-        mode: out.map_or(Mode::Window, Mode::Shot),
+        mode,
         start_flying,
         glow,
         mute,
         display,
         world_age,
         look,
-        join,
     })
 }
 
@@ -268,17 +276,8 @@ fn join(
     given: &mut BTreeMap<String, String>,
     host: Option<u16>,
     look: Look,
-    shot: bool,
-) -> Result<Option<Joining>, String> {
-    let connect = given.remove("connect");
-    if shot {
-        return if connect.is_some() || host.is_some() {
-            Err("--connect and --host are for the window".into())
-        } else {
-            Ok(None)
-        };
-    }
-    let how = match (connect, host) {
+) -> Result<Joining, String> {
+    let how = match (given.remove("connect"), host) {
         (Some(_), Some(_)) => {
             return Err("--connect and --host are two ways to join; give one".into());
         }
@@ -295,10 +294,10 @@ fn join(
     match (given.remove("name"), how) {
         (Some(_), Join::Alone) => Err("--name is for joining: --connect or --host".into()),
         (Some(name), _) if name.trim().is_empty() => Err("--name wants a name".into()),
-        (name, how) => Ok(Some(Joining {
+        (name, how) => Ok(Joining {
             how,
             name: name.map_or_else(|| look.race_title(), |n| n.trim().to_owned()),
-        })),
+        }),
     }
 }
 
@@ -484,7 +483,11 @@ mod tests {
     #[test]
     fn a_bare_command_walks_northshire() {
         let args = parsed("").expect("parses");
-        assert_eq!(args.mode, Mode::Window);
+        let alone = Joining {
+            how: Join::Alone,
+            name: "Human".into(),
+        };
+        assert_eq!(args.mode, Mode::Window(alone));
         assert!(!args.start_flying);
         assert_eq!(args.pose.target, HUMAN_START);
         assert_eq!(args.size, DEFAULT_SIZE);
@@ -525,7 +528,7 @@ mod tests {
     #[test]
     fn the_window_can_start_flying() {
         let args = parsed("--fly --map 1").expect("parses");
-        assert!(args.start_flying && args.mode == Mode::Window);
+        assert!(args.start_flying && matches!(args.mode, Mode::Window(_)));
         assert!(parsed("--fly --fly").is_err());
         assert!(parsed("shot --fly --out a.png").is_err());
     }
@@ -563,7 +566,10 @@ mod tests {
 
     #[test]
     fn a_window_joins_alone_by_address_or_hosting_on_a_port_as_its_race_unless_named() {
-        let joining = |line: &str| parsed(line).expect("parses").join;
+        let joining = |line: &str| match parsed(line).expect("parses").mode {
+            Mode::Window(joining) => Some(joining),
+            Mode::Shot(_) => None,
+        };
         let as_ = |how, name: &str| {
             Some(Joining {
                 how,
@@ -663,6 +669,7 @@ mod tests {
             "--host 70000",
             "--host --host",
             "--name Anna",
+            "shot --name Anna --out a.png",
             "shot --host --out a.png",
             "shot --connect 127.0.0.1:7000 --out a.png",
         ] {

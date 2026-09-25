@@ -14,21 +14,18 @@ use crate::player::Mode;
 use crate::player::state::Player;
 
 const HZ: f32 = 60.0;
-/// Five hundred yards north of the meadow, over open ground.
-const FAR: [f32; 2] = [MEADOW[0] + 500.0, MEADOW[1]];
+const FAR_HILLSIDE: [f32; 2] = [MEADOW[0] + 500.0, MEADOW[1]];
 const ABOVE: f32 = 10.0;
 
-/// Runs until the server's correction has come and the body settled where it put it; where
-/// that is.
 fn put_back(w: &mut Walker) -> [f32; 3] {
     for _ in 0..(5.0 * HZ) as usize {
         if w.net().is_some_and(|n| n.corrections() > 0) {
-            break;
+            w.settle();
+            return w.wow();
         }
         w.run(1);
     }
-    w.settle();
-    w.wow()
+    panic!("the body was never put back");
 }
 
 fn run_on(w: &mut Walker) {
@@ -45,12 +42,12 @@ fn alone_a_landing_five_hundred_yards_off_is_granted_and_walked_on_from() {
         return;
     };
     let stood = w.wow();
-    let ground = w.fly_over(FAR);
-    w.land([FAR[0], FAR[1], ground + ABOVE]);
+    let ground = w.fly_over(FAR_HILLSIDE);
+    w.land([FAR_HILLSIDE[0], FAR_HILLSIDE[1], ground + ABOVE]);
     w.settle();
     run_on(&mut w);
     let end = w.wow();
-    let judged = w.judged().expect("its own server");
+    let judged = w.stop_and_judge().expect("its own server");
     eprintln!(
         "landed {:.1} yd from where it stood, ran on to {end:?}",
         horizontal(stood, end)
@@ -58,7 +55,10 @@ fn alone_a_landing_five_hundred_yards_off_is_granted_and_walked_on_from() {
     assert!(judged.honest(), "{judged:?}");
     assert_eq!(judged.teleports, 2, "stood on the meadow, then landed");
     assert!(judged.claims > 4, "{judged:?}");
-    assert!(horizontal(end, [FAR[0], FAR[1], 0.0]) < 15.0, "{end:?}");
+    assert!(
+        horizontal(end, [FAR_HILLSIDE[0], FAR_HILLSIDE[1], 0.0]) < 15.0,
+        "{end:?}"
+    );
 }
 
 #[test]
@@ -72,12 +72,13 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
         return;
     };
     let stood = w.wow();
-    let ground = w.fly_over(FAR);
-    w.land([FAR[0], FAR[1], ground + ABOVE]);
+    let ground = w.fly_over(FAR_HILLSIDE);
+    w.land([FAR_HILLSIDE[0], FAR_HILLSIDE[1], ground + ABOVE]);
     let back = put_back(&mut w);
     run_on(&mut w);
     let net = w.net().expect("still joined");
-    let (teleports, corrections, told) = (net.teleports_sent(), net.corrections(), net.told());
+    let (teleports, corrections, told) =
+        (net.teleports_sent(), net.corrections(), net.why_put_back());
     drop(w);
     let summary = server.stop().expect("the server stops");
     eprintln!(
@@ -95,22 +96,21 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
     );
 }
 
-/// The control: the landing as it was before it asked, the body put there and claimed from.
 #[test]
 fn a_body_moved_without_asking_is_put_back() {
     let Some(mut w) = Walker::on_ground(MEADOW, 0.0, HZ) else {
         return;
     };
     let stood = w.wow();
-    let ground = w.fly_over(FAR);
+    let ground = w.fly_over(FAR_HILLSIDE);
     let world = w.app.world_mut();
     *world.resource_mut::<Mode>() = Mode::Walk;
     let mut player = world.resource_mut::<Player>();
-    player.pos = wow_to_bevy([FAR[0], FAR[1], ground + ABOVE]);
+    player.pos = wow_to_bevy([FAR_HILLSIDE[0], FAR_HILLSIDE[1], ground + ABOVE]);
     player.settling = true;
     let back = put_back(&mut w);
     run_on(&mut w);
-    let judged = w.judged().expect("its own server");
+    let judged = w.stop_and_judge().expect("its own server");
     eprintln!(
         "moved without asking: {judged:?}, put back {:.4} yd from where it stood",
         horizontal(stood, back)
@@ -129,11 +129,11 @@ fn a_solo_walk_with_a_landing_replays_to_the_same_world_at_every_tick() {
         return;
     };
     let mut w = w.grounded(MEADOW);
-    let ground = w.fly_over(FAR);
-    w.land([FAR[0], FAR[1], ground + ABOVE]);
+    let ground = w.fly_over(FAR_HILLSIDE);
+    w.land([FAR_HILLSIDE[0], FAR_HILLSIDE[1], ground + ABOVE]);
     w.settle();
     run_on(&mut w);
-    let judged = w.judged().expect("its own server");
+    let judged = w.stop_and_judge().expect("its own server");
     assert!(judged.honest() && judged.teleports == 2, "{judged:?}");
     let how = Replay {
         threads: 1,

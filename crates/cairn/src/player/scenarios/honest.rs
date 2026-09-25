@@ -18,10 +18,9 @@ pub struct Stand {
     pub heading_deg: f32,
 }
 
-/// A server of the test's own, which its players join over loopback.
-pub struct Served(Running);
+pub struct LoopbackServer(Running);
 
-impl Served {
+impl LoopbackServer {
     pub fn addr(&self) -> SocketAddr {
         self.0.addr().expect("the server listens")
     }
@@ -31,8 +30,8 @@ impl Served {
     }
 }
 
-pub fn serve(stands: &[Stand]) -> Served {
-    Served(
+pub fn serve(stands: &[Stand]) -> LoopbackServer {
+    LoopbackServer(
         server::start(Config {
             tick_threads: 1,
             io_threads: 1,

@@ -131,8 +131,6 @@ impl Rules {
         Verdict::Accept
     }
 
-    /// Judges a request to be put where `claim` says, which only a player the server lets
-    /// teleport may make; once made, claims are judged from there.
     pub fn judge_teleport(
         &self,
         body: &Body,
@@ -159,8 +157,6 @@ impl Rules {
         Verdict::Accept
     }
 
-    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
-    /// slack and the budget left allow.
     fn off_the_clock(&self, body: &Body, m: &Movement, received_ms: u32) -> bool {
         let budget = self.clock_budget_ms.saturating_sub(body.clock_spent_ms);
         let lead_allowed = i64::from(self.clock_slack_ms) + i64::from(budget);
@@ -192,12 +188,12 @@ impl Rules {
     }
 
     /// How far over the ground a mover may go from `last` to `m`, yards. The flags may have
-    /// changed anywhere between the two, so the faster of their speeds holds; a claim that ends a
-    /// fall says how long it lasted.
+    /// changed anywhere between the two, so the faster of their speeds holds.
     pub fn ground_allowed(&self, last: &Movement, m: &Movement) -> f32 {
         let dt = m.time.saturating_sub(last.time) as f32 / 1000.0;
         let speed = self.speed(last.flags).max(self.speed(m.flags));
-        let fell = (last.flags | m.flags) & flags::FALLING != 0 || m.fall_time > 0;
+        let ends_a_fall = m.fall_time > 0;
+        let fell = (last.flags | m.flags) & flags::FALLING != 0 || ends_a_fall;
         let slid = if fell {
             (last.pos[2] - m.pos[2]).max(0.0) * self.slide
         } else {

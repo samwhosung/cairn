@@ -22,7 +22,7 @@ use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
-use super::alone::{self, Judged, Pace};
+use super::alone::{self, Pace};
 use super::walker::{Through, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
@@ -72,19 +72,23 @@ const ON_THE_SAND_OF_THE_WESTFALL_COAST: Stand = Stand {
     heading: 0.0,
 };
 
-/// Its own server, like a [`super::walker::Walker`]'s, judges its walk when it drops.
 pub(super) struct Painter {
     pub(super) app: App,
     target: Handle<Image>,
     out: PathBuf,
     pace: Pace,
-    unjudged: bool,
+    judge_on_drop: bool,
 }
 
 impl Painter {
     /// Headings in degrees: 0 north, 90 west.
     fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
-        Self::standing(xy, heading_deg, look, Some(Through::ItsOwn(None)))
+        Self::standing(
+            xy,
+            heading_deg,
+            look,
+            Some(Through::ItsOwn { record: None }),
+        )
     }
 
     fn standing(
@@ -106,7 +110,11 @@ impl Painter {
         heading_deg: f32,
         look: CharacterLook,
     ) -> Option<Self> {
-        let through = Through::Loopback(server, "Painter".into(), look.clone());
+        let through = Through::Loopback {
+            addr: server,
+            name: "Painter".into(),
+            look: look.clone(),
+        };
         let mut painter = Self::build(feet, heading_deg, look, Some(through))?;
         let spawn = painter
             .app
@@ -120,7 +128,6 @@ impl Painter {
         Some(painter)
     }
 
-    /// Without `through`, no server at all.
     fn build(
         feet: [f32; 3],
         heading_deg: f32,
@@ -138,11 +145,13 @@ impl Painter {
         let map = CurrentMap::find(&install.0, "Azeroth").expect("the map");
         let tables = CharacterTables::load(&install).expect("the character tables");
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
-        let over_loopback = matches!(through, Some(Through::Loopback(..)));
-        let unjudged = matches!(through, Some(Through::ItsOwn(_)));
+        let over_loopback = matches!(through, Some(Through::Loopback { .. }));
+        let judge_on_drop = matches!(through, Some(Through::ItsOwn { .. }));
         let net = through.map(|t| match t {
-            Through::ItsOwn(record) => alone::own_server(map.id, pose, &look, record),
-            Through::Loopback(addr, name, as_) => Net::connect(addr, crate::net::hello(name, &as_)),
+            Through::ItsOwn { record } => alone::own_server(map.id, pose, &look, record),
+            Through::Loopback { addr, name, look } => {
+                Net::connect(addr, crate::net::hello(name, &look))
+            }
         });
         let mut app = App::new();
         world::register_source(&mut app, &install);
@@ -183,7 +192,7 @@ impl Painter {
             target,
             out: PathBuf::from(out),
             pace: Pace::default(),
-            unjudged,
+            judge_on_drop,
         };
         painter.app.update();
         let camera = painter
@@ -365,12 +374,8 @@ impl Painter {
 
 impl Drop for Painter {
     fn drop(&mut self) {
-        if self.unjudged && !std::thread::panicking() {
-            let judged = alone::judge(&mut self.app);
-            assert!(
-                judged.as_ref().is_some_and(Judged::honest),
-                "the painter's own server put it back: {judged:?}"
-            );
+        if self.judge_on_drop {
+            alone::assert_honest(&mut self.app, "painter");
         }
     }
 }
@@ -538,15 +543,14 @@ fn a_tauren_and_a_gnome_stand_where_the_human_does() {
     }
 }
 
-/// A bare `cairn`'s first view: the body settles where the window's camera looks, as nothing
-/// stands it anywhere.
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_walker_starts_where_a_bare_window_looks() {
     let pose = crate::args::parse(Vec::new()).expect("a bare command").pose;
     let (feet, heading) = (pose.target.to_array(), pose.heading.to_degrees());
     let look = CharacterLook::naked(1, 0);
-    let Some(mut p) = Painter::build(feet, heading, look, Some(Through::ItsOwn(None))) else {
+    let through = Some(Through::ItsOwn { record: None });
+    let Some(mut p) = Painter::build(feet, heading, look, through) else {
         return;
     };
     p.clock().pause();
@@ -559,7 +563,6 @@ fn the_walker_starts_where_a_bare_window_looks() {
     p.shoot("start-2-face");
 }
 
-/// Each frame is held to a window's pace before it is timed.
 pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
     let mut costs: Vec<Duration> = (0..frames)
         .map(|_| {
@@ -586,7 +589,10 @@ pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
 fn the_frame_cost_of_goldshire() {
     for round in 1..=2 {
         for (served, through) in [
-            ("through its own server", Some(Through::ItsOwn(None))),
+            (
+                "through its own server",
+                Some(Through::ItsOwn { record: None }),
+            ),
             ("with no server", None),
         ] {
             let look = CharacterLook::naked(1, 0);

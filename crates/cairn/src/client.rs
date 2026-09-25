@@ -6,18 +6,16 @@ use world::{CurrentMap, Install};
 use crate::args::{self, Args, Mode};
 use crate::{fixture, net, player, shot};
 
-/// A window joins its server here; only a server it was told to host on a port and could not is
-/// an error.
 pub fn assemble(
     app: &mut App,
     args: Args,
     install: &Install,
     map: CurrentMap,
     default_plugins: impl FnOnce(PluginGroupBuilder) -> PluginGroupBuilder,
-) -> Result<(), String> {
+) -> Result<(), net::CannotHost> {
     world::register_source(app, install);
     match args.mode {
-        Mode::Window => {
+        Mode::Window(joining) => {
             let look = character_look(args.look);
             let mut rng = world::rig::AnimRng::default();
             rng.seed_for_session(false);
@@ -42,10 +40,8 @@ pub fn assemble(
                 },
                 sound_plugin(args.mute),
             ));
-            if let Some(joining) = &args.join {
-                let start = args.pose.target.to_array();
-                net::join(app, joining, &look, map.id, start, args.pose.heading)?;
-            }
+            let start = args.pose.target.to_array();
+            net::join(app, &joining, &look, map.id, start, args.pose.heading)?;
         }
         Mode::Shot(out) => {
             app.add_plugins((
