@@ -20,7 +20,7 @@ use bevy::time::{Real, TimeUpdateStrategy};
 use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
-use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
+use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody, UnitShow};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
@@ -37,6 +37,8 @@ const STEP: Duration = Duration::from_nanos(16_666_667);
 const SIZE: UVec2 = UVec2::new(1280, 720);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
+
+const ATTACK_UNARMED: u16 = 16;
 
 pub(super) const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 pub(super) const EAST: f32 = 270.0;
@@ -526,6 +528,37 @@ fn the_walker_runs_on_snow_strafes_and_sits() {
     p.key(KeyCode::KeyX, ButtonState::Released);
     p.wait(1.5);
     p.shoot("pose-3-sitting");
+}
+
+/// Told straight to the body, as no game runs here: the shots come out alike every run.
+fn swing(p: &mut Painter) {
+    let world = p.app.world_mut();
+    let mut own = world
+        .query_filtered::<&mut UnitShow, With<PlayerBody>>()
+        .single_mut(world)
+        .expect("the window's body");
+    own.play = Some(ATTACK_UNARMED);
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_swings_standing_and_on_the_run() {
+    let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
+        return;
+    };
+    let from_its_side = std::f32::consts::FRAC_PI_2;
+    p.orbit(from_its_side, 5.0);
+    p.wait(2.0);
+    swing(&mut p);
+    p.wait(0.3);
+    p.shoot("swing-1-standing");
+    p.wait(1.0);
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    p.wait(1.5);
+    swing(&mut p);
+    p.wait(0.3);
+    p.orbit(from_its_side, 5.0);
+    p.shoot("swing-2-running");
 }
 
 #[test]
