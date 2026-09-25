@@ -4,6 +4,7 @@ use crate::Error;
 use crate::reader::Reader;
 
 pub const STEPS_PER_YD: [f32; 3] = [128.0, 128.0, 32.0];
+const WRAPPED_STEPS_EITHER_WAY: f32 = 32_768.0;
 
 /// A world position rounded to whole steps of [`STEPS_PER_YD`], the precision a batch relays.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -34,6 +35,13 @@ pub struct Wrapped(pub [u16; 3]);
 
 impl Wrapped {
     pub const ENCODED_LEN: usize = 6;
+    /// Yards an axis within which the bits read back as the position they were taken from: from
+    /// this far below the point they are read against to short of this far above it.
+    pub const REACH_YD: [f32; 3] = [
+        WRAPPED_STEPS_EITHER_WAY / STEPS_PER_YD[0],
+        WRAPPED_STEPS_EITHER_WAY / STEPS_PER_YD[1],
+        WRAPPED_STEPS_EITHER_WAY / STEPS_PER_YD[2],
+    ];
 
     /// The position these bits stand for that lies nearest `reference`, a point in yards.
     pub fn around(self, reference: [f32; 3]) -> Pos {
@@ -102,6 +110,21 @@ mod tests {
         let beyond = Pos::of([reference[0] + 256.5, reference[1], reference[2]]);
         let read = beyond.wrapped().around(reference);
         assert_eq!(read.0[0], beyond.0[0] - (1 << 16), "a whole window away");
+        let near = Pos::of(reference);
+        for (a, (reach_yd, steps)) in Wrapped::REACH_YD.iter().zip(STEPS_PER_YD).enumerate() {
+            let reach = (reach_yd * steps) as i32;
+            for (offset, back) in [
+                (reach - 1, true),
+                (reach, false),
+                (-reach, true),
+                (-reach - 1, false),
+            ] {
+                let mut p = near;
+                p.0[a] += offset;
+                let read = p.wrapped().around(reference);
+                assert_eq!(read == p, back, "axis {a}, {offset} steps off");
+            }
+        }
     }
 
     #[test]

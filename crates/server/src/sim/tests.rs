@@ -28,6 +28,17 @@ fn join(conn: u32) -> Stamped {
     }
 }
 
+fn host_join(conn: u32) -> Stamped {
+    Stamped {
+        input: Input::HostJoin(Hello {
+            version: VERSION,
+            name: "Host".into(),
+            appearance: Appearance::default(),
+        }),
+        ..join(conn)
+    }
+}
+
 fn claim(conn: u32, nth: u32, received_ms: u32, ack: u32, movement: Movement) -> Stamped {
     Stamped {
         conn,
@@ -342,6 +353,142 @@ fn a_client_the_server_gives_up_on_leaves_at_the_next_tick() {
 }
 
 #[test]
+fn a_body_put_out_of_reach_leaves_at_once_and_comes_where_it_lands_by_the_recheck() {
+    let unchecked = Rules {
+        check: false,
+        ..Rules::default()
+    };
+    put_out_of_reach(unchecked, join(0), |time, to| claim(0, 1, time, 0, to));
+}
+
+#[test]
+fn a_host_that_lands_out_of_reach_leaves_its_guests_at_once_and_comes_where_it_lands() {
+    put_out_of_reach(Rules::default(), host_join(0), |time, to| {
+        teleport(0, 1, time, to)
+    });
+}
+
+fn put_out_of_reach(rules: Rules, first: Stamped, put: impl Fn(u32, Movement) -> Stamped) {
+    let spawns = vec![
+        spawn(0.0, 0.0),
+        spawn(-10.0, 0.0),
+        spawn(0.0, 30.0),
+        spawn(400.0, 5.0),
+        spawn(395.0, -5.0),
+    ];
+    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let shared = Shared::new();
+    let mut clients: Vec<Client> = (0..5)
+        .map(|conn| {
+            let (outbox, rx) = Outbox::channel();
+            shared.hold_outbox(conn, outbox);
+            Client::new(rx)
+        })
+        .collect();
+    let pool = pool(2);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
+    run([first].into_iter().chain((1..5).map(join)).collect());
+    for c in &mut clients {
+        c.welcome();
+        c.next_batch(0);
+    }
+    let (put_at, stepped_at) = (8, 14);
+    let mut got: Vec<Vec<Vec<Got>>> = (0..5).map(|_| Vec::new()).collect();
+    for t in 1..=stepped_at {
+        let time = t * 50;
+        let inputs = match t {
+            _ if t == put_at => {
+                let standing = Movement {
+                    time,
+                    pos: [400.0, 0.0, 0.0],
+                    ..Movement::default()
+                };
+                vec![put(time, standing)]
+            }
+            _ if t == stepped_at => vec![claim(0, 2, time, 0, running(time, [401.0, 0.0, 0.0]))],
+            _ => Vec::new(),
+        };
+        let st = run(inputs);
+        assert_eq!(st.refused.iter().sum::<u32>(), 0, "tick {t}");
+        for (o, c) in clients.iter_mut().enumerate().skip(1) {
+            got[o].push(c.next_batch(t));
+        }
+    }
+    let at = |o: usize, t: u32| &got[o][t as usize - 1];
+    for o in [1, 2] {
+        for t in 1..=stepped_at {
+            let want: &[Got] = if t == put_at { &[Got::Vanish(0)] } else { &[] };
+            assert_eq!(at(o, t), want, "observer {o}, tick {t}");
+        }
+    }
+    let every = View::default().aoi_every;
+    for o in [3, 4] {
+        let came = (1..=stepped_at).find(|&t| !at(o, t).is_empty());
+        assert!(
+            came.is_some_and(|t| (put_at..put_at + every).contains(&t)),
+            "observer {o} was first shown it at tick {came:?}"
+        );
+        for t in 1..=stepped_at {
+            let want: &[Got] = match t {
+                _ if Some(t) == came => &[Got::Appear(0)],
+                _ if t == stepped_at => &[Got::Move(0)],
+                _ => &[],
+            };
+            assert_eq!(at(o, t), want, "observer {o}, tick {t}");
+        }
+    }
+}
+
+#[test]
+fn a_body_put_out_of_reach_overhead_leaves_at_once_and_is_not_brought_back() {
+    let rules = Rules {
+        check: false,
+        ..Rules::default()
+    };
+    let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
+    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let shared = Shared::new();
+    let (outbox, rx) = Outbox::channel();
+    shared.hold_outbox(1, outbox);
+    let mut watcher = Client::new(rx);
+    let pool = pool(1);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
+    run(vec![join(0), join(1)]);
+    watcher.welcome();
+    assert_eq!(watcher.next_batch(0), [Got::Appear(0)]);
+    let put_at = 3;
+    for t in 1..=12 {
+        let inputs = if t == put_at {
+            let overhead = Movement {
+                time: t * 50,
+                pos: [0.0, 0.0, 1000.0],
+                ..Movement::default()
+            };
+            vec![claim(0, 1, t * 50, 0, overhead)]
+        } else {
+            Vec::new()
+        };
+        run(inputs);
+        let want: &[Got] = if t == put_at { &[Got::Vanish(0)] } else { &[] };
+        assert_eq!(watcher.next_batch(t), want, "tick {t}");
+    }
+}
+
+#[test]
 fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
     let xs = [0.0, 150.0, 20.0, 40.0, 60.0, 80.0, 160.0];
     let spawns = xs.iter().map(|&x| spawn(x, 0.0)).collect();
@@ -422,15 +569,7 @@ fn the_host_is_put_where_it_asks_and_a_guest_that_asks_is_put_back_and_told_why(
             Batches::Send(&shared),
         )
     };
-    let host = Stamped {
-        input: Input::HostJoin(Hello {
-            version: VERSION,
-            name: "Host".into(),
-            appearance: Appearance::default(),
-        }),
-        ..join(0)
-    };
-    run(vec![host, join(1)]);
+    run(vec![host_join(0), join(1)]);
     for c in &mut clients {
         c.welcome();
         c.next_batch(0);

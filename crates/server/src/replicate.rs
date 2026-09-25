@@ -1,14 +1,43 @@
 use protocol::{
-    SLOTS, begin_batch, finish_frame, write_appear, write_correct, write_move, write_state,
-    write_turn, write_vanish,
+    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_move,
+    write_state, write_turn, write_vanish,
 };
 
 use crate::grid::Grid;
 use crate::net::{Outbox, Shared};
 use crate::relays::{Hot, Relays};
+use crate::rules::Rules;
 use crate::world::World;
 
-/// How far a player sees, and how often what it sees is refreshed.
+const HELD_CLAIM_AGE_S: f32 = 2.0;
+
+#[derive(Clone, Copy, Debug)]
+struct Reach {
+    across: f32,
+    up: f32,
+}
+
+impl Reach {
+    fn of(rules: &Rules) -> Self {
+        let fastest = [
+            rules.walk,
+            rules.run,
+            rules.run_back,
+            rules.swim,
+            rules.swim_back,
+        ]
+        .into_iter()
+        .fold(0.0, f32::max);
+        Self {
+            across: (Wrapped::REACH_YD[0] - fastest * HELD_CLAIM_AGE_S).max(0.0),
+            up: (Wrapped::REACH_YD[2] - rules.fall * HELD_CLAIM_AGE_S).max(0.0),
+        }
+    }
+}
+
+/// How far a player sees, and how often what it sees is refreshed. An entity further from where
+/// the server holds the player than its client reads a batch's positions right does not come into
+/// view, and one in view leaves once a change of it would be sent.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
     /// Entities within this many yards come into view.
@@ -212,7 +241,8 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         built.corrections += 1;
     }
     let mut pass = Pass {
-        me: [me.movement.pos[0], me.movement.pos[1]],
+        me: me.movement.pos,
+        reach: Reach::of(world.rules()),
         relays: scene.relays,
         view,
         tick,
@@ -246,7 +276,8 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
 }
 
 struct Pass<'a> {
-    me: [f32; 2],
+    me: [f32; 3],
+    reach: Reach,
     relays: &'a Relays,
     view: &'a View,
     tick: u32,
@@ -257,8 +288,13 @@ struct Pass<'a> {
 }
 
 impl Pass<'_> {
-    fn dist2(&self, h: &Hot) -> f32 {
-        (self.me[0] - h.xy[0]).powi(2) + (self.me[1] - h.xy[1]).powi(2)
+    fn across2(&self, h: &Hot) -> f32 {
+        (self.me[0] - h.pos[0]).powi(2) + (self.me[1] - h.pos[1]).powi(2)
+    }
+
+    fn within_reach(&self, h: &Hot, across2: f32) -> bool {
+        across2 <= self.reach.across * self.reach.across
+            && (self.me[2] - h.pos[2]).abs() <= self.reach.up
     }
 
     fn recheck(&mut self, seen: &[Seen], s: &mut Scratch) {
@@ -276,8 +312,9 @@ impl Pass<'_> {
             if s.near_at[e.id as usize] == r {
                 s.kept_at[e.id as usize] = r;
                 let mut e = e;
-                self.refresh(&mut e);
-                s.kept.push(e);
+                if self.refresh_or_let_go(&mut e) {
+                    s.kept.push(e);
+                }
             } else {
                 self.vanish(e.slot);
             }
@@ -285,7 +322,12 @@ impl Pass<'_> {
         let r2 = self.view.radius * self.view.radius;
         s.came.clear();
         s.came.extend(s.near.iter().copied().filter(|&n| {
-            s.kept_at[n as usize] != r && self.dist2(&self.relays.hot[n as usize]) <= r2
+            if s.kept_at[n as usize] == r {
+                return false;
+            }
+            let h = &self.relays.hot[n as usize];
+            let across2 = self.across2(h);
+            across2 <= r2 && self.within_reach(h, across2)
         }));
         s.came.sort_unstable();
         s.seen.clear();
@@ -328,27 +370,35 @@ impl Pass<'_> {
             self.vanish(e.slot);
             return false;
         }
-        self.refresh(e);
-        true
+        self.refresh_or_let_go(e)
     }
 
-    fn refresh(&mut self, e: &mut Seen) {
+    fn refresh_or_let_go(&mut self, e: &mut Seen) -> bool {
         let h = &self.relays.hot[e.id as usize];
+        if h.state_changed_at
+            .max(h.pos_changed_at)
+            .max(h.facing_changed_at)
+            <= e.sent_tick
+        {
+            return true;
+        }
+        let across2 = self.across2(h);
+        if !self.within_reach(h, across2) {
+            self.vanish(e.slot);
+            return false;
+        }
         let relay = &self.relays.pieces[e.id as usize];
         let shared = if h.state_changed_at > e.sent_tick {
             self.built.states += 1;
             write_state(self.out, e.slot, relay)
         } else {
-            if h.pos_changed_at.max(h.facing_changed_at) <= e.sent_tick {
-                return;
-            }
             if self.shedding {
                 self.built.deferred += 1;
-                return;
+                return true;
             }
-            let tier = self.view.tier(self.dist2(h));
+            let tier = self.view.tier(across2);
             if self.tick - e.sent_tick < self.view.tiers[tier].every {
-                return;
+                return true;
             }
             self.built.moves_and_turns_by_tier[tier] += 1;
             if h.pos_changed_at > e.sent_tick {
@@ -362,5 +412,6 @@ impl Pass<'_> {
         self.built.shared_bytes += shared as u64;
         self.built.movement_bytes += 2 + shared as u64;
         e.sent_tick = self.tick;
+        true
     }
 }

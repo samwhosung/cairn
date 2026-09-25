@@ -164,6 +164,10 @@ impl World {
         &self.spawns
     }
 
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+
     pub fn stepped(&self) -> &[Body] {
         &self.next
     }
