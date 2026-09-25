@@ -37,6 +37,12 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          size (1 by default), and shoot it S seconds (2.5 by default) after it appears, from
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
+       cairn atlas ZONE [--map MAP] [--yd N] [--mark X,Y]... --out FILE.png
+         draw the AreaTable zone ZONE from above, north up, N yards a pixel (2 by default),
+         on its own map unless MAP names another: the ground in its textures' colours, lit
+         from the north-west and tinted by the water's depth, the land around the zone
+         greyed, doodads as dots (trees dark green, shrubs light green, rocks grey, fences
+         brown, props orange), buildings as red squares, and a ring at each point marked
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's

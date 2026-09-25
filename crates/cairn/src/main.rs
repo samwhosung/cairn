@@ -1,10 +1,11 @@
-//! The cairn client: walks a window through a WoW 1.12.1 install, or renders one shot of it to a PNG.
+//! The cairn client: walks a window through a WoW 1.12.1 install, renders one shot of it to a PNG, or draws a zone of it from above.
 #![allow(
     clippy::needless_pass_by_value,
     reason = "Bevy hands systems their parameters by value"
 )]
 
 mod args;
+mod atlas;
 mod client;
 mod fixture;
 mod fly;
@@ -30,6 +31,9 @@ fn main() -> AppExit {
         println!("{}", args::USAGE);
         return AppExit::Success;
     }
+    if argv.first().is_some_and(|arg| arg == "atlas") {
+        return atlas::main(&argv[1..]);
+    }
     let mut args = match args::parse(argv) {
         Ok(args) => args,
         Err(e) => {
@@ -43,16 +47,9 @@ fn main() -> AppExit {
     {
         joining.world = server::default_world(joining.game.as_ref().map(|g| g.name.as_str()));
     }
-    let Some(data) = std::env::var_os("WOW_DATA") else {
-        eprintln!("cairn: set WOW_DATA to the Data directory of a WoW 1.12.1 install");
-        return AppExit::from_code(2);
-    };
-    let install = match Install::open(Path::new(&data)) {
+    let install = match install() {
         Ok(install) => install,
-        Err(e) => {
-            eprintln!("cairn: {e}");
-            return AppExit::error();
-        }
+        Err(exit) => return exit,
     };
     let map = match CurrentMap::find(&install.0, &args.map) {
         Ok(map) => map,
@@ -81,6 +78,17 @@ fn main() -> AppExit {
         return AppExit::from_code(2);
     }
     app.run()
+}
+
+fn install() -> Result<Install, AppExit> {
+    let Some(data) = std::env::var_os("WOW_DATA") else {
+        eprintln!("cairn: set WOW_DATA to the Data directory of a WoW 1.12.1 install");
+        return Err(AppExit::from_code(2));
+    };
+    Install::open(Path::new(&data)).map_err(|e| {
+        eprintln!("cairn: {e}");
+        AppExit::error()
+    })
 }
 
 fn check_look_offered(tables: &CharacterTables, look: args::Look) -> Result<(), String> {

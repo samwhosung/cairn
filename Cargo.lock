@@ -1456,6 +1456,7 @@ name = "cairn"
 version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
+ "atlas",
  "avian3d",
  "bevy",
  "catalog",

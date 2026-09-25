@@ -1,6 +1,6 @@
 [package]
 name = "cairn"
-description = "The client: walks a window through your WoW 1.12.1 install, or renders one shot of it to a PNG"
+description = "The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, or draws a zone of it from above"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 assert_no_alloc = "1.1"
+atlas = { path = "../atlas" }
 avian3d.workspace = true
 bevy.workspace = true
 catalog = { path = "../catalog" }
