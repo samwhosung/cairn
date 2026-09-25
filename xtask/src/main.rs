@@ -177,12 +177,8 @@ fn commits(root: &Path, range: &str) -> Result<()> {
     bail!("{}", bad.join("\n"))
 }
 
-/// One `cargo test` run each: the two-player test, run beside the others, has missed its
-/// wall-clock deadlines.
-const PICTURE_RUNS: [&[&str]; 2] = [
-    &["scenarios::pictures::", "--skip", "the_frame_cost"],
-    &["scenarios::together::two_players"],
-];
+/// The tests that start the whole app on the GPU and save what it draws.
+const PICTURES: [&str; 2] = ["scenarios::pictures::", "scenarios::together::two_players"];
 
 fn pictures(root: &Path, dir: &Path) -> Result<()> {
     if std::env::var_os("WOW_DATA").is_none() {
@@ -190,24 +186,25 @@ fn pictures(root: &Path, dir: &Path) -> Result<()> {
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let dir = std::path::absolute(dir).context("resolving the shots' directory")?;
-    for filter in PICTURE_RUNS {
-        let out = Command::new("cargo")
-            .args(["test", "-q", "-p", "cairn", "--locked", "--", "--ignored"])
-            .args(filter)
-            .env("CAIRN_PICTURES", &dir)
-            .current_dir(root)
-            .output()
-            .context("running cargo test")?;
-        let text = String::from_utf8_lossy(&out.stdout);
-        print!("{text}");
-        if !out.status.success() {
-            bail!("{}", String::from_utf8_lossy(&out.stderr));
-        }
-        let passed = text.lines().any(|l| {
-            l.starts_with("test result: ok.") && !l.starts_with("test result: ok. 0 passed")
-        });
-        if !passed {
-            bail!("no test matched {}", filter.join(" "));
+    let out = Command::new("cargo")
+        .args(["test", "-p", "cairn", "--locked", "--", "--ignored"])
+        .args(PICTURES)
+        .args(["--skip", "the_frame_cost"])
+        .env("CAIRN_PICTURES", &dir)
+        .current_dir(root)
+        .output()
+        .context("running cargo test")?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    print!("{text}");
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr));
+    }
+    for filter in PICTURES {
+        if !text
+            .lines()
+            .any(|l| l.contains(filter) && l.ends_with(" ok"))
+        {
+            bail!("no test matched {filter}");
         }
     }
     Ok(())
