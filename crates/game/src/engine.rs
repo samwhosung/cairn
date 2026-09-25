@@ -6,9 +6,10 @@ use std::time::Instant;
 use crate::hosted::{BodyOrder, Delivery, Hosted, Stages, Took, Turn};
 use crate::out::{ACT, Out, PendingSpawn, ROUND};
 use crate::record::Record;
+use crate::show::{Poses, Show, Shows};
 use crate::space::Space;
 use crate::table::{Pair, Rows};
-use crate::{Game, Id, Kind, Kinds, Letter, Spot, Table, Tick, World, canon};
+use crate::{Anim, Game, Id, Kind, Kinds, Letter, Spot, Table, Tick, World, canon};
 
 pub(crate) const NEVER: Tick = Tick::MAX;
 const ROUNDS: u8 = 2;
@@ -62,6 +63,7 @@ pub struct Engine<G: Game> {
     record: Record,
     shown: Vec<Vec<u8>>,
     orders: Vec<(u32, BodyOrder)>,
+    poses: Poses,
     counts: BTreeMap<&'static str, i64>,
     took: Stages,
 }
@@ -70,6 +72,7 @@ struct Gathered<G: Game> {
     mail: Vec<(Id, Letter<G::Msg>)>,
     spawns: Vec<PendingSpawn>,
     orders: Vec<(u32, u8, BodyOrder)>,
+    shows: Vec<(u32, u8, Show)>,
 }
 
 impl<G: Game> Gathered<G> {
@@ -78,6 +81,7 @@ impl<G: Game> Gathered<G> {
             self.mail.append(&mut out.letters);
             self.spawns.append(&mut out.spawns);
             self.orders.append(&mut out.orders);
+            self.shows.append(&mut out.shows);
             for (what, by) in out.counts.drain(..) {
                 debug_assert!(
                     G::COUNTS.contains(&what),
@@ -123,6 +127,7 @@ impl<G: Game> Engine<G> {
             record: Record::default(),
             shown: Vec::new(),
             orders: Vec::new(),
+            poses: Poses::default(),
             counts: G::COUNTS.iter().map(|&what| (what, 0)).collect(),
             took: Stages::default(),
         }
@@ -151,6 +156,7 @@ impl<G: Game> Engine<G> {
             "players join in the order of their bodies"
         );
         self.space.join(n, spawn);
+        self.poses.join(n);
         let id = Id::player(n);
         let row = G::join(id, &self.world());
         self.next_n[0] = n + 1;
@@ -246,6 +252,7 @@ impl<G: Game> Hosted for Engine<G> {
             mail: std::mem::take(&mut self.carry),
             spawns: Vec::new(),
             orders: Vec::new(),
+            shows: Vec::new(),
         };
         let mut acts: Vec<(u32, Letter<G::Msg>)> = turn
             .actions
@@ -304,6 +311,7 @@ impl<G: Game> Hosted for Engine<G> {
         walls[2] = Instant::now();
         self.commit(std::mem::take(&mut got.spawns), &clocks[2]);
         self.settle_orders(got.orders);
+        self.poses.settle(got.shows);
         walls[3] = Instant::now();
         let took = |stage: usize| {
             let wall = walls[stage + 1].duration_since(walls[stage]);
@@ -324,6 +332,14 @@ impl<G: Game> Hosted for Engine<G> {
         &self.record
     }
 
+    fn shows(&self) -> &Shows {
+        &self.poses.tick
+    }
+
+    fn held(&self, n: u32) -> Option<Anim> {
+        self.poses.held(n)
+    }
+
     fn shown(&self, n: u32) -> Option<&[u8]> {
         self.shown.get(n as usize).map(Vec::as_slice)
     }
@@ -332,7 +348,7 @@ impl<G: Game> Hosted for Engine<G> {
         let kinds: Vec<u64> = (0..self.lives.len())
             .map(|k| self.lives[k].hash(k as u16))
             .collect();
-        canon::hash(&(kinds, &self.next_n, &self.carry))
+        canon::hash(&(kinds, &self.next_n, &self.carry, self.poses.all()))
     }
 
     fn saved(&self) -> BTreeMap<Id, Vec<u8>> {

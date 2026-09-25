@@ -2,7 +2,8 @@ use std::any::{Any, TypeId};
 
 use crate::engine::NEVER;
 use crate::hosted::BodyOrder;
-use crate::{Game, Id, Kind, Letter, Spot, Tick};
+use crate::show::Show;
+use crate::{Anim, Game, Id, Kind, Letter, Spot, Tick};
 
 pub(crate) const ACT: u8 = 0;
 pub(crate) const STEP: u8 = 1;
@@ -33,6 +34,7 @@ pub struct Out<G: Game> {
     pub(crate) letters: Vec<(Id, Letter<G::Msg>)>,
     pub(crate) spawns: Vec<PendingSpawn>,
     pub(crate) orders: Vec<(u32, u8, BodyOrder)>,
+    pub(crate) shows: Vec<(u32, u8, Show)>,
     pub(crate) counts: Vec<(&'static str, i64)>,
 }
 
@@ -48,6 +50,7 @@ impl<G: Game> Out<G> {
             letters: Vec::new(),
             spawns: Vec::new(),
             orders: Vec::new(),
+            shows: Vec::new(),
             counts: Vec::new(),
         }
     }
@@ -111,6 +114,24 @@ impl<G: Game> Out<G> {
     /// Puts the body of the player this row is at `at`, as if it had always stood there.
     pub fn place(&mut self, at: Spot) {
         self.order.get_or_insert_default().place = Some(at);
+    }
+
+    /// Plays `anim` once on the body of the player this row is, for the player and everyone who
+    /// sees the body.
+    pub fn play(&mut self, anim: Anim) {
+        self.show(Show::Play(anim));
+    }
+
+    /// Holds the body of the player this row is in `pose` until it is held in another, or let go
+    /// with `None`; whoever comes to see the body is shown the pose it holds.
+    pub fn hold(&mut self, pose: Option<Anim>) {
+        self.show(Show::Hold(pose));
+    }
+
+    fn show(&mut self, show: Show) {
+        if self.me.is_player() {
+            self.shows.push((self.me.n, self.phase, show));
+        }
     }
 
     /// Adds `by` to the count of `what`, which a scenario's verdict reports.
