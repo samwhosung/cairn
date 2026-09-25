@@ -25,6 +25,7 @@ game::saved! {
     pub struct Score {
         pub kills: u32,
         pub deaths: u32,
+        pub dead: bool,
     }
 }
 
@@ -38,7 +39,13 @@ pub enum Msg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Life {
     Alive,
-    Dead { rises_at: Option<Tick> },
+    Dead {
+        rises_at: Option<Tick>,
+    },
+    /// Dead as it came back, its body not yet laid down.
+    Returned {
+        rises_at: Option<Tick>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -62,9 +69,19 @@ impl Game for Melee {
 
     fn join(_: Id, saved: Option<Score>, w: &World<'_, Self>) -> Fighter {
         let score = saved.unwrap_or_default();
+        let (health, life) = if score.dead {
+            (
+                0,
+                Life::Returned {
+                    rises_at: rises_at(w),
+                },
+            )
+        } else {
+            (w.knobs().health, Life::Alive)
+        };
         Fighter {
-            health: w.knobs().health,
-            life: Life::Alive,
+            health,
+            life,
             kills: score.kills,
             deaths: score.deaths,
             swing_pending: false,
@@ -89,11 +106,18 @@ impl Kind<Melee> for Fighter {
         Score {
             kills: self.kills,
             deaths: self.deaths,
+            dead: self.life != Life::Alive,
         }
     }
 
     fn step(id: Id, me: &mut Self, w: &World<'_, Melee>, out: &mut Out<Melee>) {
         match me.life {
+            Life::Returned { rises_at } => {
+                me.life = Life::Dead { rises_at };
+                lie_down(out);
+                out.count("down", 1);
+                rise(id, me, rises_at, w, out);
+            }
             Life::Dead { rises_at } => rise(id, me, rises_at, w, out),
             Life::Alive if me.swing_pending => swing(id, me, w, out),
             Life::Alive => {}
@@ -166,20 +190,26 @@ fn nearest_in_front(id: Id, w: &World<'_, Melee>) -> Option<Id> {
     best.map(|(_, id)| id)
 }
 
+fn rises_at(w: &World<'_, Melee>) -> Option<Tick> {
+    let respawn_s = w.knobs().respawn_s?;
+    Some(w.after_ms(respawn_s.saturating_mul(1000)))
+}
+
+fn lie_down(out: &mut Out<Melee>) {
+    out.root(true);
+    out.hold(Some(anim::DEAD));
+}
+
 fn die(me: &mut Fighter, killer: Id, w: &World<'_, Melee>, out: &mut Out<Melee>) {
-    let rises_at = w
-        .knobs()
-        .respawn_s
-        .map(|s| w.after_ms(s.saturating_mul(1000)));
+    let rises_at = rises_at(w);
     me.life = Life::Dead { rises_at };
     me.deaths += 1;
     me.swing_pending = false;
     if let Some(at) = rises_at {
         out.wake_at(at);
     }
-    out.root(true);
     out.play(anim::DEATH);
-    out.hold(Some(anim::DEAD));
+    lie_down(out);
     out.send(killer, Msg::Killed);
     out.count("deaths", 1);
     out.count("down", 1);

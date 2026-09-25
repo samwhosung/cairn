@@ -6,6 +6,8 @@ use protocol::{
 };
 use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 
+const PERMADEATH: &str = "respawn_s = never\n";
+
 const QUICK: &str = "swing_ms = 50\ndamage_min = 60\ndamage_max = 60\nrespawn_s = 1\n";
 const MELEE_SWING: u32 = 1;
 
@@ -21,12 +23,21 @@ fn scratch(name: &str) -> PathBuf {
     path
 }
 
-fn melee() -> Loaded {
-    let over = game::KnobsFile::parse(QUICK, "quick.knobs").expect("lines");
-    catalog::load("melee", None, &over.lines, 1).expect("melee")
+fn melee(overlay: &str) -> Loaded {
+    let lines = |text: &str| {
+        game::KnobsFile::parse(text, "overlay")
+            .expect("lines")
+            .lines
+    };
+    let over = [lines(QUICK), lines(overlay)].concat();
+    catalog::load("melee", None, &over, 1).expect("melee")
 }
 
 fn config(world: Option<PathBuf>) -> Config {
+    config_on(world, "")
+}
+
+fn config_on(world: Option<PathBuf>, overlay: &str) -> Config {
     Config {
         tick_threads: 2,
         spawns: vec![
@@ -39,7 +50,7 @@ fn config(world: Option<PathBuf>) -> Config {
                 facing: std::f32::consts::PI,
             },
         ],
-        game: Some(melee()),
+        game: Some(melee(overlay)),
         world,
         ..Config::default()
     }
@@ -133,6 +144,10 @@ impl Run {
         game::Bytes::from_bytes(self.stepper.game()?.shown(id)?)
     }
 
+    fn pose(&self, conn: u32) -> Option<u16> {
+        self.stepper.pose_of(self.told[conn as usize].welcome?.id)
+    }
+
     fn body(&self, conn: u32) -> Option<game::Spot> {
         self.stepper.body(self.told[conn as usize].welcome?.id)
     }
@@ -178,7 +193,11 @@ impl Run {
 }
 
 fn score(kills: i64, deaths: i64) -> Vec<Value> {
-    vec![Value::Integer(kills), Value::Integer(deaths)]
+    vec![
+        Value::Integer(kills),
+        Value::Integer(deaths),
+        Value::Integer(0),
+    ]
 }
 
 #[test]
@@ -298,4 +317,61 @@ fn a_guest_never_takes_over_the_hosts_body() {
         first.map(|w| w.id),
         "the host takes its own back"
     );
+}
+
+#[test]
+fn under_permadeath_a_fighter_killed_stays_dead_when_it_comes_back_and_after_a_restart() {
+    let world = scratch("permadeath");
+    let cfg = config_on(Some(world.clone()), PERMADEATH);
+    let mut run = Run::new(&cfg);
+    let (a, _) = run.join("Ada");
+    let (b, _) = run.join("Bo");
+    run.swing(a, 4);
+    assert_eq!(run.shown(b), Some((0, true)));
+    run.leave(b);
+    let (back, _) = run.join("Bo");
+    let dead_again = |run: &mut Run, conn: u32| {
+        let stood = run.body(conn).map(|s| s.pos);
+        run.walk(conn, 2.0);
+        let rooted = run.body(conn).map(|s| s.pos) == stood;
+        (run.shown(conn), run.pose(conn), rooted)
+    };
+    let dead = (Some((0, true)), Some(game::anim::DEAD.0), true);
+    assert_eq!(dead_again(&mut run, back), dead, "back in the same run");
+    run.stepper.finish().expect("committed");
+    let mut run = Run::new(&cfg);
+    let (back, _) = run.join("Bo");
+    assert_eq!(dead_again(&mut run, back), dead, "back after a restart");
+    run.stepper.finish().expect("committed");
+    let file = rusqlite::Connection::open(&world).expect("the file");
+    file.execute("UPDATE score SET dead = 0", [])
+        .expect("the control");
+    drop(file);
+    let mut run = Run::new(&cfg);
+    let (back, _) = run.join("Bo");
+    assert_eq!(
+        (run.shown(back), run.pose(back)),
+        (Some((100, false)), None),
+        "the control: saved alive, it comes back alive"
+    );
+}
+
+#[test]
+fn a_fighter_that_left_dead_comes_back_dead_and_rises_on_its_timer_from_then() {
+    let mut run = Run::new(&config(Some(scratch("usual-timer"))));
+    let (a, _) = run.join("Ada");
+    let (b, _) = run.join("Bo");
+    run.swing(a, 2);
+    assert_eq!(run.shown(b), Some((0, true)));
+    run.leave(b);
+    run.idle(10);
+    let (back, _) = run.join("Bo");
+    run.idle(19);
+    assert_eq!(
+        run.shown(back),
+        Some((0, true)),
+        "a second, the respawn, after it came back"
+    );
+    run.idle(1);
+    assert_eq!(run.shown(back), Some((100, false)));
 }

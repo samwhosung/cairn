@@ -9,3 +9,4 @@ damage_min = 10       # a hit's damage is rolled between these...
 damage_max = 20
 damage_scale = 1      # ...and then multiplied by this
 respawn_s = 10        # death: back at the spawn after this long, at full health; `never` stays dead
+                      # one that leaves dead comes back dead, and waits this long from then

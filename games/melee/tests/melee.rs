@@ -146,6 +146,7 @@ fn a_fighter_that_comes_back_keeps_its_kills_and_deaths_and_rises_whole() {
     let score = Score {
         kills: 4,
         deaths: 9,
+        dead: false,
     };
     let spot = at(0.0, 0.0, 0.0);
     e.tick(&Turn {
@@ -166,6 +167,76 @@ fn a_fighter_that_comes_back_keeps_its_kills_and_deaths_and_rises_whole() {
         .map(|(id, s)| (id.n, s.clone()))
         .collect();
     assert_eq!(saved[1], (1, Some(score.to_bytes())));
+}
+
+/// A fighter that saved itself dead joins beside a live one, and the engine runs `ticks` more.
+fn comes_back_dead(overlays: &[&str], ticks: u32) -> (Engine<Melee>, Vec<(u32, u32, BodyOrder)>) {
+    let mut e = engine(overlays);
+    let dead = Score {
+        kills: 2,
+        deaths: 3,
+        dead: true,
+    };
+    let (spot, far) = (at(0.0, 0.0, 0.0), at(40.0, 0.0, 0.0));
+    let restored = [(1, dead.to_bytes())];
+    let mut orders = Vec::new();
+    for tick in 0..=ticks {
+        let joined = [(0, spot), (1, far)];
+        e.tick(&Turn {
+            tick,
+            joined: if tick == 0 { &joined[..] } else { &[] },
+            restored: if tick == 0 { &restored[..] } else { &[] },
+            bodies: &[Some(spot), Some(far)],
+            actions: &[],
+            cpu_ns: || 0,
+        });
+        orders.extend(e.orders().iter().map(|&(n, o)| (tick, n, o)));
+    }
+    (e, orders)
+}
+
+#[test]
+fn a_fighter_that_comes_back_dead_lies_down_at_once_and_rises_on_the_usual_timer() {
+    let (e, orders) = comes_back_dead(&[], 0);
+    let back = fighter(&e, 1);
+    assert_eq!((back.health, back.kills, back.deaths), (0, 2, 3));
+    assert_eq!(
+        back.life,
+        Life::Dead {
+            rises_at: Some(200)
+        },
+        "ten seconds after it came back"
+    );
+    let laid = BodyOrder {
+        place: None,
+        root: Some(true),
+    };
+    assert_eq!(orders, [(0, 1, laid)]);
+    assert_eq!((e.held(1), e.held(0)), (Some(anim::DEAD), None));
+    assert_eq!(e.counts()["down"], 1);
+    let saved = |e: &Engine<Melee>| {
+        let bytes = &e.saved()[&Id::player(1)];
+        Score::from_bytes(bytes).expect("a score")
+    };
+    assert!(saved(&e).dead);
+    let (e, orders) = comes_back_dead(&[], 200);
+    let risen = BodyOrder {
+        place: Some(at(40.0, 0.0, 0.0)),
+        root: Some(false),
+    };
+    assert_eq!(orders.last(), Some(&(200, 1, risen)));
+    assert_eq!((fighter(&e, 1).health, e.held(1)), (100, None));
+    assert!(!saved(&e).dead);
+    assert_eq!(e.counts()["down"], 0);
+}
+
+#[test]
+fn under_permadeath_a_fighter_that_comes_back_dead_stays_down() {
+    let permadeath = include_str!("../knobs/permadeath.knobs");
+    let (e, orders) = comes_back_dead(&[permadeath], 400);
+    assert_eq!(fighter(&e, 1).life, Life::Dead { rises_at: None });
+    assert_eq!(orders.len(), 1, "laid down once, never raised: {orders:?}");
+    assert_eq!(e.held(1), Some(anim::DEAD));
 }
 
 #[test]
