@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
-    Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, current_bracket, gait_candidates,
+    Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, UnitShow, current_bracket, gait_candidates,
     jump_land_pick, move_flags, playback_rate, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
@@ -124,6 +124,77 @@ impl UnitDriver {
             roll_oneshot(anims, head, rng)
         };
         play_clip(tr, player, c, repeat, 1.0);
+    }
+
+    /// A game's animation or pose, over the unit's own: whether one holds the body this frame.
+    fn show(
+        &mut self,
+        mut show: Mut<'_, UnitShow>,
+        tr: &mut AnimationTransitions,
+        player: &mut AnimationPlayer,
+        anims: &ModelAnimations,
+        rng: &mut AnimRng,
+    ) -> bool {
+        if let Some(id) = show.play
+            && show.play.take().is_some()
+            && resolved_clip(anims, id).is_some()
+        {
+            self.play(tr, player, anims, id, false, rng);
+            self.mode = Mode::Played(id);
+            return true;
+        }
+        if let Mode::Played(id) = self.mode
+            && !oneshot_finished(player, anims, id)
+        {
+            return true;
+        }
+        if let Some(pose) = show.pose.filter(|&p| resolved_clip(anims, p).is_some()) {
+            if self.mode != Mode::Posed(pose) {
+                self.hold(tr, player, anims, pose, rng);
+                self.mode = Mode::Posed(pose);
+            }
+            return true;
+        }
+        if matches!(self.mode, Mode::Played(_) | Mode::Posed(_)) {
+            self.mode = Mode::Gait;
+            self.armed_gait = None;
+        }
+        false
+    }
+
+    /// A clip that does not loop is held at its last frame, where a one-shot of it that has
+    /// played out already stands.
+    fn hold(
+        &mut self,
+        tr: &mut AnimationTransitions,
+        player: &mut AnimationPlayer,
+        anims: &ModelAnimations,
+        pose: u16,
+        rng: &mut AnimRng,
+    ) {
+        let Some(head) = resolved_clip(anims, pose) else {
+            return;
+        };
+        if head.looping {
+            self.play(tr, player, anims, pose, true, rng);
+            return;
+        }
+        self.loop_window = None;
+        let played_out = tr
+            .get_main_animation()
+            .and_then(|node| anims.clips.iter().find(|c| c.node == node))
+            .is_some_and(|c| {
+                c.anim_id == head.anim_id
+                    && player
+                        .animation(c.node)
+                        .is_some_and(ActiveAnimation::is_finished)
+            });
+        if !played_out {
+            play_clip(tr, player, head, RepeatAnimation::Never, 1.0);
+            if let Some(active) = player.animation_mut(head.node) {
+                active.seek_to(head.duration);
+            }
+        }
     }
 
     fn enter_bracket(
@@ -245,6 +316,10 @@ impl UnitDriver {
                     self.mode = Mode::Gait;
                     self.armed_gait = None;
                 }
+            }
+            Mode::Played(_) | Mode::Posed(_) => {
+                self.mode = Mode::Gait;
+                self.armed_gait = None;
             }
             Mode::Gait => {
                 if let Some(next) = bracket {
@@ -384,12 +459,13 @@ type Driven<'w, 's> = Query<
         &'static mut AnimationPlayer,
         &'static mut AnimationTransitions,
         Option<&'static UnitMotion>,
+        Option<&'static mut UnitShow>,
         &'static Transform,
     ),
 >;
 
 pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_>) {
-    for (mut drv, anims, mut player, mut tr, motion, transform) in &mut units {
+    for (mut drv, anims, mut player, mut tr, motion, show, transform) in &mut units {
         let motion = motion.copied().unwrap_or_default();
         let falling = motion.flags & move_flags::FALLING != 0;
         let was_falling = std::mem::replace(&mut drv.was_falling, falling);
@@ -408,7 +484,10 @@ pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_
             model_scale: transform.scale.x,
         };
         drv.advance_window(anims, &mut tr, &mut player, &mut rng);
-        drv.run(&frame, &mut tr, &mut player, &mut rng);
+        let shown = show.is_some_and(|s| drv.show(s, &mut tr, &mut player, anims, &mut rng));
+        if !shown {
+            drv.run(&frame, &mut tr, &mut player, &mut rng);
+        }
         drv.sync_rate(&tr, &mut player, anims, motion.speed, frame.model_scale);
     }
 }

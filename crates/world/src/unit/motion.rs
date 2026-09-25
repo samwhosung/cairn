@@ -93,6 +93,16 @@ pub struct UnitMotion {
     pub stand_state: StandState,
 }
 
+/// What a game has a unit show over how it moves, in `AnimationData.dbc` ids.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitShow {
+    /// Played once from its start, then taken: one told before it ends cuts it short.
+    pub play: Option<u16>,
+    /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
+    /// stands at its last frame.
+    pub pose: Option<u16>,
+}
+
 pub(crate) const DEFAULT_WALK_SPEED: f32 = 2.5;
 const SPRINT_SPEED: f32 = 11.0;
 
@@ -165,6 +175,10 @@ pub(crate) enum Mode {
         pose: StandState,
         clip: u16,
     },
+    /// A game's animation, played once.
+    Played(u16),
+    /// A game's pose, held.
+    Posed(u16),
 }
 
 /// The gait a unit plays, the wanted id first and the fallbacks after it.

@@ -25,7 +25,7 @@ pub use body::{BodyDressed, BodyModel, BodyPart, CharacterDress, UnitBody, WornM
 pub use drive::UnitDriver;
 pub use fade::{UnitAlpha, UnitAppear};
 pub use look::{BodySkin, CharacterLook, CharacterTables};
-pub use motion::{StandState, UnitMotion, move_flags};
+pub use motion::{StandState, UnitMotion, UnitShow, move_flags};
 pub use shade::UnitShade;
 pub use twist::BodyTwist;
 

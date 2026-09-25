@@ -18,7 +18,7 @@ use super::super::motion::anim::{
 use super::super::motion::move_flags::{
     BACKWARD, FALLING, FALLING_FAR, FORWARD, SWIMMING, TURN_LEFT, WALK_MODE,
 };
-use super::super::motion::{Bracketed, Mode, StandState, UnitMotion};
+use super::super::motion::{Bracketed, Mode, StandState, UnitMotion, UnitShow};
 use super::{UnitDriver, drive_units};
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 
@@ -381,5 +381,142 @@ fn a_sit_goes_down_holds_and_stands_up_or_walks_straight_out() {
         (playing(&app, unit).0, playing(&app, unit).2),
         (Some(WALK), Mode::Gait),
         "walking out of a sit skips the stand-up"
+    );
+}
+
+const DEATH: u16 = 1;
+const DEAD: u16 = 6;
+const ATTACK_UNARMED: u16 = 16;
+
+/// The walker with a swing, a death, and Dead played as Death's last frame, as a character's
+/// lookup has it.
+fn fighter(app: &mut App) -> Entity {
+    let mut rows = WALKER.to_vec();
+    rows.extend([
+        (ATTACK_UNARMED, 1.0, false, 0.0, 0x7fff, (0, 0)),
+        (DEATH, 2.0, false, 0.0, 0x7fff, (0, 0)),
+        (SIT_GROUND, 2.0, true, 0.0, 0x7fff, (0, 0)),
+    ]);
+    let unit = body(app, &rows);
+    let mut e = app.world_mut().entity_mut(unit);
+    let mut anims = e.get_mut::<ModelAnimations>().expect("animations");
+    anims.playable_animation_lookup = (0..=SIT_GROUND)
+        .map(|id| model::PlayableAnim {
+            resolved_id: if id == DEAD { DEATH } else { id },
+            dir_flags: 0,
+        })
+        .collect();
+    unit
+}
+
+fn told(app: &mut App, unit: Entity, play: Option<u16>, pose: Option<u16>) {
+    app.world_mut()
+        .entity_mut(unit)
+        .insert(UnitShow { play, pose });
+}
+
+/// The main clip's time and whether it has played out.
+fn at_its_end(app: &App, unit: Entity) -> Option<(f32, bool)> {
+    let e = app.world().entity(unit);
+    let node = e
+        .get::<AnimationTransitions>()
+        .and_then(AnimationTransitions::get_main_animation)?;
+    let active = e.get::<AnimationPlayer>()?.animation(node)?;
+    Some((active.seek_time(), active.is_finished()))
+}
+
+#[test]
+fn a_games_animation_plays_once_over_the_gait_and_hands_back_to_it() {
+    let mut app = app();
+    let unit = fighter(&mut app);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 1);
+    let (id, _, mode) = playing(&app, unit);
+    assert_eq!(
+        (id, mode),
+        (Some(ATTACK_UNARMED), Mode::Played(ATTACK_UNARMED))
+    );
+    let show = app.world().entity(unit).get::<UnitShow>().copied();
+    assert_eq!(show, Some(UnitShow::default()), "taken as it starts");
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 50);
+    assert_eq!(
+        playing(&app, unit).0,
+        Some(ATTACK_UNARMED),
+        "running does not cut it"
+    );
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 60);
+    assert_eq!(
+        playing(&app, unit).0,
+        Some(ATTACK_UNARMED),
+        "one told again starts over"
+    );
+    frames(&mut app, 50);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(RUN), Mode::Gait)
+    );
+}
+
+#[test]
+fn death_plays_out_into_the_dead_pose_which_holds_until_it_is_let_go() {
+    let mut app = app();
+    let unit = fighter(&mut app);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(DEATH), Some(DEAD));
+    frames(&mut app, 1);
+    assert_eq!(playing(&app, unit).2, Mode::Played(DEATH));
+    frames(&mut app, 150);
+    assert_eq!(at_its_end(&app, unit).map(|(_, done)| done), Some(false));
+    frames(&mut app, 100);
+    let (id, _, mode) = playing(&app, unit);
+    assert_eq!((id, mode), (Some(DEATH), Mode::Posed(DEAD)));
+    let (seek, done) = at_its_end(&app, unit).expect("a clip");
+    assert!(done && seek >= 2.0, "held at {seek}");
+    moving(&mut app, unit, FORWARD | FALLING, 7.0, -3.0);
+    frames(&mut app, 30);
+    assert_eq!(
+        at_its_end(&app, unit),
+        Some((seek, true)),
+        "whatever the body does"
+    );
+    told(&mut app, unit, None, None);
+    moving(&mut app, unit, 0, 0.0, 0.0);
+    frames(&mut app, 2);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(STAND), Mode::Gait)
+    );
+}
+
+#[test]
+fn a_body_that_comes_already_posed_stands_in_the_pose_and_a_looping_pose_loops() {
+    let mut app = app();
+    let unit = fighter(&mut app);
+    told(&mut app, unit, None, Some(DEAD));
+    frames(&mut app, 2);
+    assert_eq!(playing(&app, unit).2, Mode::Posed(DEAD));
+    let (seek, done) = at_its_end(&app, unit).expect("a clip");
+    assert!(done && seek >= 2.0, "not a death played again: {seek}");
+    told(&mut app, unit, None, Some(SIT_GROUND));
+    frames(&mut app, 300);
+    let (id, _, mode) = playing(&app, unit);
+    assert_eq!((id, mode), (Some(SIT_GROUND), Mode::Posed(SIT_GROUND)));
+    assert_eq!(at_its_end(&app, unit).map(|(_, done)| done), Some(false));
+}
+
+#[test]
+fn a_show_the_model_lacks_leaves_the_gait_to_it() {
+    let mut app = app();
+    let unit = body(&mut app, &WALKER);
+    frames(&mut app, 1);
+    told(&mut app, unit, Some(ATTACK_UNARMED), Some(DEAD));
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 2);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(RUN), Mode::Gait)
     );
 }
