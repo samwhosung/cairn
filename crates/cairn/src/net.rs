@@ -226,23 +226,24 @@ pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            PreUpdate,
-            (
-                receive.run_if(resource_exists::<Net>),
-                remote::drain_pending_moves,
-                remote::extrapolate_remote_units,
+        app.add_message::<UnitAttack>()
+            .add_systems(
+                PreUpdate,
+                (
+                    receive.run_if(resource_exists::<Net>),
+                    remote::drain_pending_moves,
+                    remote::extrapolate_remote_units,
+                )
+                    .chain(),
             )
-                .chain(),
-        )
-        .add_systems(
-            Update,
-            (others::dress_remotes, others::fade_leaving).before(UnitSystems),
-        )
-        .add_systems(
-            PostUpdate,
-            (act, claims::claim).run_if(resource_exists::<Net>),
-        );
+            .add_systems(
+                Update,
+                (others::dress_remotes, others::fade_leaving).before(UnitSystems),
+            )
+            .add_systems(
+                PostUpdate,
+                (act, claims::claim).run_if(resource_exists::<Net>),
+            );
     }
 }
 
