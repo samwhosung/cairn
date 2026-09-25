@@ -227,12 +227,12 @@ impl SaveCost {
         let n = ticks.len().max(1) as f64;
         let commits: Vec<Commit> = ticks.iter().filter_map(|t| t.commit).collect();
         let per_tick =
-            |f: fn(&Commit) -> u32| commits.iter().map(|c| f64::from(f(c))).sum::<f64>() / n;
+            |f: fn(&Commit) -> u32| commits.iter().fold(0.0, |a, c| a + f64::from(f(c))) / n;
         let ms = |f: fn(&Commit) -> u64| p50_p99_max_ms(commits.iter().map(f).collect());
         let waits = ticks.iter().map(|t| t.wait_ns).filter(|&w| w > 0).collect();
         Self {
             commits: commits.len(),
-            rows_per_tick: ticks.iter().map(|t| f64::from(t.saved_rows)).sum::<f64>() / n,
+            rows_per_tick: ticks.iter().fold(0.0, |a, t| a + f64::from(t.saved_rows)) / n,
             bytes_per_tick: per_tick(|c| c.value_bytes),
             wal_bytes_per_tick: per_tick(|c| c.wal_bytes),
             commit: ms(|c| c.commit_ns),
