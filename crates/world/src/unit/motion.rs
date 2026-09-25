@@ -115,10 +115,10 @@ pub struct UnitShow {
     /// Played once from its start, then taken: one told before it ends cuts it short. A body not
     /// standing still plays most of them above its lower spine, its legs going on as they were, and
     /// a combat or cast one begun standing moves up there, where it stands, once the legs set off.
-    /// A wound cuts nothing short: it is laid over whatever the body plays, three quarters of the
-    /// pose at the hit and easing out over its clip, above the lower spine unless the body stands
-    /// in a ready stance or stands still in a stand wound, until the next play there takes it; a
-    /// body whose stand state is dead shows none.
+    /// A wound cuts no other play short: it is laid over whatever the body plays, three quarters of
+    /// the pose at the hit and easing out over its clip, above the lower spine unless the body
+    /// stands in a ready stance or stands still in a stand wound, until another wound, or a new play
+    /// or gait where it lies, takes its place; a body whose stand state is dead shows none.
     pub play: Option<u16>,
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
@@ -204,8 +204,7 @@ pub(crate) enum Mode {
     ShowPosed(u16),
 }
 
-/// What a body the game idles in `idle` stands in, the wanted id first: the client falls a
-/// weapon's ready stance back to the unarmed one.
+/// The client falls a one- or two-handed weapon's ready stance back to the unarmed one.
 pub(crate) fn idle_candidates(idle: u16) -> [u16; 3] {
     match idle {
         READY_1H..=READY_2HL => [idle, READY_UNARMED, STAND],

@@ -53,8 +53,8 @@ impl UnitDriver {
         }
     }
 
-    /// The client's next blended play on the wound's own track, the base or the upper body, takes
-    /// its slot.
+    /// As in the client, the next play on the wound's own track takes its slot: a new one-shot
+    /// above the spine, or on the base a new mode or gait.
     pub(super) fn evict_wound(
         &mut self,
         player: &mut AnimationPlayer,

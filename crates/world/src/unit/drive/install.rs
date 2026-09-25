@@ -68,17 +68,16 @@ struct Sampled {
     swung_seq: Option<usize>,
 }
 
-/// What a body is shown from its spawn, and what it is told once its gait has settled.
 #[derive(Clone, Copy, Default)]
 struct Scene {
     from_the_spawn: UnitShow,
-    told: UnitShow,
+    once_settled: UnitShow,
 }
 
 impl Scene {
     fn plays(play: Option<u16>) -> Self {
         Self {
-            told: UnitShow {
+            once_settled: UnitShow {
                 play,
                 ..UnitShow::default()
             },
@@ -114,7 +113,7 @@ fn sampled(
         app.update();
     }
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
-    app.world_mut().entity_mut(body).insert(scene.told);
+    app.world_mut().entity_mut(body).insert(scene.once_settled);
     let mut locals = Vec::new();
     let mut swung_seq = None;
     for frame in 0..frames {
@@ -129,7 +128,7 @@ fn sampled(
             anims
                 .clips
                 .iter()
-                .filter(|c| Some(c.anim_id) == scene.told.play)
+                .filter(|c| Some(c.anim_id) == scene.once_settled.play)
                 .find(|c| {
                     std::iter::once(c.node)
                         .chain(c.upper_node)
@@ -512,8 +511,8 @@ fn an_idled_body_stands_ready_bone_for_bone_runs_as_it_would_and_stands_once_let
         pose: Some(READY_UNARMED),
         ..UnitShow::default()
     };
-    let told = |told| Scene {
-        told,
+    let told = |once_settled| Scene {
+        once_settled,
         ..Scene::default()
     };
     let let_go = |from_the_spawn| Scene {
@@ -534,7 +533,7 @@ fn an_idled_body_stands_ready_bone_for_bone_runs_as_it_would_and_stands_once_let
         standing,
         Scene {
             from_the_spawn: idles,
-            told: idles,
+            once_settled: idles,
         },
     );
 
@@ -587,7 +586,7 @@ fn a_wound_over_the_ready_stance_takes_the_whole_body_and_one_without_it_the_tor
     let (in_the_stance, stance_left_out) = (
         Scene {
             from_the_spawn: ready,
-            told: hit,
+            once_settled: hit,
         },
         Scene::plays(Some(COMBAT_WOUND)),
     );
@@ -600,7 +599,7 @@ fn a_wound_over_the_ready_stance_takes_the_whole_body_and_one_without_it_the_tor
         &anims,
         Scene {
             from_the_spawn: ready,
-            told: ready,
+            once_settled: ready,
         },
     );
     let flinches = body(&anims, stance_left_out);
