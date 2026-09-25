@@ -646,7 +646,7 @@ fn the_frame_cost_of_goldshire() {
     }
 }
 
-fn rig_census(p: &mut Painter) -> String {
+pub(super) fn rig_census(p: &mut Painter) -> String {
     let world = p.app.world_mut();
     let mut rigs = world.query::<(&RigPose, Has<AnimParked>, Has<RigSkin>)>();
     let (mut n, mut parked, mut skinned) = (0, 0, 0);

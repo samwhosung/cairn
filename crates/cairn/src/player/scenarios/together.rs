@@ -15,7 +15,9 @@ use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
 use super::honest::{Stand, serve};
 use super::pair::Act;
-use super::pictures::{EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS, Painter, frame_costs};
+use super::pictures::{
+    EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS, Painter, frame_costs, rig_census,
+};
 use super::walker::Walker;
 use crate::net::{OtherPlayer, RemoteMotion};
 use crate::player::state::Player;
@@ -27,6 +29,7 @@ const SUBJECT_WITHIN_YD: f32 = 12.0;
 const STATE_TIMEOUT: Duration = Duration::from_secs(10);
 const DRESSED_STEADY_FOR: Duration = Duration::from_secs(10);
 const CROWD_WATCHED: Duration = Duration::from_secs(60);
+const CROWD_FRAMES: usize = 900;
 const MOVING_OVER_YD_PER_S: f32 = 1.0;
 const STAND_ANIM: u16 = 0;
 
@@ -293,25 +296,28 @@ fn joined_to_the_crowd() -> Option<Painter> {
 }
 
 #[test]
-#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES and \
-            CAIRN_SERVER to a server a crowd walks"]
-fn the_frame_cost_beside_a_crowd() {
+#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES, \
+            CAIRN_SERVER to a server a crowd walks and CAIRN_CROWD to how many walk it"]
+fn the_frame_cost_standing_beside_a_crowd() {
     let Some(mut p) = joined_to_the_crowd() else {
         return;
     };
+    let walking: usize = std::env::var("CAIRN_CROWD")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(50);
     let deadline = Instant::now() + LOAD_TIMEOUT;
-    while !(p.arrived() && crowd(&mut p).dressed >= 50) {
+    while !(p.arrived() && crowd(&mut p).dressed >= walking) {
         assert!(Instant::now() < deadline, "the crowd never arrived");
         wait(&mut p, 0.0);
     }
     wait(&mut p, 5.0);
     let Crowd { seen, dressed } = crowd(&mut p);
-    let standing = frame_costs(&mut p, 600);
-    p.key(KeyCode::KeyW, bevy::input::ButtonState::Pressed);
-    let running = frame_costs(&mut p, 1200);
-    eprintln!(
-        "beside a crowd of {seen} ({dressed} dressed): standing {standing}; running {running}"
-    );
+    eprintln!("measuring {CROWD_FRAMES} frames");
+    let standing = frame_costs(&mut p, CROWD_FRAMES);
+    eprintln!("measured");
+    let rigs = rig_census(&mut p);
+    eprintln!("beside a crowd of {seen} ({dressed} dressed): standing {standing} with {rigs}");
 }
 
 #[derive(Default)]
