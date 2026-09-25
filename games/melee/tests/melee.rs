@@ -86,11 +86,16 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
         held: vec![],
         idled: vec![],
     };
-    assert_eq!(shown[..3], [wounded.clone(), wounded.clone(), wounded]);
+    let ready = Some(anim::READY_UNARMED);
+    let first = Shows {
+        idled: vec![(0, ready), (1, ready)],
+        ..wounded.clone()
+    };
+    assert_eq!(shown[..3], [first, wounded.clone(), wounded]);
     let killed = Shows {
         played: vec![(0, anim::ATTACK_UNARMED), (1, anim::DEATH)],
         held: vec![(1, Some(anim::DEAD))],
-        idled: vec![],
+        idled: vec![(1, None)],
     };
     assert_eq!(
         shown[3], killed,
@@ -242,6 +247,38 @@ fn under_permadeath_a_fighter_that_comes_back_dead_stays_down() {
     assert_eq!(fighter(&e, 1).life, Life::Dead { rises_at: None });
     assert_eq!(orders.len(), 1, "laid down once, never raised: {orders:?}");
     assert_eq!(e.held(1), Some(anim::DEAD));
+}
+
+#[test]
+fn a_fighter_stands_ready_from_its_swing_or_wound_until_the_knobs_time_passes_without_either() {
+    let mut e = engine(&[QUICK, "ready_ms = 500\n"]);
+    let bodies = [at(0.0, 0.0, 0.0), at(3.0, 0.0, PI), at(50.0, 0.0, 0.0)];
+    let joined: Vec<(u32, Spot)> = (0..).zip(bodies).collect();
+    let present: Vec<Option<Spot>> = bodies.map(Some).to_vec();
+    let mut idled = Vec::new();
+    for tick in 0..30 {
+        let swings: &[(u32, u32)] = match tick {
+            0 | 4 => &[(0, SWING)],
+            _ => &[],
+        };
+        e.tick(&Turn {
+            tick,
+            joined: if tick == 0 { &joined[..] } else { &[] },
+            restored: &[],
+            bodies: &present,
+            actions: swings,
+            cpu_ns: || 0,
+        });
+        idled.extend(e.shows().idled.iter().map(|&(n, anim)| (tick, n, anim)));
+    }
+    let ready = Some(anim::READY_UNARMED);
+    assert_eq!(
+        idled,
+        [(0, 0, ready), (0, 1, ready), (14, 0, None), (14, 1, None)],
+        "the swinger and the one it hit, ready from the first blow and calm ten ticks after the \
+         second; the one far off never"
+    );
+    assert_eq!(e.idling(2), None);
 }
 
 #[test]
