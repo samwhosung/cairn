@@ -8,6 +8,7 @@ use bevy::asset::{AssetPlugin, LoadState};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
+use super::super::motion::anim::RUN;
 use super::super::motion::move_flags::FORWARD;
 use super::super::motion::{UnitMotion, UnitShow};
 use super::{UPPER_BODY_OVER_GAIT, UPPER_BODY_RELEASE_SECS, UnitDriver, drive_units};
@@ -70,7 +71,7 @@ struct Sampled {
 fn sampled(
     app: &mut App,
     (skeleton, anims): (&ModelSkeleton, &ModelAnimations),
-    motion: UnitMotion,
+    motion_from_the_telling: &dyn Fn(usize) -> UnitMotion,
     told: Option<u16>,
     frames: usize,
 ) -> Sampled {
@@ -83,7 +84,7 @@ fn sampled(
             AnimationTransitions::new(),
             AnimationGraphHandle(anims.graph.clone()),
             UnitDriver::default(),
-            motion,
+            motion_from_the_telling(0),
             UnitShow::default(),
             Transform::default(),
         ))
@@ -100,7 +101,10 @@ fn sampled(
     });
     let mut locals = Vec::new();
     let mut swung_seq = None;
-    for _ in 0..frames {
+    for frame in 0..frames {
+        app.world_mut()
+            .entity_mut(body)
+            .insert(motion_from_the_telling(frame));
         app.update();
         let e = app.world().entity(body);
         locals.push(e.get::<RigPose>().expect("a rig").locals.clone());
@@ -123,6 +127,26 @@ fn sampled(
         locals_from_the_telling: locals,
         swung_seq,
     }
+}
+
+fn without_upper_nodes(anims: &ModelAnimations) -> ModelAnimations {
+    let mut whole_body_only = anims.clone();
+    for c in &mut whole_body_only.clips {
+        c.upper_node = None;
+    }
+    whole_body_only
+}
+
+fn run_moves_below_the_spine(anims: &ModelAnimations) -> Vec<usize> {
+    let src = &anims.pose;
+    let run = anims.find_resolved(RUN, &|_| None).expect("a run");
+    let keyed = &src.clips[src.node(run.node).expect("its node").clip as usize];
+    keyed
+        .bones
+        .iter()
+        .map(|b| usize::from(b.bone))
+        .filter(|&b| src.bone_masks[b] != 0)
+        .collect()
 }
 
 fn below_the_spine(anims: &ModelAnimations) -> Vec<usize> {
@@ -160,10 +184,7 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
     };
     let mut app = app(&data);
     let (skeleton, anims) = human(&mut app);
-    let mut whole_body_only = anims.clone();
-    for c in &mut whole_body_only.clips {
-        c.upper_node = None;
-    }
+    let whole_body_only = without_upper_nodes(&anims);
     let swings = || anims.clips.iter().filter(|c| c.anim_id == ATTACK_UNARMED);
     let swing_secs = swings().map(|c| c.duration).fold(0.0, f32::max);
     let blend_secs = swings().map(|c| c.blend_time).fold(0.0, f32::max);
@@ -179,6 +200,7 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
     let swing = Some(ATTACK_UNARMED);
     let human = (&skeleton, &anims);
     let whole_body_human = (&skeleton, &whole_body_only);
+    let (running, standing) = (&|_| running, &|_| standing);
     let run = sampled(&mut app, human, running, None, frames).locals_from_the_telling;
     let on_the_run = sampled(&mut app, human, running, swing, frames);
     let whole_on_the_run =
@@ -252,5 +274,108 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
          each at most {worst_share:.4} of the way back to the run",
         lower.len(),
         upper.len(),
+    );
+}
+
+#[test]
+fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run() {
+    let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
+        eprintln!("skipped: WOW_DATA is not set");
+        return;
+    };
+    let mut app = app(&data);
+    let (skeleton, anims) = human(&mut app);
+    let whole_body_only = without_upper_nodes(&anims);
+    let swings = || anims.clips.iter().filter(|c| c.anim_id == ATTACK_UNARMED);
+    let swing_secs = swings().map(|c| c.duration).fold(0.0, f32::max);
+    let run_blend_secs = anims
+        .find_resolved(RUN, &|_| None)
+        .expect("a run")
+        .blend_time;
+    let frames = frames_in(swing_secs + UPPER_BODY_RELEASE_SECS) + 5;
+    let runs_from = frames_in(swing_secs * 0.3);
+    let legs_ran_into_the_run = runs_from + frames_in(run_blend_secs);
+    let swing_ends = frames_in(swing_secs) - 2;
+    let running = UnitMotion {
+        speed: 7.0,
+        flags: FORWARD,
+        ..UnitMotion::default()
+    };
+    let standing = UnitMotion::default();
+    let stand_then_run = &|frame| if frame < runs_from { standing } else { running };
+    let swing = Some(ATTACK_UNARMED);
+    let human = (&skeleton, &anims);
+    let run = sampled(&mut app, human, stand_then_run, None, frames).locals_from_the_telling;
+    let moved_up = sampled(&mut app, human, stand_then_run, swing, frames);
+    let whole_body_human = (&skeleton, &whole_body_only);
+    let today =
+        sampled(&mut app, whole_body_human, stand_then_run, swing, frames).locals_from_the_telling;
+    let standing_still = sampled(&mut app, human, &|_| standing, swing, frames);
+    assert!(
+        moved_up.swung_seq.is_some() && moved_up.swung_seq == standing_still.swung_seq,
+        "one swing to compare"
+    );
+    let (moved_up, swing_whole) = (
+        &moved_up.locals_from_the_telling,
+        &standing_still.locals_from_the_telling,
+    );
+    assert!(
+        moved_up[..runs_from] == swing_whole[..runs_from],
+        "until it runs, the swing is the whole-body clip"
+    );
+
+    let legs = run_moves_below_the_spine(&anims);
+    let legs_on_the_run =
+        |frames: &[Vec<Transform>], f: usize| legs.iter().all(|&b| frames[f][b] == run[f][b]);
+    let first_on_the_run = (runs_from..frames).find(|&f| legs_on_the_run(moved_up, f));
+    for f in legs_ran_into_the_run..frames {
+        assert!(
+            legs_on_the_run(moved_up, f),
+            "frame {f}: the legs left the run"
+        );
+    }
+    for f in runs_from..swing_ends {
+        for &b in &legs {
+            assert_eq!(
+                today[f][b], swing_whole[f][b],
+                "today, the legs stay in the swing"
+            );
+        }
+    }
+    let control_off_the_run = legs
+        .iter()
+        .filter(|&&b| today[legs_ran_into_the_run][b] != run[legs_ran_into_the_run][b])
+        .count();
+    assert!(
+        control_off_the_run > 0,
+        "today's whole-body swing keeps the legs off the run"
+    );
+
+    let upper = turned_above_the_spine(&anims, standing_still.swung_seq);
+    let gait_share = 1.0 / (1.0 + UPPER_BODY_OVER_GAIT);
+    let mut worst_share = 0.0_f32;
+    for f in legs_ran_into_the_run..swing_ends {
+        for &bone in &upper {
+            let swing = swing_whole[f][bone].rotation;
+            let from_the_run = angle(run[f][bone].rotation, swing);
+            let from_the_swing = angle(moved_up[f][bone].rotation, swing);
+            assert!(
+                from_the_swing <= from_the_run * gait_share + 1e-4,
+                "frame {f}: bone {bone} stands {from_the_swing} rad off the swing, the run \
+                 {from_the_run}"
+            );
+            if from_the_run > VISIBLY_APART_RAD {
+                worst_share = worst_share.max(from_the_swing / from_the_run);
+            }
+        }
+    }
+    eprintln!(
+        "runs from frame {runs_from}; the {} leg bones the run moves are its own bit for bit from \
+         frame {first_on_the_run:?} (asserted from {legs_ran_into_the_run}) to {frames}, and \
+         today's stay the swing's to its end ({control_off_the_run} off the run at frame \
+         {legs_ran_into_the_run}); the {} upper bones the swing turns follow it to its end, each \
+         at most {worst_share:.4} of the way back to the run",
+        legs.len(),
+        upper.len()
     );
 }

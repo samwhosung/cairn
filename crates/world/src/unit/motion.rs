@@ -285,7 +285,28 @@ fn takes_whole_body(id: u16) -> bool {
     )
 }
 
-const SPEED_SCALED_IDS: &[u16] = &[
+/// The client lifts a one-shot of these off the whole body, onto the upper body, when the legs
+/// take up a locomotion while it plays.
+pub(crate) fn moves_up_when_the_legs_move(id: u16) -> bool {
+    is_combat(id) || is_cast(id)
+}
+
+/// The client's cast set.
+fn is_cast(id: u16) -> bool {
+    matches!(id, 2 | 32 | 33 | 53 | 54)
+}
+
+/// What the legs take up now is a locomotion: a bracket's entry when one opens, else the gait.
+pub(crate) fn legs_take_up_locomotion(motion: &UnitMotion, bracket: Option<Bracketed>) -> bool {
+    let next = match bracket {
+        Some(bracket) => bracket.entry_id(),
+        None => gait_candidates(motion, DEFAULT_WALK_SPEED)[0],
+    };
+    LOCOMOTION.contains(&next)
+}
+
+/// The client's locomotion: the clips it plays at the body's speed.
+const LOCOMOTION: &[u16] = &[
     WALK,
     RUN,
     SHUFFLE_LEFT,
@@ -307,7 +328,7 @@ const SPEED_SCALED_IDS: &[u16] = &[
 /// follows the speed at all.
 pub(crate) fn scaled_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> Option<f32> {
     let divisor = clip.move_speed * model_scale.abs();
-    (divisor > 0.0 && SPEED_SCALED_IDS.contains(&clip.anim_id)).then(|| speed / divisor)
+    (divisor > 0.0 && LOCOMOTION.contains(&clip.anim_id)).then(|| speed / divisor)
 }
 
 pub(crate) fn playback_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> f32 {

@@ -8,7 +8,8 @@ use bevy::prelude::*;
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
     Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, UnitShow, current_bracket, gait_candidates,
-    jump_land_pick, move_flags, playback_rate, plays_on_upper_body, scaled_rate,
+    jump_land_pick, legs_take_up_locomotion, move_flags, moves_up_when_the_legs_move,
+    playback_rate, plays_on_upper_body, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 
@@ -28,6 +29,7 @@ pub struct UnitDriver {
     frozen_airborne: Option<AnimationNodeIndex>,
     upper_body_one_shot: Option<AnimationNodeIndex>,
     upper_body_fade: Option<UpperBodyFade>,
+    flags_under_whole_body_one_shot: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -159,7 +161,7 @@ impl UnitDriver {
     fn game_holds_body(
         &mut self,
         mut show: Mut<'_, UnitShow>,
-        motion: &UnitMotion,
+        f: &Frame<'_>,
         tr: &mut AnimationTransitions,
         player: &mut AnimationPlayer,
         anims: &ModelAnimations,
@@ -170,7 +172,7 @@ impl UnitDriver {
             && let Some(head) = resolved_clip(anims, id)
         {
             let (c, repeat) = roll_oneshot(anims, head, rng);
-            if let Some(upper) = c.upper_node.filter(|_| plays_on_upper_body(id, motion)) {
+            if let Some(upper) = c.upper_node.filter(|_| plays_on_upper_body(id, &f.motion)) {
                 self.play_on_upper_body(player, upper, repeat, c.blend_time);
                 if matches!(self.mode, Mode::ShowPlayed(_)) {
                     self.mode = Mode::Gait;
@@ -183,13 +185,22 @@ impl UnitDriver {
                 self.loop_window = None;
                 play_clip(tr, player, c, repeat, 1.0);
                 self.mode = Mode::ShowPlayed(id);
+                self.flags_under_whole_body_one_shot = f.motion.flags;
                 return true;
             }
         }
         if let Mode::ShowPlayed(id) = self.mode
             && !oneshot_finished(player, anims, id)
         {
-            return true;
+            // The client lifts it only as the movement flags change, so a special attack begun
+            // on the run keeps the whole body until the body turns or stops.
+            let legs_move_off = f.motion.flags != self.flags_under_whole_body_one_shot
+                && legs_take_up_locomotion(&f.motion, f.bracket);
+            if !(legs_move_off && self.move_up_to_upper_body(tr, player, anims, id)) {
+                return true;
+            }
+            self.mode = Mode::Gait;
+            self.armed_gait = None;
         }
         if let Some(pose) = show.pose.filter(|&p| resolved_clip(anims, p).is_some()) {
             if self.mode != Mode::ShowPosed(pose) {
@@ -257,6 +268,50 @@ impl UnitDriver {
         }
         player.start(node).set_repeat(repeat).set_weight(0.0);
         self.upper_body_one_shot = Some(node);
+    }
+
+    /// The client moves the one-shot as it stands, mid-clip and with no cross-fade.
+    fn move_up_to_upper_body(
+        &mut self,
+        tr: &AnimationTransitions,
+        player: &mut AnimationPlayer,
+        anims: &ModelAnimations,
+        id: u16,
+    ) -> bool {
+        if self.upper_body_one_shot.is_some() || !moves_up_when_the_legs_move(id) {
+            return false;
+        }
+        let Some(node) = tr.get_main_animation() else {
+            return false;
+        };
+        let Some((seek, speed)) = player
+            .animation(node)
+            .filter(|a| !a.is_finished())
+            .map(|a| (a.seek_time(), a.speed()))
+        else {
+            return false;
+        };
+        let Some(upper) = anims
+            .clips
+            .iter()
+            .find(|c| c.node == node)
+            .and_then(|c| c.upper_node)
+        else {
+            return false;
+        };
+        if let Some(fade) = &mut self.upper_body_fade
+            && fade.fading_out == Some(upper)
+        {
+            fade.fading_out = None;
+        }
+        player
+            .start(upper)
+            .set_repeat(RepeatAnimation::Never)
+            .seek_to(seek)
+            .set_speed(speed)
+            .set_weight(UPPER_BODY_OVER_GAIT);
+        self.upper_body_one_shot = Some(upper);
+        true
     }
 
     /// The client lets a fade nearer its start than its end run on, and drops at once what a
@@ -610,9 +665,8 @@ pub(crate) fn drive_units(
             model_scale: transform.scale.x,
         };
         drv.advance_window(anims, &mut tr, &mut player, &mut rng);
-        let shown = show.is_some_and(|s| {
-            drv.game_holds_body(s, &motion, &mut tr, &mut player, anims, &mut rng)
-        });
+        let shown = show
+            .is_some_and(|s| drv.game_holds_body(s, &frame, &mut tr, &mut player, anims, &mut rng));
         if !shown {
             drv.run(&frame, &mut tr, &mut player, &mut rng);
         }
