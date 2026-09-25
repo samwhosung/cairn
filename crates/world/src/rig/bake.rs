@@ -25,6 +25,11 @@ pub struct ModelSkeleton {
     pub head_bone: Option<u16>,
 }
 
+/// Bones are parent-sorted, so a bone whose parent does not precede it hangs from the root.
+pub(crate) fn preceding_parent(parent: i16, bone: usize) -> Option<usize> {
+    usize::try_from(parent).ok().filter(|&p| p < bone)
+}
+
 /// The key-bone ids of the lower spine and the head.
 const KEY_BONE_SPINE: i16 = 4;
 const KEY_BONE_HEAD: i16 = 6;

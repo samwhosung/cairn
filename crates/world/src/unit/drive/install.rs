@@ -1,7 +1,3 @@
-//! The driver and the pose evaluator over the install's human, bone by bone: a swing on the run
-//! leaves the legs to the run and the upper body to the swing, and a swing standing still is the
-//! whole-body clip it always was.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,7 +10,7 @@ use bevy::time::TimeUpdateStrategy;
 
 use super::super::motion::move_flags::FORWARD;
 use super::super::motion::{UnitMotion, UnitShow};
-use super::{UPPER_BODY_WEIGHT, UnitDriver, drive_units};
+use super::{UPPER_BODY_OVER_GAIT, UPPER_BODY_RELEASE_SECS, UnitDriver, drive_units};
 use crate::M2Model;
 use crate::rig::{AnimRng, ModelAnimations, ModelSkeleton, RigPose, pose_evaluation};
 
@@ -22,13 +18,7 @@ const HUMAN_MALE: &str = "Character\\Human\\Male\\HumanMale.mdx";
 const ATTACK_UNARMED: u16 = 16;
 const STEP: Duration = Duration::from_nanos(16_666_667);
 const SETTLE_FRAMES: usize = 60;
-/// The swing's second, its release and a margin.
-const SWING_FRAMES: usize = 75;
-const MID_SWING: usize = 30;
-/// Past the swing's blend in and short of its end, where it shows whole.
-const SWING_SHOWN_WHOLE: std::ops::Range<usize> = 10..58;
-/// Far enough apart that the swing's own pose shows.
-const VISIBLY_APART: f32 = 0.1;
+const VISIBLY_APART_RAD: f32 = 0.1;
 
 fn app(data: &Path) -> App {
     let mut app = App::new();
@@ -68,15 +58,22 @@ fn human(app: &mut App) -> (ModelSkeleton, ModelAnimations) {
     )
 }
 
-/// A body that moves as `motion` and, when `swings`, is told the swing once its gait has settled:
-/// its bone locals every frame from that one on, and the sequence that swung.
+fn frames_in(secs: f32) -> usize {
+    (secs / STEP.as_secs_f32()).ceil() as usize
+}
+
+struct Sampled {
+    locals_from_the_telling: Vec<Vec<Transform>>,
+    swung_seq: Option<usize>,
+}
+
 fn sampled(
     app: &mut App,
-    skeleton: &ModelSkeleton,
-    anims: &ModelAnimations,
+    (skeleton, anims): (&ModelSkeleton, &ModelAnimations),
     motion: UnitMotion,
-    swings: bool,
-) -> (Vec<Vec<Transform>>, Option<usize>) {
+    told: Option<u16>,
+    frames: usize,
+) -> Sampled {
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
     let body = app
         .world_mut()
@@ -97,24 +94,22 @@ fn sampled(
         app.update();
     }
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
-    if swings {
-        app.world_mut().entity_mut(body).insert(UnitShow {
-            play: Some(ATTACK_UNARMED),
-            pose: None,
-        });
-    }
+    app.world_mut().entity_mut(body).insert(UnitShow {
+        play: told,
+        pose: None,
+    });
     let mut locals = Vec::new();
-    let mut swung = None;
-    for _ in 0..SWING_FRAMES {
+    let mut swung_seq = None;
+    for _ in 0..frames {
         app.update();
         let e = app.world().entity(body);
         locals.push(e.get::<RigPose>().expect("a rig").locals.clone());
         let player = e.get::<AnimationPlayer>().expect("a player");
-        swung = swung.or_else(|| {
+        swung_seq = swung_seq.or_else(|| {
             anims
                 .clips
                 .iter()
-                .filter(|c| c.anim_id == ATTACK_UNARMED)
+                .filter(|c| Some(c.anim_id) == told)
                 .find(|c| {
                     std::iter::once(c.node)
                         .chain(c.upper_node)
@@ -124,7 +119,32 @@ fn sampled(
         });
     }
     app.world_mut().entity_mut(body).despawn();
-    (locals, swung)
+    Sampled {
+        locals_from_the_telling: locals,
+        swung_seq,
+    }
+}
+
+fn below_the_spine(anims: &ModelAnimations) -> Vec<usize> {
+    let masks = &anims.pose.bone_masks;
+    (0..masks.len()).filter(|&b| masks[b] != 0).collect()
+}
+
+fn turned_above_the_spine(anims: &ModelAnimations, seq: Option<usize>) -> Vec<usize> {
+    let src = &anims.pose;
+    let clip = anims
+        .clips
+        .iter()
+        .find(|c| Some(c.seq_index) == seq)
+        .expect("the clip");
+    let keyed = &src.clips[src.node(clip.node).expect("its node").clip as usize];
+    keyed
+        .bones
+        .iter()
+        .filter(|b| !b.rotation.is_empty())
+        .map(|b| usize::from(b.bone))
+        .filter(|&b| src.bone_masks[b] == 0)
+        .collect()
 }
 
 fn angle(a: Quat, b: Quat) -> f32 {
@@ -144,35 +164,47 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
     for c in &mut whole_body_only.clips {
         c.upper_node = None;
     }
+    let swings = || anims.clips.iter().filter(|c| c.anim_id == ATTACK_UNARMED);
+    let swing_secs = swings().map(|c| c.duration).fold(0.0, f32::max);
+    let blend_secs = swings().map(|c| c.blend_time).fold(0.0, f32::max);
+    let frames = frames_in(swing_secs + UPPER_BODY_RELEASE_SECS) + 5;
+    let mid_swing = frames_in(swing_secs / 2.0);
+    let swing_shown_whole = frames_in(blend_secs) + 1..frames_in(swing_secs) - 2;
     let running = UnitMotion {
         speed: 7.0,
         flags: FORWARD,
         ..UnitMotion::default()
     };
     let standing = UnitMotion::default();
-    let (run, _) = sampled(&mut app, &skeleton, &anims, running, false);
-    let (swing_on_the_run, swung) = sampled(&mut app, &skeleton, &anims, running, true);
-    let (whole_on_the_run, _) = sampled(&mut app, &skeleton, &whole_body_only, running, true);
-    let (swing_standing, swung_standing) = sampled(&mut app, &skeleton, &anims, standing, true);
-    let (whole_standing, _) = sampled(&mut app, &skeleton, &whole_body_only, standing, true);
+    let swing = Some(ATTACK_UNARMED);
+    let human = (&skeleton, &anims);
+    let whole_body_human = (&skeleton, &whole_body_only);
+    let run = sampled(&mut app, human, running, None, frames).locals_from_the_telling;
+    let on_the_run = sampled(&mut app, human, running, swing, frames);
+    let whole_on_the_run =
+        sampled(&mut app, whole_body_human, running, swing, frames).locals_from_the_telling;
+    let standing_still = sampled(&mut app, human, standing, swing, frames);
+    let whole_standing =
+        sampled(&mut app, whole_body_human, standing, swing, frames).locals_from_the_telling;
+    let swing_on_the_run = &on_the_run.locals_from_the_telling;
+    let swing_standing = &standing_still.locals_from_the_telling;
     assert!(
-        swung.is_some() && swung == swung_standing,
-        "one swing to compare: {swung:?} and {swung_standing:?}"
+        on_the_run.swung_seq.is_some() && on_the_run.swung_seq == standing_still.swung_seq,
+        "one swing to compare: {:?} and {:?}",
+        on_the_run.swung_seq,
+        standing_still.swung_seq
     );
 
     assert!(
-        swing_standing == whole_standing,
+        *swing_standing == whole_standing,
         "standing still, the swing is the whole-body clip, pose for pose"
     );
     assert!(
-        swing_on_the_run != whole_on_the_run,
+        *swing_on_the_run != whole_on_the_run,
         "the same comparison sees the swing on the run leave the whole body"
     );
 
-    let src = &anims.pose;
-    let lower: Vec<usize> = (0..src.bone_masks.len())
-        .filter(|&b| src.bone_masks[b] != 0)
-        .collect();
+    let lower = below_the_spine(&anims);
     for (frame, (swinging, running)) in swing_on_the_run.iter().zip(&run).enumerate() {
         for &bone in &lower {
             assert_eq!(
@@ -181,34 +213,19 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
             );
         }
     }
-    let legs_off_the_run = |frames: &[Vec<Transform>]| {
-        lower
-            .iter()
-            .filter(|&&b| frames[MID_SWING][b] != run[MID_SWING][b])
-            .count()
-    };
-    let control_moved = legs_off_the_run(&whole_on_the_run);
+    let control_moved = lower
+        .iter()
+        .filter(|&&b| whole_on_the_run[mid_swing][b] != run[mid_swing][b])
+        .count();
     assert!(
         control_moved > 0,
         "the whole-body swing moves the legs off the run"
     );
 
-    let clip = anims
-        .clips
-        .iter()
-        .find(|c| Some(c.seq_index) == swung)
-        .expect("the swing");
-    let keyed = &src.clips[src.node(clip.node).expect("its node").clip as usize];
-    let upper: Vec<usize> = keyed
-        .bones
-        .iter()
-        .filter(|b| !b.rotation.is_empty())
-        .map(|b| usize::from(b.bone))
-        .filter(|&b| src.bone_masks[b] == 0)
-        .collect();
-    let gait_share = 1.0 / (1.0 + UPPER_BODY_WEIGHT);
+    let upper = turned_above_the_spine(&anims, on_the_run.swung_seq);
+    let gait_share = 1.0 / (1.0 + UPPER_BODY_OVER_GAIT);
     let (mut apart_mid_swing, mut worst_share) = (0, 0.0_f32);
-    for frame in SWING_SHOWN_WHOLE {
+    for frame in swing_shown_whole {
         for &bone in &upper {
             let swing = swing_standing[frame][bone].rotation;
             let from_the_run = angle(run[frame][bone].rotation, swing);
@@ -218,9 +235,9 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
                 "frame {frame}: bone {bone} stands {from_the_swing} rad off the swing, the run \
                  {from_the_run}"
             );
-            if from_the_run > VISIBLY_APART {
+            if from_the_run > VISIBLY_APART_RAD {
                 worst_share = worst_share.max(from_the_swing / from_the_run);
-                apart_mid_swing += usize::from(frame == MID_SWING);
+                apart_mid_swing += usize::from(frame == mid_swing);
             }
         }
     }
@@ -229,12 +246,11 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
         "the swing shows above the lower spine: {apart_mid_swing} bones"
     );
     eprintln!(
-        "legs: {} bones, the run's bit for bit through the swing (the whole-body control moves {} \
-         off it); upper body: {} bones the swing turns, {} of them over {VISIBLY_APART} rad from \
-         the run half way through, each at most {worst_share:.4} of the way back to the run",
+        "legs: {} bones, the run's bit for bit through {frames} frames (the whole-body control \
+         moves {control_moved} off it half way); upper body: {} bones the swing turns, \
+         {apart_mid_swing} of them over {VISIBLY_APART_RAD} rad from the run half way through, \
+         each at most {worst_share:.4} of the way back to the run",
         lower.len(),
-        control_moved,
         upper.len(),
-        apart_mid_swing,
     );
 }

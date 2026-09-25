@@ -31,8 +31,8 @@ pub struct AnimClip {
     /// The sequence's index in the file.
     pub seq_index: usize,
     pub node: AnimationNodeIndex,
-    /// The same sequence on the bones above the lower spine alone, so it plays over what the legs
-    /// play; `None` on a model with no spine or head key bone.
+    /// The same sequence on the lower spine's subtree alone, or the head's on a model with no
+    /// spine, so it plays over what the legs play; `None` on a model with neither key bone.
     pub upper_node: Option<AnimationNodeIndex>,
     pub looping: bool,
     /// The sequence's length, seconds.

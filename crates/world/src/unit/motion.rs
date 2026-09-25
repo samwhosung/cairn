@@ -22,9 +22,11 @@ pub mod move_flags {
     pub const ANY_MOVE: u32 = FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT;
 }
 
-/// The `AnimationData.dbc` ids of the clips a walking body plays.
+/// The `AnimationData.dbc` ids the driver knows by name.
 pub(crate) mod anim {
     pub const STAND: u16 = 0;
+    pub const DEATH: u16 = 1;
+    pub const DEAD: u16 = 6;
     pub const WALK: u16 = 4;
     pub const RUN: u16 = 5;
     pub const SHUFFLE_LEFT: u16 = 11;
@@ -51,6 +53,11 @@ pub(crate) mod anim {
     pub const KNEEL_START: u16 = 114;
     pub const KNEEL_LOOP: u16 = 115;
     pub const KNEEL_END: u16 = 116;
+    pub const SPECIAL_1H: u16 = 57;
+    pub const SPECIAL_2H: u16 = 58;
+    pub const SPECIAL_UNARMED: u16 = 118;
+    pub const DROWN: u16 = 131;
+    pub const DROWNED: u16 = 132;
 }
 
 /// A unit's stand state, the client's unit field: standing, or a pose it holds in place.
@@ -74,10 +81,10 @@ impl StandState {
 }
 
 use anim::{
-    FALL, FLY, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, KNEEL_END, KNEEL_LOOP, KNEEL_START, RUN,
-    SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SLEEP, SLEEP_DOWN,
-    SLEEP_UP, SPRINT, STAND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK,
-    WALK_BACKWARDS,
+    DEAD, DEATH, DROWN, DROWNED, FALL, FLY, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, KNEEL_END,
+    KNEEL_LOOP, KNEEL_START, RUN, SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN,
+    SIT_GROUND_UP, SLEEP, SLEEP_DOWN, SLEEP_UP, SPECIAL_1H, SPECIAL_2H, SPECIAL_UNARMED, SPRINT,
+    STAND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
 };
 
 /// A unit's movement this frame, as its animation reads it. A unit without one stands.
@@ -96,8 +103,8 @@ pub struct UnitMotion {
 /// What a game has a unit show over how it moves, in `AnimationData.dbc` ids.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnitShow {
-    /// Played once from its start, then taken: one told before it ends cuts it short. A body that
-    /// moves or sits plays most of them above its lower spine, the legs keeping to their gait.
+    /// Played once from its start, then taken: one told before it ends cuts it short. A body not
+    /// standing still plays most of them above its lower spine, its legs going on as they were.
     pub play: Option<u16>,
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
@@ -245,34 +252,37 @@ pub(crate) fn current_bracket(motion: &UnitMotion, jump_arc: bool) -> Option<Bra
     }
 }
 
-/// Whether one-shot `id` plays above the lower spine, leaving the legs to the gait, rather than on
-/// the whole body: it does while the legs are taken, by moving, turning, swimming or a stand
-/// state, or, for a combat animation, by the air.
+/// Routes a one-shot as the client does.
 pub(crate) fn plays_on_upper_body(id: u16, motion: &UnitMotion) -> bool {
-    use move_flags::{ANY_MOVE, FALLING, SWIMMING, TURN_LEFT, TURN_RIGHT};
     if takes_whole_body(id) || !may_play_on_upper_body(id) {
         return false;
     }
-    motion.flags & (ANY_MOVE | TURN_LEFT | TURN_RIGHT | SWIMMING) != 0
-        || motion.stand_state != StandState::STAND
-        || (is_combat(id) && motion.flags & FALLING != 0)
+    legs_are_taken(motion) || (is_combat(id) && motion.flags & move_flags::FALLING != 0)
 }
 
-/// Only these ever play above the lower spine: the wounds, attacks, parries, casts, emotes and
-/// the like.
+fn legs_are_taken(motion: &UnitMotion) -> bool {
+    use move_flags::{ANY_MOVE, SWIMMING, TURN_LEFT, TURN_RIGHT};
+    motion.flags & (ANY_MOVE | TURN_LEFT | TURN_RIGHT | SWIMMING) != 0
+        || motion.stand_state != StandState::STAND
+}
+
+/// The client's set of the ids it may play above the lower spine.
 fn may_play_on_upper_body(id: u16) -> bool {
     matches!(id,
         2 | 8..=10 | 14..=36 | 46..=49 | 51..=90 | 105..=113 | 117..=118 | 122..=138 | 185..=186
             | 195)
 }
 
+/// The client's combat set: of a body in the air, only these play above the lower spine.
 fn is_combat(id: u16) -> bool {
     matches!(id, 10 | 16..=24 | 30 | 36 | 57..=59 | 85..=88 | 95 | 117 | 118)
 }
 
-/// Death and the special attacks, which take the whole body whatever it does.
 fn takes_whole_body(id: u16) -> bool {
-    matches!(id, 1 | 6 | 131 | 132 | 57 | 58 | 118)
+    matches!(
+        id,
+        DEATH | DEAD | DROWN | DROWNED | SPECIAL_1H | SPECIAL_2H | SPECIAL_UNARMED
+    )
 }
 
 const SPEED_SCALED_IDS: &[u16] = &[
@@ -437,8 +447,6 @@ mod tests {
     fn a_one_shot_takes_the_whole_body_standing_still_and_the_upper_body_on_the_move() {
         const ATTACK_UNARMED: u16 = 16;
         const COMBAT_WOUND: u16 = 9;
-        const DEATH: u16 = 1;
-        const SPECIAL_1H: u16 = 57;
         let body = |flags, stand_state| UnitMotion {
             flags,
             stand_state,

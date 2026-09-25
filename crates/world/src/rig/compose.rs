@@ -2,6 +2,7 @@ use bevy::math::Vec3A;
 use bevy::prelude::*;
 
 use super::AnimParked;
+use super::bake::preceding_parent;
 use super::palette::{RigPalettes, RigSkin};
 use super::pose::RigPose;
 use crate::billboard::{billboard_basis, parent_arm_matrix};
@@ -59,7 +60,7 @@ fn rig_worlds(
     let mut worlds = Vec::with_capacity(n);
     let mut in_replaced_subtree = vec![false; n];
     for i in 0..n {
-        let parent = usize::try_from(rig.parents[i]).ok().filter(|&p| p < i);
+        let parent = preceding_parent(rig.parents[i], i);
         let parent_world = match parent {
             Some(p) => worlds[p],
             None => root_at_origin,

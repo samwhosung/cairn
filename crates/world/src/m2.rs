@@ -21,7 +21,8 @@ use crate::coords::wow_to_bevy;
 use crate::model::ModelSubmesh;
 use crate::rig::{
     AnimClip, ClipEvent, ModelAnimations, ModelAttachment, ModelSkeleton, PoseSource,
-    build_animation_clip, build_attachments, build_global_bones, build_skeleton, skeleton_pivots,
+    build_animation_clip, build_attachments, build_global_bones, build_skeleton, preceding_parent,
+    skeleton_pivots,
 };
 use crate::source::{Repeat, m2_url, texture_url};
 
@@ -291,18 +292,13 @@ fn animations(
     })
 }
 
-/// The mask group of the bones a one-shot on the upper body leaves to the gait.
 const LOWER_BODY: u64 = 1;
 
-/// Each bone's mask groups: [`LOWER_BODY`] for every bone outside the subtree of the lower spine,
-/// or of the head on a model with no spine. `None` for a model with neither, which has no upper
-/// body to play apart. A bone whose parent does not precede it is a root, as the pose composes it.
 fn lower_body_masks(skeleton: &ModelSkeleton) -> Option<Vec<u64>> {
     let top = usize::from(skeleton.spine_bone.or(skeleton.head_bone)?);
     let mut upper = vec![false; skeleton.joints.len()];
     for (i, joint) in skeleton.joints.iter().enumerate() {
-        let parent = usize::try_from(joint.parent).ok().filter(|&p| p < i);
-        upper[i] = i == top || parent.is_some_and(|p| upper[p]);
+        upper[i] = i == top || preceding_parent(joint.parent, i).is_some_and(|p| upper[p]);
     }
     Some(
         upper
@@ -317,7 +313,8 @@ mod tests {
     use super::*;
     use crate::rig::ModelJoint;
 
-    fn skeleton(parents: &[i16], spine_bone: Option<u16>, head_bone: Option<u16>) -> ModelSkeleton {
+    fn skeleton(parents: &[i16], spine_bone: Option<i16>, head_bone: Option<i16>) -> ModelSkeleton {
+        let bone = |b: Option<i16>| b.map(|b| u16::try_from(b).expect("a bone"));
         ModelSkeleton {
             joints: parents
                 .iter()
@@ -328,18 +325,26 @@ mod tests {
                     parent_arm: None,
                 })
                 .collect(),
-            spine_bone,
-            head_bone,
+            spine_bone: bone(spine_bone),
+            head_bone: bone(head_bone),
         }
     }
 
     #[test]
     fn the_legs_and_the_pelvis_are_the_lower_body_and_the_spine_up_is_not() {
         const L: u64 = LOWER_BODY;
-        // 0 pelvis, 1 and 2 thighs, 3 a shin, 4 the lower spine, 5 the chest, 6 an arm, 7 the head.
-        let body = skeleton(&[-1, 0, 0, 1, 0, 4, 5, 5], Some(4), Some(7));
+        const ROOT: i16 = -1;
+        const PELVIS: i16 = 0;
+        const LEFT_THIGH: i16 = 1;
+        const SPINE: i16 = 4;
+        const CHEST: i16 = 5;
+        const HEAD: i16 = 7;
+        let parents = [
+            ROOT, PELVIS, PELVIS, LEFT_THIGH, PELVIS, SPINE, CHEST, CHEST,
+        ];
+        let body = skeleton(&parents, Some(SPINE), Some(HEAD));
         assert_eq!(lower_body_masks(&body), Some(vec![L, L, L, L, 0, 0, 0, 0]));
-        let headed = skeleton(&[-1, 0, 0, 1, 0, 4, 5, 5], None, Some(7));
+        let headed = skeleton(&parents, None, Some(HEAD));
         assert_eq!(
             lower_body_masks(&headed),
             Some(vec![L, L, L, L, L, L, L, 0]),

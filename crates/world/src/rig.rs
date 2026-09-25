@@ -13,6 +13,7 @@ mod source;
 use bevy::prelude::*;
 
 pub use anims::{AnimClip, ClipEvent, ModelAnimations, ResolvedAnim};
+pub(crate) use bake::preceding_parent;
 pub use bake::{
     GlobalBone, GlobalSeqChannel, ModelAttachment, ModelJoint, ModelSkeleton, build_animation_clip,
     build_attachments, build_global_bones, build_skeleton, skeleton_pivots,

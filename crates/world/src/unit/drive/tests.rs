@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use super::super::motion::anim::{
-    FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, SIT_GROUND,
+    DEAD, DEATH, FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, SIT_GROUND,
     SIT_GROUND_DOWN, SIT_GROUND_UP, STAND, SWIM, SWIM_IDLE, WALK, WALK_BACKWARDS,
 };
 use super::super::motion::move_flags::{
@@ -55,8 +55,7 @@ fn body(app: &mut App, rows: &[Row]) -> Entity {
     spawn_body(app, rows, false)
 }
 
-/// A body whose every clip can also play above its lower spine.
-fn upper_bodied(app: &mut App, rows: &[Row]) -> Entity {
+fn body_with_upper_nodes(app: &mut App, rows: &[Row]) -> Entity {
     spawn_body(app, rows, true)
 }
 
@@ -401,8 +400,6 @@ fn a_sit_goes_down_holds_and_stands_up_or_walks_straight_out() {
     );
 }
 
-const DEATH: u16 = 1;
-const DEAD: u16 = 6;
 const ATTACK_UNARMED: u16 = 16;
 
 fn as_a_character_plays(requested: u16) -> u16 {
@@ -549,13 +546,23 @@ fn a_show_the_model_lacks_leaves_the_gait_to_it() {
     );
 }
 
-/// The clip playing above the lower spine: its id, weight and seek.
-fn upper_body(app: &App, unit: Entity) -> Option<(u16, f32, f32)> {
+#[derive(Debug, PartialEq)]
+struct UpperBody {
+    id: u16,
+    weight: f32,
+    seek: f32,
+}
+
+fn upper_body(app: &App, unit: Entity) -> Option<UpperBody> {
     let e = app.world().entity(unit);
     let player = e.get::<AnimationPlayer>()?;
     e.get::<ModelAnimations>()?.clips.iter().find_map(|c| {
         let active = player.animation(c.upper_node?)?;
-        Some((c.anim_id, active.weight(), active.seek_time()))
+        Some(UpperBody {
+            id: c.anim_id,
+            weight: active.weight(),
+            seek: active.seek_time(),
+        })
     })
 }
 
@@ -574,7 +581,7 @@ fn swing_blends_in_over(app: &mut App, unit: Entity, secs: f32) {
 #[test]
 fn a_one_shot_on_the_run_plays_above_the_lower_spine_and_the_run_goes_on_under_it() {
     let mut app = app();
-    let unit = dressed_fighter(&mut app, upper_bodied);
+    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
     swing_blends_in_over(&mut app, unit, 0.2);
     moving(&mut app, unit, FORWARD, 7.0, 0.0);
     frames(&mut app, 2);
@@ -582,23 +589,26 @@ fn a_one_shot_on_the_run_plays_above_the_lower_spine_and_the_run_goes_on_under_i
     frames(&mut app, 1);
     let run_on = (Some(RUN), Mode::Gait);
     assert_eq!((playing(&app, unit).0, playing(&app, unit).2), run_on);
-    let (id, weight, _) = upper_body(&app, unit).expect("the swing above the lower spine");
-    assert!(id == ATTACK_UNARMED && weight < 0.1, "fading in: {weight}");
-    frames(&mut app, 9);
-    let (_, weight, _) = upper_body(&app, unit).expect("the swing");
-    assert!((weight - 4.0).abs() < 1e-3, "half way in: {weight}");
-    frames(&mut app, 40);
-    let (_, weight, seek) = upper_body(&app, unit).expect("the swing");
+    let swing = upper_body(&app, unit).expect("the swing above the lower spine");
     assert!(
-        (weight - 8.0).abs() < 1e-6 && (seek - 0.5).abs() < 0.011,
-        "{weight} at {seek}"
+        swing.id == ATTACK_UNARMED && swing.weight < 0.1,
+        "{swing:?}"
+    );
+    frames(&mut app, 9);
+    let swing = upper_body(&app, unit).expect("the swing");
+    assert!((swing.weight - 4.0).abs() < 1e-3, "half way in: {swing:?}");
+    frames(&mut app, 40);
+    let swing = upper_body(&app, unit).expect("the swing");
+    assert!(
+        (swing.weight - 8.0).abs() < 1e-6 && (swing.seek - 0.5).abs() < 0.011,
+        "{swing:?}"
     );
     assert_eq!((playing(&app, unit).0, playing(&app, unit).2), run_on);
     frames(&mut app, 58);
-    let (_, weight, seek) = upper_body(&app, unit).expect("its last frame, fading");
+    let swing = upper_body(&app, unit).expect("its last frame, fading");
     assert!(
-        seek >= 1.0 && weight > 0.0 && weight < 8.0,
-        "{weight} at {seek}"
+        swing.seek >= 1.0 && swing.weight > 0.0 && swing.weight < 8.0,
+        "{swing:?}"
     );
     frames(&mut app, 12);
     assert_eq!(upper_body(&app, unit), None, "faded onto the run");
@@ -608,7 +618,7 @@ fn a_one_shot_on_the_run_plays_above_the_lower_spine_and_the_run_goes_on_under_i
 #[test]
 fn standing_still_a_one_shot_takes_the_whole_body_and_one_on_the_run_cuts_it_short() {
     let mut app = app();
-    let unit = dressed_fighter(&mut app, upper_bodied);
+    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
     frames(&mut app, 2);
     told(&mut app, unit, Some(ATTACK_UNARMED), None);
     frames(&mut app, 1);
@@ -630,7 +640,7 @@ fn standing_still_a_one_shot_takes_the_whole_body_and_one_on_the_run_cuts_it_sho
         "one told on the run cuts it short and the legs take the run"
     );
     assert_eq!(
-        upper_body(&app, unit).map(|(id, _, seek)| (id, seek)),
+        upper_body(&app, unit).map(|swing| (swing.id, swing.seek)),
         Some((ATTACK_UNARMED, 0.01))
     );
 }
@@ -638,7 +648,7 @@ fn standing_still_a_one_shot_takes_the_whole_body_and_one_on_the_run_cuts_it_sho
 #[test]
 fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
     let mut app = app();
-    let unit = dressed_fighter(&mut app, upper_bodied);
+    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
     moving(&mut app, unit, FORWARD, 7.0, 0.0);
     frames(&mut app, 2);
     told(&mut app, unit, Some(ATTACK_UNARMED), None);

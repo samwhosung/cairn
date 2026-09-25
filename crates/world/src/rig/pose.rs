@@ -7,7 +7,7 @@ use model::{BillboardKind, ParentArm};
 
 use super::AnimParked;
 use super::anims::ModelAnimations;
-use super::bake::ModelSkeleton;
+use super::bake::{ModelSkeleton, preceding_parent};
 use super::source::PoseSource;
 use crate::billboard::parent_arm_matrix;
 
@@ -64,11 +64,10 @@ impl RigPose {
         rig
     }
 
-    /// Bones are parent-sorted; one whose parent does not precede it composes from the root.
     pub(crate) fn compose(&mut self) {
         for i in 0..self.locals.len() {
             let local = self.locals[i].compute_affine();
-            let parent = match usize::try_from(self.parents[i]).ok().filter(|&p| p < i) {
+            let parent = match preceding_parent(self.parents[i], i) {
                 Some(p) => self.model[p],
                 None => Affine3A::IDENTITY,
             };
