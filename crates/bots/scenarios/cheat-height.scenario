@@ -3,6 +3,8 @@ seconds = 30
 limits.climb = 1.2
 limits.rise = 2.7
 limits.fall = 60.148
+limits.slide = 0.8391
+limits.bound = 17066.666
 bots.walkers.count = 20
 
 bots.rise.count = 1
@@ -19,6 +21,17 @@ bots.under-100.count = 1
 bots.under-100.script = line
 bots.under-100.lie.from_s = 5
 bots.under-100.lie.shift = 0 0 -100
+
+bots.slide.count = 1
+bots.slide.script = line
+bots.slide.lie.from_s = 5
+bots.slide.lie.set = fall
+bots.slide.lie.shift = 14320 0 -17066
+
+bots.slide-no-fall.count = 1
+bots.slide-no-fall.script = line
+bots.slide-no-fall.lie.from_s = 5
+bots.slide-no-fall.lie.shift = 14320 0 -17066
 
 expect walkers.corrections == 0
 
@@ -39,3 +52,14 @@ expect under-100.caught_after_s <= 0.1
 expect under-100.through_after_s < 2
 expect under-100.past_honest_yd > 99
 expect under-100.control_corrections == 0
+
+# A known hole: a claim that says it fell may cross `limits.slide` yards of ground for every yard
+# it drops, and may drop `limits.climb` yards for every yard it crosses. Each yard crossed so pays
+# for 1.007 more, and one claim goes as far as `limits.bound` lets it drop.
+expect slide.lies_refused == 0
+expect slide.past_honest_yd > 22277
+expect slide.control_corrections == 0
+
+expect slide-no-fall.caught_after_s <= 0.1
+expect slide-no-fall.lies_accepted == 0
+expect slide-no-fall.control_corrections == 0
