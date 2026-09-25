@@ -260,14 +260,20 @@ impl Facts {
                 "map: {} ({}) at {hour:02}:{minute:02}",
                 self.map, self.map_id
             ),
-            format!("frame: {FRAME}, {}x{}, the spot ringed", frame.x, frame.y),
+            format!(
+                "frame: {FRAME}, {}x{} pixels for a window of {}x{} points, the spot ringed",
+                frame.x, frame.y, window.x, window.y
+            ),
             format!("camera: {camera}"),
             format!(
                 "player: {}, feet at {}, facing {heading:.1} degrees from north toward west",
                 if self.flying { "flying" } else { "walking" },
                 flag_xyz(self.feet_wow)
             ),
-            format!("spot: pixel {},{} from the top left", spot.x, spot.y),
+            format!(
+                "spot: pixel {},{} of {FRAME}, from its top left",
+                spot.x, spot.y
+            ),
         ];
         match met {
             None => lines.push(format!(

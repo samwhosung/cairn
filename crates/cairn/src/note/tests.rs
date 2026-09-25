@@ -113,10 +113,10 @@ fn a_note_says_what_the_ray_met_and_how_to_see_it_again() {
     for line in [
         "note: 2026-09-25 00:00:03 UTC",
         "map: Azeroth (0) at 14:05",
-        "frame: frame.png, 3200x1800, the spot ringed",
+        "frame: frame.png, 3200x1800 pixels for a window of 1600x900 points, the spot ringed",
         "camera: --eye -9447.402,58.318,86.845 --look -9436.093,48.994,83.627",
         "player: walking, feet at -9436.1,49,81.6, facing 270.0 degrees from north toward west",
-        "spot: pixel 812,395 from the top left",
+        "spot: pixel 812,395 of frame.png, from its top left",
         "met: doodad, unique id 12345, world/lamp.m2",
         "at: -9431.5,43.25,84.5, 17.25 yd from the eye, over world/maps/azeroth/azeroth_32_48.adt",
         "see it: cairn shot --map Azeroth --time 14:05 --no-glow --eye -9447.402,58.318,86.845 \
