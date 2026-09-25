@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use sound::tables::{
-    AreaSounds, CreatureVoices, Footsteps, KitCatalog, SoundProviders, WaterSounds, WeaponSounds,
-    impact_slot,
+    AreaSounds, CreatureVoices, Footsteps, KitCatalog, SoundProviders, SwingWeight, WaterSounds,
+    WeaponSounds, impact_slot,
 };
 
 fn chain() -> Option<&'static mpq::Chain> {
@@ -106,22 +106,24 @@ fn the_footstep_chain_and_the_liquid_loops_resolve() {
 fn a_fight_between_a_human_and_an_orc_sounds_off_these_rows() {
     let Some(chain) = chain() else { return };
     let voices = CreatureVoices::load(chain).expect("the creature voices");
+    let cries = |display| {
+        let v = voices.voice(display).expect("a voice");
+        (
+            [v.exertion.normal, v.exertion.critical],
+            [v.injury.normal, v.injury.critical, v.injury.crushing],
+            v.death,
+            v.struck_as,
+        )
+    };
     let (human_male, orc_male) = (49, 51);
-    let human = voices.voice(human_male).expect("a human male's voice");
     assert_eq!(
-        (human.exertion, human.injury, human.death),
-        ([2941, 186], [2942, 2943, 0], 2944)
+        cries(human_male),
+        ([2941, 186], [2942, 2943, 0], 2944, impact_slot::FLESH)
     );
-    let orc = voices.voice(orc_male).expect("an orc male's voice");
     assert_eq!(
-        (orc.exertion, orc.injury, orc.death),
-        ([1319, 0], [1320, 1321, 0], 1322),
+        cries(orc_male),
+        ([1319, 0], [1320, 1321, 0], 1322, impact_slot::FLESH),
         "an orc grunts nothing on a critical swing"
-    );
-    assert_eq!(
-        (human.impact_type, orc.impact_type),
-        (0, 0),
-        "both are flesh"
     );
     let weapons = WeaponSounds::load(chain).expect("the weapon sounds");
     assert_eq!(weapons.len(), 30);
@@ -134,12 +136,12 @@ fn a_fight_between_a_human_and_an_orc_sounds_off_these_rows() {
         (1014, 1014)
     );
     assert_eq!(
-        [0, 1, 2, 3].map(|w| (weapons.swing(w, false), weapons.swing(w, true))),
+        [SwingWeight::Light, SwingWeight::Medium, SwingWeight::Heavy]
+            .map(|w| (weapons.swing(w, false), weapons.swing(w, true))),
         [
             (Some(233), Some(234)),
             (Some(235), Some(236)),
-            (Some(237), Some(238)),
-            (None, None)
+            (Some(237), Some(238))
         ]
     );
     let kits = KitCatalog::load(chain).expect("SoundEntries");

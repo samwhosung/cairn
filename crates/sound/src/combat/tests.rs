@@ -34,20 +34,9 @@ fn an_outcome_whiffs_lands_is_defended_or_absorbed_as_the_client_sounds_it() {
 }
 
 #[test]
-fn a_creature_strikes_as_flesh_stone_wood_or_ethereal_and_past_that_as_flesh() {
-    assert_eq!(
-        [0, 1, 2, 3, 4, 99].map(creature_impact_slot),
-        [
-            impact_slot::FLESH,
-            impact_slot::STONE,
-            impact_slot::WOOD,
-            impact_slot::ETHEREAL,
-            impact_slot::FLESH,
-            impact_slot::FLESH
-        ]
-    );
+fn a_blow_lands_on_a_characters_key_or_a_creatures_and_on_no_other() {
     assert_eq!(blow_key(*b"$CAH"), Some(Blow::Weapon));
-    assert_eq!(blow_key(*b"$AH2"), Some(Blow::Natural(2)));
+    assert_eq!(blow_key(*b"$AH2"), Some(Blow::CustomAttack(2)));
     assert_eq!(blow_key(*b"$HIT"), None, "an inert key");
     assert_eq!(blow_key(*b"$CSS"), None);
 }

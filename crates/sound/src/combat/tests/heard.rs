@@ -10,8 +10,6 @@ use crate::output::{OFFLINE_SAMPLE_RATE, Output};
 use crate::tables::KitCatalog;
 
 const STEP_SECS: f64 = 1.0 / 60.0;
-/// The frames from the telling on which the human's swing crosses its `$CSS` and its `$CAH`, as
-/// the world fires them for its first variation.
 const WHOOSH_FRAME: usize = 14;
 const BLOW_FRAME: usize = 18;
 const HUMAN_MALE: u32 = 49;
@@ -31,6 +29,13 @@ struct Fight {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Heard {
     frame: usize,
+    kit: u32,
+    at: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Sounded {
+    since_the_telling: usize,
     kit: u32,
     at: Vec3,
 }
@@ -126,9 +131,7 @@ impl Fight {
         });
     }
 
-    /// One swing, from the telling through its blow, and what it sounded, by frame from the
-    /// telling. `None` swings with no attack told.
-    fn swing(&mut self, told: Option<Outcome>) -> Vec<Heard> {
+    fn swing(&mut self, told: Option<Outcome>) -> Vec<Sounded> {
         let (start, before) = (self.frame, self.heard().len());
         if let Some(outcome) = told {
             let attack = UnitAttack {
@@ -154,11 +157,15 @@ impl Fight {
             .non_send_resource_mut::<SoundOutput>()
             .channels
             .clear();
-        let mut heard = self.heard().split_off(before);
-        for h in &mut heard {
-            h.frame -= start;
-        }
+        let heard = self.heard().split_off(before);
         heard
+            .into_iter()
+            .map(|h| Sounded {
+                since_the_telling: h.frame - start,
+                kit: h.kit,
+                at: h.at,
+            })
+            .collect()
     }
 
     fn heard(&self) -> Vec<Heard> {
@@ -192,16 +199,13 @@ impl Drop for Fight {
     }
 }
 
-/// A kit the swing sounds for certain, or only when the client's roll passes.
 #[derive(Clone, Copy, Debug)]
 enum Kit {
     Sure(u32),
     Rolled(u32),
 }
 
-/// What benilla's order has the human's swing at the orc sound for `outcome`: at the telling,
-/// at `$CSS`, at `$CAH`, and where.
-fn benillas_order(outcome: Outcome) -> Vec<(usize, Kit, Vec3)> {
+fn clients_order(outcome: Outcome) -> Vec<(usize, Kit, Vec3)> {
     use Outcome::{Absorb, Block, Crit, Crushing, Dodge, Hit, Immune, Miss, Parry};
     let (human, orc) = ((2941, 186), (1320, 1321));
     let mut order = Vec::new();
@@ -229,14 +233,13 @@ fn benillas_order(outcome: Outcome) -> Vec<(usize, Kit, Vec3)> {
     order
 }
 
-/// `Ok` with how many rolled kits played, or what was heard apart from the order.
-fn heard_as(outcome: Outcome, heard: &[Heard]) -> Result<usize, String> {
-    let order = benillas_order(outcome);
+fn rolled_kits_if_in_order(outcome: Outcome, sounded: &[Sounded]) -> Result<usize, String> {
+    let order = clients_order(outcome);
     let mut rolled = 0;
-    for h in heard {
+    for h in sounded {
         let wanted = order.iter().find(|&&(frame, kit, at)| {
             let (Kit::Sure(k) | Kit::Rolled(k)) = kit;
-            frame == h.frame && k == h.kit && at.distance(h.at) < 1e-3
+            frame == h.since_the_telling && k == h.kit && at.distance(h.at) < 1e-3
         });
         match wanted {
             Some((_, Kit::Rolled(_), _)) => rolled += 1,
@@ -246,7 +249,9 @@ fn heard_as(outcome: Outcome, heard: &[Heard]) -> Result<usize, String> {
     }
     for &(frame, kit, _) in &order {
         if let Kit::Sure(k) = kit
-            && !heard.iter().any(|h| h.frame == frame && h.kit == k)
+            && !sounded
+                .iter()
+                .any(|h| h.since_the_telling == frame && h.kit == k)
         {
             return Err(format!(
                 "{outcome:?}: kit {k} never played at frame {frame}"
@@ -276,20 +281,22 @@ fn every_outcome_sounds_in_the_clients_order_at_the_telling_the_whoosh_and_the_b
     let swings = 20;
     for _ in 0..swings {
         for (i, outcome) in every.into_iter().enumerate() {
-            let heard = fight.swing(Some(outcome));
-            rolled[i] += heard_as(outcome, &heard).unwrap_or_else(|e| panic!("{e}"));
+            let sounded = fight.swing(Some(outcome));
+            rolled[i] +=
+                rolled_kits_if_in_order(outcome, &sounded).unwrap_or_else(|e| panic!("{e}"));
         }
     }
     let hit = fight.swing(Some(Outcome::Hit));
     let dropped = fight.swing(None);
     let told_wrong = fight.swing(Some(Outcome::Miss));
-    assert!(heard_as(Outcome::Hit, &hit).is_ok());
+    assert!(rolled_kits_if_in_order(Outcome::Hit, &hit).is_ok());
     assert_eq!(
         dropped,
         [],
         "no attack told, the swing's keys sound nothing"
     );
-    let wrong = heard_as(Outcome::Hit, &told_wrong).expect_err("a miss told for a hit");
+    let wrong =
+        rolled_kits_if_in_order(Outcome::Hit, &told_wrong).expect_err("a miss told for a hit");
     assert!(wrong.contains("7080"), "{wrong}");
     let (hit_rolls, parry_rolls) = (rolled[0], rolled[5]);
     assert!(
@@ -297,7 +304,7 @@ fn every_outcome_sounds_in_the_clients_order_at_the_telling_the_whoosh_and_the_b
         "the rolled grunts and cries sound some swings, not all: {rolled:?}"
     );
     eprintln!(
-        "{swings} swings of each outcome held benilla's order; rolled grunts and cries played \
+        "{swings} swings of each outcome held the client's order; rolled grunts and cries played \
          {rolled:?} times; the swing with no attack told sounded {dropped:?}; a miss told for a \
          hit: {wrong}"
     );

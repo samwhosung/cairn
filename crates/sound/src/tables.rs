@@ -18,9 +18,9 @@ pub use areas::{AreaAudio, AreaSounds, ZoneIntro, ZoneMusic};
 pub use footsteps::Footsteps;
 pub use kits::{Kit, KitCatalog, kit_flags};
 pub use providers::{SoundProvider, SoundProviders};
-pub use voices::{CreatureVoices, Voice};
+pub use voices::{CreatureVoices, Exertion, Injury, Voice};
 pub use water::WaterSounds;
-pub use weapons::{Impact, WeaponSounds, impact_slot};
+pub use weapons::{Impact, SwingWeight, WeaponSounds, impact_slot};
 
 /// Why a sound table could not be loaded.
 #[derive(Debug)]

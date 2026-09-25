@@ -9,7 +9,7 @@ use world::unit::{BodyModel, Outcome, UnitAttack, UnitBody, UnitShow};
 use crate::config::SoundConfig;
 use crate::kit::{Bus, KitRef, PlayExtras, SoundCategory, SoundKits, play_kit_ext};
 use crate::liquid_loop::Listening;
-use crate::tables::{CreatureVoices, Voice, WeaponSounds, impact_slot};
+use crate::tables::{CreatureVoices, SwingWeight, Voice, WeaponSounds, impact_slot};
 use crate::{AudioListener, SoundOutput};
 
 const DEATH: u16 = 1;
@@ -17,9 +17,8 @@ const DEATH: u16 = 1;
 const COMBAT_MISS_1H: u32 = 7080;
 const ABSORB_GET_HIT: u32 = 3334;
 
-/// Every body swings bare-handed, and a fist is a light weapon.
-const FIST: u32 = 13;
-const LIGHT: usize = 0;
+const BARE_HAND_SUBCLASS: u32 = 13;
+const BARE_HAND_WEIGHT: SwingWeight = SwingWeight::Light;
 
 const MISS_ATTACHMENT: u16 = 1;
 const STUB_LIFT_YD: f32 = 2.0;
@@ -58,32 +57,19 @@ fn wounds(outcome: Outcome) -> bool {
     matches!(outcome, Outcome::Hit | Outcome::Crit | Outcome::Crushing)
 }
 
-/// A creature's `CreatureSoundData` impact type, as the client maps it to a weapon row's slot; a
-/// type past 3 strikes flesh.
-fn creature_impact_slot(impact_type: u32) -> usize {
-    match impact_type {
-        1 => impact_slot::STONE,
-        2 => impact_slot::WOOD,
-        3 => impact_slot::ETHEREAL,
-        _ => impact_slot::FLESH,
-    }
-}
-
-/// The keys that land a blow: a character's, whose weapon sounds it, and a creature's, whose
-/// voice's `CustomAttack` column does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Blow {
     Weapon,
-    Natural(usize),
+    CustomAttack(usize),
 }
 
 fn blow_key(ident: [u8; 4]) -> Option<Blow> {
     match &ident {
         b"$CAH" => Some(Blow::Weapon),
-        b"$AH0" => Some(Blow::Natural(0)),
-        b"$AH1" => Some(Blow::Natural(1)),
-        b"$AH2" => Some(Blow::Natural(2)),
-        b"$AH3" => Some(Blow::Natural(3)),
+        b"$AH0" => Some(Blow::CustomAttack(0)),
+        b"$AH1" => Some(Blow::CustomAttack(1)),
+        b"$AH2" => Some(Blow::CustomAttack(2)),
+        b"$AH3" => Some(Blow::CustomAttack(3)),
         _ => None,
     }
 }
@@ -248,9 +234,13 @@ fn exertion(sound: &mut Sounding<'_>, fighters: &Fighters<'_, '_>, attack: UnitA
     if !critical && !sound.passes(chance) {
         return;
     }
-    let kit = fighters
-        .voice(attack.attacker)
-        .map_or(0, |v| v.exertion[usize::from(critical)]);
+    let kit = fighters.voice(attack.attacker).map_or(0, |v| {
+        if critical {
+            v.exertion.critical
+        } else {
+            v.exertion.normal
+        }
+    });
     sound.play(kit, at, Bus::EXERTION, "exertion");
 }
 
@@ -270,7 +260,7 @@ fn whoosh(
         }
         return;
     }
-    if let Some(kit) = weapons.swing(LIGHT, attack.outcome == Outcome::Crit) {
+    if let Some(kit) = weapons.swing(BARE_HAND_WEIGHT, attack.outcome == Outcome::Crit) {
         sound.play(kit, key_at, Bus::WEAPON_SWING, "swing");
     }
 }
@@ -285,18 +275,18 @@ fn contact(
     let (outcome, victim) = (attack.outcome, attack.target);
     let critical = outcome == Outcome::Crit;
     if makes_contact(outcome) {
-        if let Blow::Natural(n) = blow {
+        if let Blow::CustomAttack(n) = blow {
             let kit = fighters
                 .voice(attack.attacker)
                 .map_or(0, |v| v.custom_attack[n]);
             sound.play(kit, key_at, Bus::MELEE_IMPACT, "natural impact");
         } else if !defended(outcome)
-            && let Some(row) = weapons.impact(FIST, false)
+            && let Some(row) = weapons.impact(BARE_HAND_SUBCLASS, false)
         {
             let slot = match victim {
-                Some(v) if !fighters.is_player(v) => {
-                    creature_impact_slot(fighters.voice(v).map_or(0, |v| v.impact_type))
-                }
+                Some(v) if !fighters.is_player(v) => fighters
+                    .voice(v)
+                    .map_or(impact_slot::FLESH, |v| v.struck_as),
                 _ => impact_slot::FLESH,
             };
             let kit = if critical {
@@ -326,20 +316,19 @@ fn injury(
     victim: Entity,
     at: Vec3,
 ) {
-    let class = match outcome {
-        Outcome::Crushing => 2,
-        Outcome::Crit => 1,
-        _ => 0,
-    };
     let chance = if fighters.is_player(victim) {
         INJURY_CHANCE_PLAYER
     } else {
         INJURY_CHANCE_CREATURE
     };
-    if class == 0 && !sound.passes(chance) {
+    if outcome == Outcome::Hit && !sound.passes(chance) {
         return;
     }
-    let kit = fighters.voice(victim).map_or(0, |v| v.injury[class]);
+    let kit = fighters.voice(victim).map_or(0, |v| match outcome {
+        Outcome::Crushing => v.injury.crushing,
+        Outcome::Crit => v.injury.critical,
+        _ => v.injury.normal,
+    });
     let bus = if fighters.is_listening(victim) {
         Bus::SELF_INJURY
     } else {
@@ -348,7 +337,6 @@ fn injury(
     sound.play(kit, at, bus, "injury");
 }
 
-/// Reads the play before the body's driver takes it.
 #[allow(clippy::type_complexity)]
 pub(crate) fn death_cries(
     dying: Query<'_, '_, (&UnitShow, &UnitBody, &GlobalTransform), Changed<UnitShow>>,

@@ -28,7 +28,14 @@ pub mod impact_slot {
     pub const ETHEREAL: usize = 9;
 }
 
-/// Light, medium and heavy: the client reads no heavier weight.
+/// How heavy a weapon swings; the client reads no heavier weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwingWeight {
+    Light,
+    Medium,
+    Heavy,
+}
+
 const SWING_WEIGHTS: usize = 3;
 
 impl WeaponSounds {
@@ -73,10 +80,10 @@ impl WeaponSounds {
             .or_else(|| self.impacts.get(&(subclass, !metal)))
     }
 
-    /// The connecting swing's kit by the weapon's weight, 0 light to 2 heavy.
-    pub fn swing(&self, weight: usize, critical: bool) -> Option<u32> {
-        let kit = *self.swings.get(weight * 2 + usize::from(critical))?;
-        (kit != 0 && weight < SWING_WEIGHTS).then_some(kit)
+    /// The connecting swing's kit.
+    pub fn swing(&self, weight: SwingWeight, critical: bool) -> Option<u32> {
+        let kit = self.swings[weight as usize * 2 + usize::from(critical)];
+        (kit != 0).then_some(kit)
     }
 
     pub fn len(&self) -> usize {

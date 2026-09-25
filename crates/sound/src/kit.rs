@@ -85,7 +85,6 @@ impl SoundKits {
         &self.catalog
     }
 
-    /// One draw off the stream the shots' variations share.
     pub(crate) fn roll(&mut self) -> u32 {
         self.rng.next()
     }
