@@ -68,7 +68,7 @@ impl Net {
         hello: Hello,
     ) -> Result<Self, String> {
         let hosted = server::start(server::Config {
-            addr: SocketAddr::from(([127, 0, 0, 1], port)),
+            addr: Some(SocketAddr::from(([127, 0, 0, 1], port))),
             tick_threads: 1,
             io_threads: 1,
             map,
@@ -82,7 +82,7 @@ impl Net {
     }
 
     pub fn hosted_addr(&self) -> Option<SocketAddr> {
-        self.hosted.as_ref().map(server::Running::addr)
+        self.hosted.as_ref().and_then(server::Running::addr)
     }
 
     #[cfg(test)]

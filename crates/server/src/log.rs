@@ -11,6 +11,8 @@ const VERSION: u16 = 0;
 const JOIN: u8 = 1;
 const CLAIM: u8 = 2;
 const LEAVE: u8 = 3;
+const HOST_JOIN: u8 = 4;
+const TELEPORT: u8 = 5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Header {
@@ -52,17 +54,18 @@ impl LogWriter {
             for v in [s.conn, s.nth, s.received_ms] {
                 self.buf.extend_from_slice(&v.to_le_bytes());
             }
-            match &s.input {
-                Input::Join(h) => {
-                    self.buf.push(JOIN);
-                    ClientMessage::Hello(h.clone()).write(&mut self.buf);
+            let (tag, message) = match &s.input {
+                Input::Join(h) => (JOIN, ClientMessage::Hello(h.clone())),
+                Input::HostJoin(h) => (HOST_JOIN, ClientMessage::Hello(h.clone())),
+                Input::Claim(c) => (CLAIM, ClientMessage::Claim(*c)),
+                Input::Teleport(c) => (TELEPORT, ClientMessage::Teleport(*c)),
+                Input::Leave => {
+                    self.buf.push(LEAVE);
+                    continue;
                 }
-                Input::Claim(c) => {
-                    self.buf.push(CLAIM);
-                    ClientMessage::Claim(*c).write(&mut self.buf);
-                }
-                Input::Leave => self.buf.push(LEAVE),
-            }
+            };
+            self.buf.push(tag);
+            message.write(&mut self.buf);
         }
         self.buf.extend_from_slice(&hash_after.to_le_bytes());
         self.out.write_all(&self.buf)
@@ -133,15 +136,18 @@ impl LogReader {
                 read_u32(&mut self.input)?,
                 read_u32(&mut self.input)?,
             );
-            let input = match read_u8(&mut self.input)? {
+            let tag = read_u8(&mut self.input)?;
+            let input = match tag {
                 LEAVE => Input::Leave,
-                JOIN | CLAIM => match ClientMessage::read(&self.frame()?) {
-                    Ok(ClientMessage::Hello(h)) => Input::Join(h),
-                    Ok(ClientMessage::Claim(c)) => Input::Claim(c),
-                    Ok(ClientMessage::Seen(_) | ClientMessage::Teleport(_)) | Err(_) => {
-                        return Err(bad("a logged message is not a hello or a claim"));
+                JOIN | HOST_JOIN | CLAIM | TELEPORT => {
+                    match (tag, ClientMessage::read(&self.frame()?)) {
+                        (JOIN, Ok(ClientMessage::Hello(h))) => Input::Join(h),
+                        (HOST_JOIN, Ok(ClientMessage::Hello(h))) => Input::HostJoin(h),
+                        (CLAIM, Ok(ClientMessage::Claim(c))) => Input::Claim(c),
+                        (TELEPORT, Ok(ClientMessage::Teleport(c))) => Input::Teleport(c),
+                        _ => return Err(bad("a logged message is not what its tag says")),
                     }
-                },
+                }
                 _ => return Err(bad("an unknown input tag")),
             };
             inputs.push(Stamped {

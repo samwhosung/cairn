@@ -144,8 +144,9 @@ fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
         ..Config::default()
     })
     .expect("a server");
-    let mut honest = Walker::joined(server.addr(), "B", CharacterLook::naked(1, 0), HZ)?;
-    let mut liar = Liar::join(server.addr(), every);
+    let addr = server.addr().expect("the server listens");
+    let mut honest = Walker::joined(addr, "B", CharacterLook::naked(1, 0), HZ)?;
+    let mut liar = Liar::join(addr, every);
     let from = spawn(3.0).pos;
     let mut beyond = f32::MIN;
     let begun = Instant::now();

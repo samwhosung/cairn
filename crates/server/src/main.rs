@@ -98,7 +98,7 @@ fn serve(args: &[String]) -> Result<(), String> {
         None => Vec::new(),
     };
     let cfg = Config {
-        addr: SocketAddr::from(([127, 0, 0, 1], num(&f, "port", 7777)?)),
+        addr: Some(SocketAddr::from(([127, 0, 0, 1], num(&f, "port", 7777)?))),
         tick_threads: num(&f, "threads", defaults.tick_threads)?,
         io_threads: num(&f, "io-threads", defaults.io_threads)?,
         spawns,
@@ -111,7 +111,9 @@ fn serve(args: &[String]) -> Result<(), String> {
         ..defaults
     };
     let running = server::start(cfg).map_err(|e| format!("starting: {e}"))?;
-    eprintln!("serving on {}", running.addr());
+    if let Some(addr) = running.addr() {
+        eprintln!("serving on {addr}");
+    }
     let summary = running.wait().map_err(|e| format!("serving: {e}"))?;
     if summary.players_arrived < summary.players_wanted {
         eprintln!(

@@ -7,7 +7,9 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
     Why, flags,
 };
-use server::{Config, InputOrder, Replay, Replicate, Spawn, Summary, View, Window};
+use server::{
+    Config, InProcess, InputOrder, Replay, Replicate, Running, Spawn, Summary, View, Window,
+};
 
 #[derive(Debug, PartialEq)]
 enum Got {
@@ -27,8 +29,8 @@ struct Client {
 }
 
 impl Client {
-    fn join(addr: SocketAddr, name: &str) -> Self {
-        let mut stream = TcpStream::connect(addr).expect("connect");
+    fn join(addr: Option<SocketAddr>, name: &str) -> Self {
+        let mut stream = TcpStream::connect(addr.expect("a server that listens")).expect("connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("a timeout");
@@ -274,7 +276,7 @@ fn a_crowd_that_leaves_before_the_window_closes_stops_the_server() {
 
 const WINDOW_TICK_MS: u16 = 20;
 
-fn window_with<T>(window: Window, come: impl FnOnce(SocketAddr) -> T) -> (Summary, T) {
+fn window_with<T>(window: Window, come: impl FnOnce(Option<SocketAddr>) -> T) -> (Summary, T) {
     let running = server::start(Config {
         tick_threads: 1,
         tick_ms: WINDOW_TICK_MS,
@@ -409,4 +411,168 @@ fn a_recorded_run_replays_with_every_batch_and_dumps_the_first_clients_frames() 
         "one batch a tick"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn hello(name: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    ClientMessage::Hello(Hello {
+        version: VERSION,
+        name: name.into(),
+        appearance: Appearance::default(),
+    })
+    .write(&mut bytes);
+    bytes
+}
+
+fn teleport_to(time: u32, pos: [f32; 3]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    ClientMessage::Teleport(Claim {
+        ack: 0,
+        movement: Movement {
+            time,
+            pos,
+            ..Movement::default()
+        },
+    })
+    .write(&mut bytes);
+    bytes
+}
+
+/// Every frame the host's connection has been handed within `for_`, until one `until` wants.
+fn host_frames(
+    host: &InProcess,
+    for_: Duration,
+    until: impl Fn(&ServerMessage<'_>) -> bool,
+) -> Vec<Vec<u8>> {
+    let (mut frames, mut got) = (Frames::default(), Vec::new());
+    let deadline = Instant::now() + for_;
+    while Instant::now() < deadline {
+        let Ok((bytes, _)) = host.try_recv() else {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        };
+        frames.extend(&bytes);
+        while let Some(frame) = frames.next_frame().expect("framed") {
+            let done = until(&ServerMessage::read(frame).expect("a message"));
+            got.push(frame.to_vec());
+            if done {
+                return got;
+            }
+        }
+    }
+    got
+}
+
+fn host_joins(running: &Running) -> (InProcess, u32) {
+    let host = running.host_joins();
+    host.send(hello("Host"))
+        .expect("the server takes the hello");
+    let welcomed = host_frames(&host, Duration::from_secs(5), |m| {
+        matches!(m, ServerMessage::Welcome(_))
+    });
+    let Some(Ok(ServerMessage::Welcome(w))) = welcomed.last().map(|f| ServerMessage::read(f))
+    else {
+        panic!("no welcome for the host");
+    };
+    (host, w.id)
+}
+
+#[test]
+fn a_host_in_the_servers_own_process_teleports_and_a_guest_is_refused_live_and_in_replay() {
+    let dir = std::env::temp_dir().join(format!("server-host-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let log = dir.join("inputs.log");
+    let spawns = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]
+        .map(|pos| Spawn { pos, facing: 0.0 })
+        .to_vec();
+    let running = server::start(Config {
+        spawns,
+        tick_threads: 1,
+        record: Some(log.clone()),
+        ..Config::default()
+    })
+    .expect("a server");
+    let (host, host_id) = host_joins(&running);
+    let mut guest = Client::join(running.addr(), "Guest");
+    guest.records_until(40, |g| *g == Got::Appear(host_id));
+    host.send(teleport_to(1000, [500.0, 0.0, 0.0]))
+        .expect("sent");
+    guest
+        .stream
+        .write_all(&teleport_to(1000, [510.0, 0.0, 0.0]))
+        .expect("sent");
+    let told = guest.records_until(40, |g| matches!(g, Got::Correct(..)));
+    assert!(told.contains(&Got::Correct(1, Why::Teleport)), "{told:?}");
+    guest.claim(1, 1500, [13.0, 0.0, 0.0]);
+    let mut ran_on = Vec::new();
+    ClientMessage::Claim(Claim {
+        ack: 0,
+        movement: Movement {
+            time: 1500,
+            flags: flags::FORWARD,
+            pos: [503.0, 0.0, 0.0],
+            ..Movement::default()
+        },
+    })
+    .write(&mut ran_on);
+    host.send(ran_on).expect("sent");
+    let batches = host_frames(&host, Duration::from_millis(300), |_| false)
+        .iter()
+        .filter(|f| matches!(ServerMessage::read(f), Ok(ServerMessage::Batch(_))))
+        .count();
+    assert!(batches > 0, "the host's batches stopped");
+    let summary = running.stop().expect("a clean stop");
+    assert_eq!(
+        summary.refused,
+        [0, 0, 0, 0, 0, 0, 1],
+        "only the guest's teleport: each runs on from where the server put it"
+    );
+
+    let how = Replay {
+        threads: 1,
+        order: InputOrder::Canonical,
+        keep_refusals: true,
+        replicate: Replicate::No,
+    };
+    let r = server::replay(&log, &how).expect("a replay");
+    assert_eq!(r.first_mismatch, None);
+    let refused: Vec<(u32, Why)> = r.refusals.iter().map(|x| (x.id, x.why)).collect();
+    assert_eq!(refused, [(guest.id, Why::Teleport)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_server_whose_tick_fails_closes_every_connection_it_would_have_admitted() {
+    let running = server::start(Config {
+        tick_threads: 1,
+        record: Some(
+            std::env::temp_dir()
+                .join("no-such-dir-for-a-log")
+                .join("inputs.log"),
+        ),
+        ..Config::default()
+    })
+    .expect("a server");
+    let host = running.host_joins();
+    let _ = host.send(hello("Host"));
+    let mut guest = TcpStream::connect(running.addr().expect("a listener")).expect("connect");
+    guest
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("a timeout");
+    let _ = guest.write_all(&hello("Guest"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let host_let_go = loop {
+        match host.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break true,
+            _ if Instant::now() > deadline => break false,
+            _ => std::thread::sleep(Duration::from_millis(5)),
+        }
+    };
+    assert!(host_let_go, "the host still waits for a welcome");
+    let mut buf = [0u8; 64];
+    assert!(
+        matches!(guest.read(&mut buf), Ok(0) | Err(_)),
+        "the guest still waits for a welcome"
+    );
+    assert!(running.wait().is_err(), "the tick's failure is lost");
 }

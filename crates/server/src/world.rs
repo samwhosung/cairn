@@ -27,7 +27,10 @@ pub struct Stamped {
 #[derive(Clone, Debug)]
 pub enum Input {
     Join(Hello),
+    /// A join from the process that runs the server, which lets its host teleport.
+    HostJoin(Hello),
     Claim(Claim),
+    Teleport(Claim),
     Leave,
 }
 
@@ -64,6 +67,12 @@ pub enum Act {
         received_ms: u32,
         claim: Claim,
     },
+    Teleport {
+        id: u32,
+        received_ms: u32,
+        claim: Claim,
+        may: bool,
+    },
     Leave {
         id: u32,
     },
@@ -72,7 +81,7 @@ pub enum Act {
 impl Act {
     pub fn id(&self) -> u32 {
         match *self {
-            Self::Claim { id, .. } | Self::Leave { id } => id,
+            Self::Claim { id, .. } | Self::Teleport { id, .. } | Self::Leave { id } => id,
         }
     }
 }
@@ -109,6 +118,7 @@ pub struct World {
     next: Vec<Body>,
     names: Vec<String>,
     looks: Vec<Appearance>,
+    hosts: Vec<bool>,
     id_of: HashMap<u32, u32>,
     spawns: Vec<Spawn>,
     rules: Rules,
@@ -131,6 +141,7 @@ impl World {
             next: Vec::new(),
             names: Vec::new(),
             looks: Vec::new(),
+            hosts: Vec::new(),
             id_of: HashMap::new(),
             spawns,
             rules,
@@ -169,7 +180,7 @@ impl World {
     pub fn admit(&mut self, inputs: &[Stamped]) -> Vec<Admitted> {
         let mut admitted = Vec::new();
         for s in inputs {
-            let Input::Join(hello) = &s.input else {
+            let (Input::Join(hello) | Input::HostJoin(hello)) = &s.input else {
                 continue;
             };
             if self.id_of.contains_key(&s.conn) {
@@ -192,6 +203,7 @@ impl World {
             self.next.push(body);
             self.names.push(hello.name.clone());
             self.looks.push(hello.appearance);
+            self.hosts.push(matches!(s.input, Input::HostJoin(_)));
             self.id_of.insert(s.conn, id);
             admitted.push(Admitted {
                 conn: s.conn,
@@ -208,11 +220,17 @@ impl World {
             .filter_map(|s| {
                 let id = *self.id_of.get(&s.conn)?;
                 match &s.input {
-                    Input::Join(_) => None,
+                    Input::Join(_) | Input::HostJoin(_) => None,
                     Input::Claim(claim) => Some(Act::Claim {
                         id,
                         received_ms: s.received_ms,
                         claim: *claim,
+                    }),
+                    Input::Teleport(claim) => Some(Act::Teleport {
+                        id,
+                        received_ms: s.received_ms,
+                        claim: *claim,
+                        may: self.hosts[id as usize],
                     }),
                     Input::Leave => Some(Act::Leave { id }),
                 }
@@ -308,10 +326,23 @@ impl Judge<'_> {
             return;
         }
         let tick = self.tick;
-        let (received_ms, claim) = match *act {
+        let (received_ms, claim, verdict) = match *act {
             Act::Claim {
                 received_ms, claim, ..
-            } => (received_ms, claim),
+            } => (
+                received_ms,
+                claim,
+                self.rules.judge(body, &claim, received_ms),
+            ),
+            Act::Teleport {
+                received_ms,
+                claim,
+                may,
+                ..
+            } => {
+                let verdict = self.rules.judge_teleport(body, &claim, received_ms, may);
+                (received_ms, claim, verdict)
+            }
             Act::Leave { .. } => {
                 body.alive = false;
                 body.moved_at = tick;
@@ -319,7 +350,7 @@ impl Judge<'_> {
             }
         };
         done.claims += 1;
-        match self.rules.judge(body, &claim, received_ms) {
+        match verdict {
             Verdict::Accept => {
                 let m = claim.movement;
                 self.rules.pin_clock(body, m.time, received_ms);

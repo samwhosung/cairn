@@ -37,6 +37,13 @@ fn claim(conn: u32, nth: u32, received_ms: u32, ack: u32, movement: Movement) ->
     }
 }
 
+fn teleport(conn: u32, nth: u32, received_ms: u32, movement: Movement) -> Stamped {
+    Stamped {
+        input: Input::Teleport(Claim { ack: 0, movement }),
+        ..claim(conn, nth, received_ms, 0, movement)
+    }
+}
+
 fn running(time: u32, pos: [f32; 3]) -> Movement {
     Movement {
         time,
@@ -391,5 +398,72 @@ fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
         client.slots.keys().all(|&slot| slot < 4),
         "the one that came took the slot of the one that left: {:?}",
         client.slots
+    );
+}
+
+#[test]
+fn the_host_is_put_where_it_asks_and_a_guest_that_asks_is_put_back_and_told_why() {
+    let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
+    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let shared = Shared::new();
+    let mut clients: Vec<Client> = (0..2)
+        .map(|conn| {
+            let (outbox, rx) = Outbox::channel();
+            shared.hold_outbox(conn, outbox);
+            Client::new(rx)
+        })
+        .collect();
+    let pool = pool(1);
+    let mut run = |inputs: Vec<Stamped>| {
+        sim.tick(
+            &pool,
+            &inputs,
+            InputOrder::Canonical,
+            Batches::Send(&shared),
+        )
+    };
+    let host = Stamped {
+        input: Input::HostJoin(Hello {
+            version: VERSION,
+            name: "Host".into(),
+            appearance: Appearance::default(),
+        }),
+        ..join(0)
+    };
+    run(vec![host, join(1)]);
+    for c in &mut clients {
+        c.welcome();
+        c.next_batch(0);
+    }
+    let far = |time: u32, x: f32| Movement {
+        time,
+        pos: [x, 0.0, 0.0],
+        ..Movement::default()
+    };
+    let asked = run(vec![
+        teleport(0, 1, 1000, far(1000, 500.0)),
+        teleport(1, 1, 1000, far(1000, 510.0)),
+    ]);
+    assert_eq!(
+        asked.refused[Why::Teleport as usize],
+        1,
+        "{:?}",
+        asked.refused
+    );
+    let corrected = |got: Vec<Got>| got.into_iter().find(|g| matches!(g, Got::Correct(..)));
+    assert_eq!(corrected(clients[0].next_batch(1)), None);
+    assert_eq!(
+        corrected(clients[1].next_batch(1)),
+        Some(Got::Correct(1, Why::Teleport))
+    );
+    let after = run(vec![
+        claim(0, 2, 1500, 0, running(1500, [503.0, 0.0, 0.0])),
+        claim(1, 2, 1500, 0, running(1500, [513.0, 0.0, 0.0])),
+        claim(1, 3, 1500, 1, running(1500, [13.0, 0.0, 0.0])),
+    ]);
+    assert_eq!(
+        (after.claims, after.refused.iter().sum::<u32>(), after.stale),
+        (3, 0, 1),
+        "the host runs on from where it landed, and the guest from where it was put back"
     );
 }

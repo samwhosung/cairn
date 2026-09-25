@@ -153,7 +153,7 @@ fn load(args: &[String]) -> Result<(), String> {
         None
     };
     let addr: SocketAddr = match &running {
-        Some(r) => r.addr(),
+        Some(r) => r.addr().ok_or("the in-process server does not listen")?,
         None => f
             .get("addr")
             .map_or("127.0.0.1:7777", String::as_str)

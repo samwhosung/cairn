@@ -14,7 +14,8 @@ use crate::world::{InputOrder, Spawn};
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub addr: SocketAddr,
+    /// Where players connect over TCP; with none, only the host joins, from the same process.
+    pub addr: Option<SocketAddr>,
     pub tick_threads: usize,
     pub io_threads: usize,
     pub tick_ms: u16,
@@ -33,7 +34,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            addr: Some(SocketAddr::from(([127, 0, 0, 1], 0))),
             tick_threads: std::thread::available_parallelism().map_or(1, usize::from),
             io_threads: 4,
             tick_ms: 50,

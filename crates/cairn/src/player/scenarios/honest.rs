@@ -1,5 +1,8 @@
+use std::io;
+use std::net::SocketAddr;
+
 use bevy::input::keyboard::KeyCode;
-use server::{Config, Running, Spawn, Why};
+use server::{Config, Running, Spawn, Summary, Why};
 use world::unit::CharacterLook;
 
 use super::walker::Walker;
@@ -15,20 +18,35 @@ pub struct Stand {
     pub heading_deg: f32,
 }
 
-pub fn serve(stands: &[Stand]) -> Running {
-    server::start(Config {
-        tick_threads: 1,
-        io_threads: 1,
-        spawns: stands
-            .iter()
-            .map(|s| Spawn {
-                pos: s.feet,
-                facing: s.heading_deg.to_radians(),
-            })
-            .collect(),
-        ..Config::default()
-    })
-    .expect("a server")
+/// A server of the test's own, which its players join over loopback.
+pub struct Served(Running);
+
+impl Served {
+    pub fn addr(&self) -> SocketAddr {
+        self.0.addr().expect("the server listens")
+    }
+
+    pub fn stop(self) -> io::Result<Summary> {
+        self.0.stop()
+    }
+}
+
+pub fn serve(stands: &[Stand]) -> Served {
+    Served(
+        server::start(Config {
+            tick_threads: 1,
+            io_threads: 1,
+            spawns: stands
+                .iter()
+                .map(|s| Spawn {
+                    pos: s.feet,
+                    facing: s.heading_deg.to_radians(),
+                })
+                .collect(),
+            ..Config::default()
+        })
+        .expect("a server"),
+    )
 }
 
 struct Scenario {

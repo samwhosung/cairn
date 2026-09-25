@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use protocol::{ClientMessage, Frames, VERSION};
@@ -80,7 +82,8 @@ impl Outbox {
 
 pub struct Shared {
     inbox: Mutex<Vec<Stamped>>,
-    unadmitted: Mutex<HashMap<u32, Outbox>>,
+    /// `None` once the tick that admits connections has ended.
+    unadmitted: Mutex<Option<HashMap<u32, Outbox>>>,
     next_conn: AtomicU32,
     pub latest_tick: AtomicU32,
     pub bytes_in: AtomicU64,
@@ -98,7 +101,7 @@ impl Shared {
     pub fn new() -> Self {
         Self {
             inbox: Mutex::new(Vec::new()),
-            unadmitted: Mutex::new(HashMap::new()),
+            unadmitted: Mutex::new(Some(HashMap::new())),
             next_conn: AtomicU32::new(0),
             latest_tick: AtomicU32::new(0),
             bytes_in: AtomicU64::new(0),
@@ -118,18 +121,27 @@ impl Shared {
         inputs
     }
 
+    /// Keeps a new connection's outbox for the tick that admits it, or closes the connection if
+    /// that tick has ended.
     pub fn hold_outbox(&self, conn: u32, outbox: Outbox) {
-        self.unadmitted
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(conn, outbox);
+        if let Some(held) = self.unadmitted().as_mut() {
+            held.insert(conn, outbox);
+        }
     }
 
     pub fn take_outbox(&self, conn: u32) -> Option<Outbox> {
+        self.unadmitted().as_mut()?.remove(&conn)
+    }
+
+    /// Closes every connection not yet admitted, and every one that comes after.
+    pub fn close(&self) {
+        *self.unadmitted() = None;
+    }
+
+    fn unadmitted(&self) -> MutexGuard<'_, Option<HashMap<u32, Outbox>>> {
         self.unadmitted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(&conn)
     }
 
     pub fn leave_next_tick(&self, conn: u32) {
@@ -157,19 +169,110 @@ pub async fn accept(listener: TcpListener, shared: Arc<Shared>) {
             continue;
         };
         let _ = socket.set_nodelay(true);
-        let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
         let (reader, writer) = socket.into_split();
-        let (outbox, rx) = Outbox::channel();
-        let (on_written, behind) = (outbox.on_written(), outbox.behind.clone());
-        let hung_up = outbox.hung_up();
-        shared.hold_outbox(conn, outbox);
-        let writer = tokio::spawn(write(writer, rx, on_written));
-        let reader = tokio::spawn(read(conn, reader, behind, shared.clone()));
-        tokio::spawn(async move {
-            hung_up.await;
-            reader.abort();
-            writer.abort();
+        let incoming = Incoming::Socket(reader, vec![0; READ_BUF]);
+        open(&shared, Standing::Guest, incoming, |rx, outbox| {
+            write(writer, rx, outbox.on_written())
         });
+    }
+}
+
+/// A player's connection from inside the server's own process: the frames a socket would carry,
+/// over channels.
+pub struct InProcess {
+    to_server: mpsc::UnboundedSender<Vec<u8>>,
+    from_server: std_mpsc::Receiver<(Vec<u8>, Instant)>,
+}
+
+impl InProcess {
+    /// Hands the server bytes as a socket would carry them.
+    pub fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
+        self.to_server
+            .send(bytes)
+            .map_err(|_| io::ErrorKind::BrokenPipe.into())
+    }
+
+    /// The next frame the server wrote, with when it wrote it; `Disconnected` once the server has
+    /// let the connection go.
+    pub fn try_recv(&self) -> Result<(Vec<u8>, Instant), std_mpsc::TryRecvError> {
+        self.from_server.try_recv()
+    }
+}
+
+/// Opens the host's connection. It spawns onto the server's runtime, so call it inside one.
+pub fn host_joins(shared: &Arc<Shared>) -> InProcess {
+    let (to_server, from_client) = mpsc::unbounded_channel();
+    let (to_client, from_server) = std_mpsc::channel();
+    let incoming = Incoming::Here(from_client, Vec::new());
+    open(shared, Standing::Host, incoming, |rx, outbox| {
+        hand_over(rx, to_client, outbox.on_written())
+    });
+    InProcess {
+        to_server,
+        from_server,
+    }
+}
+
+/// Whether a connection joins as the server's host, who may teleport, or as a guest.
+#[derive(Clone, Copy)]
+enum Standing {
+    Guest,
+    Host,
+}
+
+enum Incoming {
+    Socket(OwnedReadHalf, Vec<u8>),
+    Here(mpsc::UnboundedReceiver<Vec<u8>>, Vec<u8>),
+}
+
+impl Incoming {
+    /// The bytes that came in next, or `None` once the other end has gone.
+    async fn next(&mut self) -> Option<&[u8]> {
+        match self {
+            Self::Socket(r, buf) => match r.read(buf).await {
+                Ok(0) | Err(_) => None,
+                Ok(n) => Some(&buf[..n]),
+            },
+            Self::Here(rx, last) => {
+                *last = rx.recv().await?;
+                Some(last)
+            }
+        }
+    }
+}
+
+/// Holds a new connection's outbox for the tick that admits it and runs its reading and its
+/// `writing` until either end hangs up.
+fn open<W: Future<Output = ()> + Send + 'static>(
+    shared: &Arc<Shared>,
+    standing: Standing,
+    incoming: Incoming,
+    writing: impl FnOnce(mpsc::UnboundedReceiver<Vec<u8>>, &Outbox) -> W,
+) {
+    let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
+    let (outbox, rx) = Outbox::channel();
+    let (behind, hung_up) = (outbox.behind.clone(), outbox.hung_up());
+    let writer = tokio::spawn(writing(rx, &outbox));
+    shared.hold_outbox(conn, outbox);
+    let reader = tokio::spawn(read(conn, incoming, standing, behind, shared.clone()));
+    tokio::spawn(async move {
+        hung_up.await;
+        reader.abort();
+        writer.abort();
+    });
+}
+
+async fn hand_over(
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    to: std_mpsc::Sender<(Vec<u8>, Instant)>,
+    on_written: impl Fn(usize),
+) {
+    while let Some(bytes) = rx.recv().await {
+        let n = bytes.len();
+        if to.send((bytes, Instant::now())).is_err() {
+            break;
+        }
+        on_written(n);
     }
 }
 
@@ -186,26 +289,33 @@ async fn write(
     }
 }
 
-async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: Arc<Shared>) {
+async fn read(
+    conn: u32,
+    mut incoming: Incoming,
+    standing: Standing,
+    behind: Arc<AtomicU32>,
+    shared: Arc<Shared>,
+) {
     let mut frames = Frames::default();
-    let mut buf = vec![0u8; READ_BUF];
     let (mut nth, mut joined, mut batch) = (0u32, false, Vec::new());
-    'conn: loop {
-        let n = match r.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
-        };
-        shared.bytes_in.fetch_add(n as u64, Ordering::Relaxed);
-        frames.extend(&buf[..n]);
+    'conn: while let Some(bytes) = incoming.next().await {
+        shared
+            .bytes_in
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        frames.extend(bytes);
         let received_ms = shared.ms_since_start();
         loop {
             let input = match frames.next_frame().map(|f| f.map(ClientMessage::read)) {
                 Ok(None) => break,
                 Ok(Some(Ok(ClientMessage::Hello(h)))) if !joined && h.version == VERSION => {
                     joined = true;
-                    Input::Join(h)
+                    match standing {
+                        Standing::Guest => Input::Join(h),
+                        Standing::Host => Input::HostJoin(h),
+                    }
                 }
                 Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
+                Ok(Some(Ok(ClientMessage::Teleport(c)))) if joined => Input::Teleport(c),
                 Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
                     let now = shared.latest_tick.load(Ordering::Relaxed);
                     behind.store(now.saturating_sub(tick), Ordering::Relaxed);
@@ -236,9 +346,5 @@ async fn read(conn: u32, mut r: OwnedReadHalf, behind: Arc<AtomicU32>, shared: A
         });
         shared.push(&mut batch);
     }
-    shared
-        .unadmitted
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&conn);
+    drop(shared.take_outbox(conn));
 }

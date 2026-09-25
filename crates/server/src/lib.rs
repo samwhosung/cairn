@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
+pub use net::InProcess;
 pub use protocol::Movement;
 pub use replicate::{Tier, View};
 pub use rules::{Rules, Why, ground_between};
@@ -33,27 +34,33 @@ use crate::net::Shared;
 
 /// A server running on its own threads.
 pub struct Running {
-    addr: SocketAddr,
+    addr: Option<SocketAddr>,
     shared: Arc<Shared>,
     tick: JoinHandle<io::Result<Summary>>,
     runtime: tokio::runtime::Runtime,
 }
 
-/// Binds `cfg.addr` and starts ticking.
+/// Binds `cfg.addr`, if it names one, and starts ticking.
 pub fn start(cfg: Config) -> io::Result<Running> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.io_threads.max(1))
         .thread_name("conn")
         .enable_io()
         .build()?;
-    let listener = runtime.block_on(tokio::net::TcpListener::bind(cfg.addr))?;
-    let addr = listener.local_addr()?;
     let shared = Arc::new(Shared::new());
-    runtime.spawn(net::accept(listener, shared.clone()));
-    let for_tick = shared.clone();
+    let addr = match cfg.addr {
+        Some(addr) => {
+            let listener = runtime.block_on(tokio::net::TcpListener::bind(addr))?;
+            let bound = listener.local_addr()?;
+            runtime.spawn(net::accept(listener, shared.clone()));
+            Some(bound)
+        }
+        None => None,
+    };
+    let ends = ClosesWhenDropped(shared.clone());
     let tick = std::thread::Builder::new()
         .name("world".into())
-        .spawn(move || serve::run(&cfg, &for_tick))?;
+        .spawn(move || serve::run(&cfg, &ends.0))?;
     Ok(Running {
         addr,
         shared,
@@ -62,9 +69,25 @@ pub fn start(cfg: Config) -> io::Result<Running> {
     })
 }
 
+/// Held by the tick: however it ends, the connections it would have admitted close.
+struct ClosesWhenDropped(Arc<Shared>);
+
+impl Drop for ClosesWhenDropped {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
 impl Running {
-    pub fn addr(&self) -> SocketAddr {
+    /// Where players connect, when the server listens.
+    pub fn addr(&self) -> Option<SocketAddr> {
         self.addr
+    }
+
+    /// Joins as the server's host, from this process and with no socket; the host may teleport.
+    pub fn host_joins(&self) -> InProcess {
+        let _in = self.runtime.enter();
+        net::host_joins(&self.shared)
     }
 
     /// Stops ticking, closes every connection, and returns what was measured; like

@@ -105,12 +105,7 @@ impl Rules {
             return Verdict::Accept;
         }
         let last = &body.movement;
-        let budget = self.clock_budget_ms.saturating_sub(body.clock_spent_ms);
-        let lead_allowed = i64::from(self.clock_slack_ms) + i64::from(budget);
-        let ahead = body
-            .clock
-            .is_some_and(|pin| pin.lead_ms(m.time, received_ms) > lead_allowed);
-        if m.time < last.time || ahead {
+        if self.off_the_clock(body, m, received_ms) {
             return Verdict::Refuse(Why::Clock);
         }
         let launched = m.flags & flags::FALLING != 0 && last.flags & flags::FALLING == 0;
@@ -130,6 +125,45 @@ impl Rules {
             return Verdict::Refuse(Why::Fall);
         }
         Verdict::Accept
+    }
+
+    /// Judges a request to be put where `claim` says, which only a player the server lets
+    /// teleport may make; once made, claims are judged from there.
+    pub fn judge_teleport(
+        &self,
+        body: &Body,
+        claim: &Claim,
+        received_ms: u32,
+        may_teleport: bool,
+    ) -> Verdict {
+        if claim.ack != body.correction_seq {
+            return Verdict::Stale;
+        }
+        let m = &claim.movement;
+        if !self.well_formed(m) {
+            return Verdict::Refuse(Why::Malformed);
+        }
+        if !self.check {
+            return Verdict::Accept;
+        }
+        if !may_teleport {
+            return Verdict::Refuse(Why::Teleport);
+        }
+        if self.off_the_clock(body, m, received_ms) {
+            return Verdict::Refuse(Why::Clock);
+        }
+        Verdict::Accept
+    }
+
+    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
+    /// slack and the budget left allow.
+    fn off_the_clock(&self, body: &Body, m: &Movement, received_ms: u32) -> bool {
+        let budget = self.clock_budget_ms.saturating_sub(body.clock_spent_ms);
+        let lead_allowed = i64::from(self.clock_slack_ms) + i64::from(budget);
+        let ahead = body
+            .clock
+            .is_some_and(|pin| pin.lead_ms(m.time, received_ms) > lead_allowed);
+        m.time < body.movement.time || ahead
     }
 
     /// Pins `body`'s clock to an accepted claim, or moves the pin forward by as much as the
