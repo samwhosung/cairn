@@ -11,7 +11,7 @@ use bevy::transform::TransformSystems;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use world::coords::bevy_to_wow;
 use world::sight::{Cast, Seen, Sight, Sighting};
-use world::{CurrentMap, FARCLIP, FullScreenGlow, NEARCLIP, TimeOfDay, WorldCamera};
+use world::{CurrentMap, FARCLIP, FullScreenGlow, GLOBAL_WMO_ID, NEARCLIP, TimeOfDay, WorldCamera};
 
 use crate::player::{Mode, Player};
 use crate::shot::write_png;
@@ -300,24 +300,29 @@ impl Facts {
 }
 
 fn named(seen: &Seen, adt: &str) -> String {
+    let placed = |unique_id: u32| match unique_id {
+        GLOBAL_WMO_ID => "placed by the map's WDT".to_owned(),
+        id => format!("unique id {id}"),
+    };
     match seen {
         Seen::Terrain { column, row } => {
             let mcnk = row * 16 + column;
             format!("terrain, chunk {column},{row} (MCNK {mcnk}) of {adt}")
         }
-        Seen::Doodad { file, unique_id } => format!("doodad, unique id {unique_id}, {file}"),
+        Seen::Doodad { file, unique_id } => format!("doodad, {}, {file}", placed(*unique_id)),
         Seen::Building {
             file,
             unique_id,
             group,
-        } => format!("building, unique id {unique_id}, {file}, group {group}"),
+        } => format!("building, {}, {file}, group {group}", placed(*unique_id)),
         Seen::Prop {
             file,
             building_file,
             building_unique_id,
             doodad,
         } => format!(
-            "{file}, doodad {doodad} of building unique id {building_unique_id}, {building_file}"
+            "{file}, doodad {doodad} of building {}, {building_file}",
+            placed(*building_unique_id)
         ),
     }
 }

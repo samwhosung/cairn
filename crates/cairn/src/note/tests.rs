@@ -172,3 +172,27 @@ fn the_ring_marks_round_the_spot_and_not_on_it() {
     assert_eq!(at(spot.x - 10, spot.y), Color::BLACK.to_srgba(), "its edge");
     assert_eq!(at(spot.x - 4, spot.y), untouched, "inside it");
 }
+
+#[test]
+fn the_building_a_map_places_by_its_wdt_is_named_so() {
+    let adt = "world/maps/x/x_0_0.adt";
+    let building = Seen::Building {
+        file: Arc::from("world/wmo/a.wmo"),
+        unique_id: GLOBAL_WMO_ID,
+        group: 3,
+    };
+    let prop = Seen::Prop {
+        file: Arc::from("world/b.m2"),
+        building_file: Arc::from("world/wmo/a.wmo"),
+        building_unique_id: GLOBAL_WMO_ID,
+        doodad: 17,
+    };
+    assert_eq!(
+        named(&building, adt),
+        "building, placed by the map's WDT, world/wmo/a.wmo, group 3"
+    );
+    assert_eq!(
+        named(&prop, adt),
+        "world/b.m2, doodad 17 of building placed by the map's WDT, world/wmo/a.wmo"
+    );
+}
