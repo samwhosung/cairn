@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("replay") => replay(&args[1..]),
-        Some("read") => read(&args[1..]),
+        Some("read") => return read(&args[1..]),
         Some("header") => {
             println!("{}", Summary::header());
             Ok(())
@@ -190,7 +190,27 @@ fn serve(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn read(args: &[String]) -> Result<(), String> {
+fn read(args: &[String]) -> ExitCode {
+    let (path, sql, timeout) = match reads(args) {
+        Ok(asked) => asked,
+        Err(e) => {
+            eprintln!("{e}\n\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match server::read(&path, &sql, timeout) {
+        Ok(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn reads(args: &[String]) -> Result<(PathBuf, Vec<String>, Duration), String> {
     let (mut given, mut sql) = (Vec::new(), Vec::new());
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -212,8 +232,7 @@ fn read(args: &[String]) -> Result<(), String> {
     };
     let timeout = Duration::try_from_secs_f64(num(&f, "timeout", 5.0)?)
         .map_err(|_| "--timeout wants seconds")?;
-    print!("{}", server::read(&path, &sql, timeout)?);
-    Ok(())
+    Ok((path, sql, timeout))
 }
 
 fn replay(args: &[String]) -> Result<(), String> {
