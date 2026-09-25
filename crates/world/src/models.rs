@@ -29,6 +29,7 @@ use crate::placements::{PlacedModel, Placement, Placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::Probes;
 use crate::ribbons::{RibbonSeq, spawn_ribbon};
+use crate::sight::{Meetable, Seen, file_of};
 use crate::stream::Streamer;
 use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::WmoModel;
@@ -59,22 +60,27 @@ struct Furnishing {
     spawned: bool,
     entities: Vec<Entity>,
     forms: Vec<Arc<[Handle<Mesh>]>>,
+    unique_id: u32,
+    file: Arc<str>,
 }
 
 impl Furnishing {
-    fn new(p: &Placement, server: &AssetServer) -> Self {
-        let model = match &p.model {
-            PlacedModel::Doodad { url } => ModelHandle::M2(server.load(url)),
+    fn new(unique_id: u32, p: &Placement, server: &AssetServer) -> Self {
+        let (model, url) = match &p.model {
+            PlacedModel::Doodad { url } => (ModelHandle::M2(server.load(url)), url),
             PlacedModel::Building {
                 url,
                 doodad_set,
                 name_set,
-            } => ModelHandle::Wmo {
-                handle: server.load(url),
-                doodad_set: *doodad_set,
-                name_set: *name_set,
-                props: None,
-            },
+            } => {
+                let model = ModelHandle::Wmo {
+                    handle: server.load(url),
+                    doodad_set: *doodad_set,
+                    name_set: *name_set,
+                    props: None,
+                };
+                (model, url)
+            }
         };
         Self {
             model,
@@ -82,6 +88,8 @@ impl Furnishing {
             spawned: false,
             entities: Vec::new(),
             forms: Vec::new(),
+            unique_id,
+            file: file_of(url),
         }
     }
 }
@@ -133,7 +141,7 @@ pub(crate) fn furnish(
     for (id, p) in placements.iter() {
         by_id
             .entry(id)
-            .or_insert_with(|| Furnishing::new(p, &server));
+            .or_insert_with(|| Furnishing::new(id, p, &server));
     }
     for f in by_id.values_mut() {
         if let ModelHandle::Wmo {
@@ -144,7 +152,14 @@ pub(crate) fn furnish(
         } = &mut f.model
             && let Some(m) = wmos.get(&*handle)
         {
-            *props = Some(resolve_props(m, *doodad_set, &f.transform, &server));
+            let building = (f.unique_id, &f.file);
+            *props = Some(resolve_props(
+                m,
+                *doodad_set,
+                &f.transform,
+                building,
+                &server,
+            ));
         }
     }
     let ready = by_id
@@ -282,8 +297,22 @@ impl Spawner<'_, '_, '_, '_> {
                 let id = h.id().untyped();
                 let form = self.forms(id, &m.submeshes);
                 let light = DoodadLight::Sky(shade);
-                let placed =
-                    self.doodad(m, id, &form, &f.transform, light, None, None, &mut f.forms);
+                let doodad = Seen::Doodad {
+                    file: f.file.clone(),
+                    unique_id: f.unique_id,
+                };
+                let seen = |_| doodad.clone();
+                let placed = self.doodad(
+                    m,
+                    id,
+                    &form,
+                    &f.transform,
+                    light,
+                    None,
+                    None,
+                    &mut f.forms,
+                    &seen,
+                );
                 let mut ents = placed.batches;
                 self.doodad_lights(m, &f.transform, None, &mut ents);
                 ents.extend(placed.rig_root);
@@ -301,8 +330,13 @@ impl Spawner<'_, '_, '_, '_> {
                     return;
                 };
                 let form = self.forms(handle.id().untyped(), &m.submeshes);
-                let building =
-                    self.building(handle, *name_set, m, &form, &f.transform, &mut f.entities);
+                let seen = |i: usize| Seen::Building {
+                    file: f.file.clone(),
+                    unique_id: f.unique_id,
+                    group: m.submesh_group.get(i).copied().unwrap_or_default(),
+                };
+                let (at, into) = (&f.transform, &mut f.entities);
+                let building = self.building(handle, *name_set, m, &form, at, &seen, into);
                 f.forms.push(form);
                 let site = PropSite {
                     building,
@@ -342,6 +376,7 @@ impl Spawner<'_, '_, '_, '_> {
         building: Option<Entity>,
         room: Option<&WmoGroupVis>,
         placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
+        seen: &dyn Fn(usize) -> Seen,
     ) -> PlacedDoodad {
         let (radius, center) = m.fade_sphere(transform.scale.x);
         let fade = DrawSetGate {
@@ -374,6 +409,7 @@ impl Spawner<'_, '_, '_, '_> {
             light,
             radius,
             local_center: center,
+            seen,
         };
         let batches = self.batches(&m.submeshes, form, &placed, rig.as_mut());
         let effects = self.spawn_effects(m, transform, &fade, rig.as_mut());
@@ -458,6 +494,7 @@ impl Spawner<'_, '_, '_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn building(
         &mut self,
         handle: &Handle<WmoModel>,
@@ -465,6 +502,7 @@ impl Spawner<'_, '_, '_, '_> {
         m: &WmoModel,
         form: &[Handle<Mesh>],
         transform: &Transform,
+        seen: &dyn Fn(usize) -> Seen,
         out: &mut Vec<Entity>,
     ) -> Entity {
         let instance = self
@@ -485,6 +523,7 @@ impl Spawner<'_, '_, '_, '_> {
             light: DoodadLight::Sky(GroundShade::Lit),
             radius: f32::INFINITY,
             local_center: Vec3::ZERO,
+            seen,
         };
         let batches = self.batches(&m.submeshes, form, &placed, None);
         for (&entity, &group) in batches.iter().zip(&m.submesh_group) {
@@ -578,11 +617,16 @@ impl Spawner<'_, '_, '_, '_> {
                     .and_then(|r| r.card(self.commands, info))
                     .unwrap_or_else(|| BillboardCard::new(info, placed.transform))
             });
+            let meetable = Meetable {
+                geometry: g.clone(),
+                seen: (placed.seen)(i),
+            };
             let mut e = self.commands.spawn((
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(cutout.clone()),
                 ModelPart,
                 tag,
+                meetable,
             ));
             let fade_center = if let (Some(info), Some(card)) = (&sub.billboard, card) {
                 e.insert((
@@ -670,4 +714,6 @@ struct Placed<'a> {
     light: DoodadLight,
     radius: f32,
     local_center: Vec3,
+    /// What each batch shows, by its index.
+    seen: &'a dyn Fn(usize) -> Seen,
 }

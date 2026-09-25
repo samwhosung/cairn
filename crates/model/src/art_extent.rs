@@ -127,7 +127,9 @@ pub struct AlphaMap {
 }
 
 impl AlphaMap {
-    pub(crate) fn sample(&self, u: f32, v: f32, wrap_x: bool, wrap_y: bool) -> u8 {
+    /// The texel's alpha at `(u, v)`, the texture repeating along an axis that wraps and clamped
+    /// along one that does not.
+    pub fn sample(&self, u: f32, v: f32, wrap_x: bool, wrap_y: bool) -> u8 {
         let axis = |t: f32, n: u32, wrap: bool| -> u32 {
             let t = if wrap {
                 t - t.floor()

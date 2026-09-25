@@ -38,6 +38,7 @@ pub mod rig;
 pub mod rig_events;
 mod room;
 mod sh;
+pub mod sight;
 mod sky;
 mod sky_order;
 mod skybox;

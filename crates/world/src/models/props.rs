@@ -13,6 +13,7 @@ use crate::model_material::GroundShade;
 use crate::placements::prop_placements;
 use crate::portal::WmoGroupVis;
 use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
+use crate::sight::{Seen, file_of};
 use crate::stream::Streamer;
 use crate::wmo::{DoodadBase, WmoModel};
 
@@ -21,6 +22,7 @@ pub(super) struct Prop {
     pub(super) transform: Transform,
     pub(super) groups: Arc<[u16]>,
     pub(super) light: PropLight,
+    pub(super) seen: Seen,
 }
 
 pub(super) enum PropLight {
@@ -38,10 +40,12 @@ pub(super) struct PropSite<'a> {
     pub(super) adts: &'a Assets<AdtTile>,
 }
 
+/// `building` is the placement's unique id and file.
 pub(super) fn resolve_props(
     wmo: &WmoModel,
     doodad_set: u16,
     world: &Transform,
+    building: (u32, &Arc<str>),
     server: &AssetServer,
 ) -> Vec<Prop> {
     prop_placements(wmo, doodad_set, world)
@@ -69,11 +73,18 @@ pub(super) fn resolve_props(
                 },
                 _ => PropLight::Exterior,
             };
+            let seen = Seen::Prop {
+                file: file_of(&p.url),
+                building: building.1.clone(),
+                unique_id: building.0,
+                doodad: p.doodad,
+            };
             Prop {
                 handle: server.load(p.url),
                 transform: p.transform,
                 groups: p.groups,
                 light,
+                seen,
             }
         })
         .collect()
@@ -121,6 +132,7 @@ impl Spawner<'_, '_, '_, '_> {
             Some(building),
             room.as_ref(),
             placement_forms,
+            &|_| prop.seen.clone(),
         );
         let mut ents = placed.batches;
         if let DoodadLight::Probe(slot) = light {
