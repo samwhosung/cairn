@@ -2,9 +2,9 @@ use std::time::Instant;
 
 use protocol::{Appearance, ClientMessage, Hello, Pos, VERSION};
 use rayon::prelude::*;
-use server::{Config, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
+use server::{Config, Input, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
 
-use super::client::{Accepted, Brief, Client, Delivered, Seen, Tally, World};
+use super::client::{Accepted, Brief, Client, Delivered, Seen, Taken, Tally, World};
 use super::spec::{Group, Script, Spec};
 use crate::ground::Ground;
 use crate::lie::{Lie, same_bits};
@@ -109,15 +109,7 @@ pub fn run(
         })
         .collect();
     let mut accounts = vec![Account::default(); clients.len()];
-    let mut accepted: Vec<Vec<Accepted>> = vec![Vec::new(); liars];
-    for (c, liar) in clients.iter().zip(&liar_of) {
-        if let Some(l) = liar {
-            accepted[*l].push(Accepted {
-                pos: Pos::of(c.brief.spawn.pos),
-                off_body_yd: 0.0,
-            });
-        }
-    }
+    let mut accepted = vec![Taken::default(); liars];
     let tick_ms = u32::from(cfg.tick_ms);
     let ticks = (spec.seconds * 1000.0 / tick_ms as f32).ceil() as u32;
     let mut stats = Vec::with_capacity(ticks as usize);
@@ -130,6 +122,7 @@ pub fn run(
             ground,
             liar_of: &liar_of,
             accepted: &accepted,
+            view_radius: spec.view.radius,
         };
         stepper
             .pool()
@@ -140,12 +133,22 @@ pub fn run(
         for c in &mut clients {
             c.deliver(now, next, &mut inputs, &mut delivered);
         }
+        for s in &inputs {
+            if let (Input::Join(_), Some(l)) = (&s.input, liar_of[s.conn as usize]) {
+                accepted[l].push(Accepted {
+                    pos: Pos::of(clients[s.conn as usize].brief.spawn.pos),
+                    tick: next,
+                    off_body_yd: 0.0,
+                });
+            }
+        }
         stats.push(stepper.tick(&inputs));
         let refusals = stepper.take_refusals();
         settle(
             &mut accounts,
             &delivered,
             &refusals,
+            next,
             now,
             &liar_of,
             &mut accepted,
@@ -193,9 +196,10 @@ fn settle(
     accounts: &mut [Account],
     delivered: &[(u32, Delivered)],
     refusals: &[Refusal],
+    tick: u32,
     now: u32,
     liar_of: &[Option<usize>],
-    accepted: &mut [Vec<Accepted>],
+    accepted: &mut [Taken],
 ) -> Result<(), String> {
     debug_assert!(delivered.is_sorted_by_key(|(conn, _)| *conn));
     let mut why: Vec<Option<Why>> = vec![None; delivered.len()];
@@ -237,6 +241,7 @@ fn settle(
             if let Some(liar) = liar_of[*conn as usize] {
                 accepted[liar].push(Accepted {
                     pos: Pos::of(d.claim.movement.pos),
+                    tick,
                     off_body_yd,
                 });
             }

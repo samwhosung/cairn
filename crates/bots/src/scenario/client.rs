@@ -44,14 +44,39 @@ pub struct Delivered {
 #[derive(Clone, Copy, Debug)]
 pub struct Accepted {
     pub pos: Pos,
+    pub tick: u32,
     pub off_body_yd: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Taken(Vec<Accepted>);
+
+impl Taken {
+    pub fn push(&mut self, a: Accepted) {
+        assert!(
+            self.0.last().is_none_or(|last| last.tick <= a.tick),
+            "a position taken at tick {} after one taken later",
+            a.tick
+        );
+        self.0.push(a);
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Accepted> {
+        self.0.iter()
+    }
+
+    fn after_tick(&self, tick: u32) -> Option<Pos> {
+        let taken = self.0.partition_point(|a| a.tick <= tick);
+        taken.checked_sub(1).map(|i| self.0[i].pos)
+    }
 }
 
 pub struct World<'a> {
     pub place: &'a Place,
     pub ground: &'a Ground,
     pub liar_of: &'a [Option<usize>],
-    pub accepted: &'a [Vec<Accepted>],
+    pub accepted: &'a [Taken],
+    pub view_radius: f32,
 }
 
 /// Where a client saw one liar, against what the server accepted from it.
@@ -61,6 +86,15 @@ pub struct Seen {
     pub worst_yd: f32,
     pub misread: u64,
     pub unaccepted: u64,
+    pub kept_past_reach: u64,
+    pub shown_after_ticks: u64,
+    unshown_ticks: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ServerPlace {
+    from_tick: u32,
+    pos: [f32; 3],
 }
 
 #[derive(Clone, Debug, Default)]
@@ -118,6 +152,8 @@ pub struct Client {
     seen_tick: u32,
     next_seen_ms: u32,
     watching: HashMap<u16, usize>,
+    watches: bool,
+    server_places: VecDeque<ServerPlace>,
     here: [f32; 3],
     claims: Vec<Movement>,
     pub tally: Tally,
@@ -137,6 +173,7 @@ impl Client {
         let period = 1000.0 / brief.frame_hz;
         let phase_ms = rng.range(0.0, period) as u32;
         let here = brief.spawn.pos;
+        let watches = liars > 0 && brief.lies.is_empty();
         let (delay_ms, jitter_ms) = lag;
         Self {
             conn,
@@ -162,6 +199,8 @@ impl Client {
             seen_tick: 0,
             next_seen_ms: 0,
             watching: HashMap::new(),
+            watches,
+            server_places: VecDeque::new(),
             here,
             claims: Vec::new(),
             tally: Tally {
@@ -218,8 +257,12 @@ impl Client {
                     self.link.behind_by(next_tick.saturating_sub(tick));
                     continue;
                 }
-                Ok(ClientMessage::Hello(h)) => Input::Join(h),
+                Ok(ClientMessage::Hello(h)) => {
+                    self.note_server_place(next_tick, self.brief.spawn.pos);
+                    Input::Join(h)
+                }
                 Ok(ClientMessage::Claim(claim)) => {
+                    self.note_server_place(next_tick, claim.movement.pos);
                     if let Some(made_in) = o.made_in {
                         delivered.push((self.conn, Delivered { claim, made_in }));
                     }
@@ -262,7 +305,7 @@ impl Client {
             }
         };
         self.seen_tick = batch.tick;
-        let watch = !world.accepted.is_empty() && self.brief.lies.is_empty();
+        let watch = self.watches;
         for record in batch {
             match record {
                 Ok(Record::Correct { seq, .. }) => {
@@ -294,6 +337,53 @@ impl Client {
                     break;
                 }
             }
+        }
+        if watch {
+            self.tally_shown_liars(world);
+        }
+    }
+
+    fn note_server_place(&mut self, from_tick: u32, pos: [f32; 3]) {
+        if self.watches {
+            self.server_places.push_back(ServerPlace { from_tick, pos });
+        }
+    }
+
+    fn server_place_at(&mut self, tick: u32) -> Option<[f32; 3]> {
+        while self
+            .server_places
+            .get(1)
+            .is_some_and(|p| p.from_tick <= tick)
+        {
+            self.server_places.pop_front();
+        }
+        let place = self.server_places.front().filter(|p| p.from_tick <= tick)?;
+        let every_claim_taken = self.tally.corrections == 0;
+        every_claim_taken.then_some(place.pos)
+    }
+
+    fn tally_shown_liars(&mut self, world: &World<'_>) {
+        let tick = self.seen_tick;
+        let Some(server_place) = self.server_place_at(tick) else {
+            return;
+        };
+        for (liar, taken) in world.accepted.iter().enumerate() {
+            let Some(now) = taken.after_tick(tick) else {
+                continue;
+            };
+            let shown = self.watching.values().any(|&l| l == liar);
+            let seen = &mut self.tally.seen[liar];
+            let [x, y, _] = now.yards();
+            let in_view = (x - server_place[0]).hypot(y - server_place[1]) <= world.view_radius;
+            if shown && now.wrapped().around(self.here) != now {
+                seen.kept_past_reach += 1;
+            }
+            seen.unshown_ticks = if in_view && !shown {
+                seen.unshown_ticks + 1
+            } else {
+                0
+            };
+            seen.shown_after_ticks = seen.shown_after_ticks.max(seen.unshown_ticks);
         }
     }
 

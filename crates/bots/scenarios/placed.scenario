@@ -1,0 +1,28 @@
+# The server takes every claim, so the jump in this body's claims stands for any placement: a
+# landing the server grants, or a body put back at its spawn.
+place = flat
+seconds = 10
+rules.check = no
+view.aoi_every = 5
+
+bots.left.count = 4
+bots.left.script = stand
+bots.left.spawn = 0 0
+
+bots.landing.count = 4
+bots.landing.script = stand
+bots.landing.spawn = 400 0
+
+bots.placed.count = 1
+bots.placed.script = stand
+bots.placed.spawn = 0 0
+bots.placed.lie.from_s = 5
+bots.placed.lie.shift = 400 0 0
+
+expect placed.lies_accepted == 1
+# Those it left let it go in the batch of the tick that moved it.
+expect placed.kept_past_reach == 0
+expect placed.seen_misread == 0
+expect placed.seen_unaccepted == 0
+# Those where it lands show it by their next recheck of who is in view, every fifth tick.
+expect placed.shown_after_ticks <= 4

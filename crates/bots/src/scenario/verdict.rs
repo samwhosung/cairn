@@ -190,11 +190,14 @@ fn lies(
         .iter()
         .flat_map(|t| mine.iter().map(|&l| t.seen[l]));
     let (mut positions, mut worst, mut misread, mut unaccepted) = (0, 0.0_f32, 0, 0);
+    let (mut kept_past_reach, mut shown_after) = (0, 0);
     for s in seen {
         positions += s.positions;
         worst = worst.max(s.worst_yd);
         misread += s.misread;
         unaccepted += s.unaccepted;
+        kept_past_reach += s.kept_past_reach;
+        shown_after = shown_after.max(s.shown_after_ticks);
     }
     let twins: Vec<usize> = spec
         .groups
@@ -215,6 +218,8 @@ fn lies(
         ("seen_past_honest_yd", Json::Number(f64::from(worst))),
         ("seen_misread", Json::Count(misread)),
         ("seen_unaccepted", Json::Count(unaccepted)),
+        ("kept_past_reach", Json::Count(kept_past_reach)),
+        ("shown_after_ticks", Json::Count(shown_after)),
         (
             "control_corrections",
             Json::Count(twins.iter().map(|&b| o.tallies[b].corrections).sum()),

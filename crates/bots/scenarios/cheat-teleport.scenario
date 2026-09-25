@@ -33,9 +33,14 @@ expect teleport-stay.caught_after_s <= 0.1
 expect teleport-stay.through_after_s > 60
 expect teleport-stay.past_honest_yd > 299
 expect teleport-stay.control_corrections == 0
+# Once it is taken, whoever held the liar and can no longer read its place lets it go that tick.
+expect teleport-stay.seen_misread == 0
+expect teleport-stay.kept_past_reach == 0
 
 # A known hole: a body the server places has its clock at zero, so the first claim may cover all
 # the ground its client's clock allows.
 expect teleport-at-join.lies_refused == 0
 expect teleport-at-join.past_honest_yd > 299
 expect teleport-at-join.control_corrections == 0
+expect teleport-at-join.seen_misread == 0
+expect teleport-at-join.kept_past_reach == 0

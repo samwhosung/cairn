@@ -54,6 +54,10 @@ expect clock-slow.control_corrections == 0
 expect clock-back.caught_after_s <= 0.1
 expect clock-back.past_honest_yd < 1
 expect clock-back.control_corrections == 0
+# Its true places are taken again in one step of hundreds of yards, which whoever held it and can
+# no longer read its place lets go that tick.
+expect clock-back.seen_misread == 0
+expect clock-back.kept_past_reach == 0
 
 # A known hole: claims every frame with a clock that stands still each cover less than the slack,
 # so a stalled clock goes unseen.
