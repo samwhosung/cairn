@@ -5,7 +5,7 @@ use protocol::flags;
 use server::{Limits, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
-use super::shown::Drops;
+use super::shown::{Drops, Nth};
 use crate::lie::{Clock, Lie, Malformed};
 use crate::mover::Claims;
 use crate::region::{self, Place, Region};
@@ -407,9 +407,9 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
         "clock_at_start_ms" => g.clock_at_start_ms = whole(v)?,
         "swing_action" => g.swing_action = whole(v)?,
         "heeds_roots" => g.heeds_roots = yes(v)?,
-        "drop_shown" => g.drops.state = Some(whole(v)?),
-        "drop_played" => g.drops.played = Some(whole(v)?),
-        "drop_held" => g.drops.held = Some(whole(v)?),
+        "drop_shown" => g.drops.state = Some(Nth(whole(v)?)),
+        "drop_played" => g.drops.play = Some(Nth(whole(v)?)),
+        "drop_held" => g.drops.hold = Some(Nth(whole(v)?)),
         field => match field.strip_prefix("lie.") {
             Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), &s.key, key, v)?,
             None => return Err(unknown(&s.key)),

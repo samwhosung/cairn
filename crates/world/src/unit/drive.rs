@@ -126,8 +126,7 @@ impl UnitDriver {
         play_clip(tr, player, c, repeat, 1.0);
     }
 
-    /// A game's animation or pose, over the unit's own: whether one holds the body this frame.
-    fn show(
+    fn game_holds_body(
         &mut self,
         mut show: Mut<'_, UnitShow>,
         tr: &mut AnimationTransitions,
@@ -140,30 +139,28 @@ impl UnitDriver {
             && resolved_clip(anims, id).is_some()
         {
             self.play(tr, player, anims, id, false, rng);
-            self.mode = Mode::Played(id);
+            self.mode = Mode::ShowPlayed(id);
             return true;
         }
-        if let Mode::Played(id) = self.mode
+        if let Mode::ShowPlayed(id) = self.mode
             && !oneshot_finished(player, anims, id)
         {
             return true;
         }
         if let Some(pose) = show.pose.filter(|&p| resolved_clip(anims, p).is_some()) {
-            if self.mode != Mode::Posed(pose) {
+            if self.mode != Mode::ShowPosed(pose) {
                 self.hold(tr, player, anims, pose, rng);
-                self.mode = Mode::Posed(pose);
+                self.mode = Mode::ShowPosed(pose);
             }
             return true;
         }
-        if matches!(self.mode, Mode::Played(_) | Mode::Posed(_)) {
+        if matches!(self.mode, Mode::ShowPlayed(_) | Mode::ShowPosed(_)) {
             self.mode = Mode::Gait;
             self.armed_gait = None;
         }
         false
     }
 
-    /// A clip that does not loop is held at its last frame, where a one-shot of it that has
-    /// played out already stands.
     fn hold(
         &mut self,
         tr: &mut AnimationTransitions,
@@ -180,7 +177,7 @@ impl UnitDriver {
             return;
         }
         self.loop_window = None;
-        let played_out = tr
+        let already_at_its_end = tr
             .get_main_animation()
             .and_then(|node| anims.clips.iter().find(|c| c.node == node))
             .is_some_and(|c| {
@@ -189,7 +186,7 @@ impl UnitDriver {
                         .animation(c.node)
                         .is_some_and(ActiveAnimation::is_finished)
             });
-        if !played_out {
+        if !already_at_its_end {
             play_clip(tr, player, head, RepeatAnimation::Never, 1.0);
             if let Some(active) = player.animation_mut(head.node) {
                 active.seek_to(head.duration);
@@ -317,7 +314,7 @@ impl UnitDriver {
                     self.armed_gait = None;
                 }
             }
-            Mode::Played(_) | Mode::Posed(_) => {
+            Mode::ShowPlayed(_) | Mode::ShowPosed(_) => {
                 self.mode = Mode::Gait;
                 self.armed_gait = None;
             }
@@ -484,7 +481,8 @@ pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_
             model_scale: transform.scale.x,
         };
         drv.advance_window(anims, &mut tr, &mut player, &mut rng);
-        let shown = show.is_some_and(|s| drv.show(s, &mut tr, &mut player, anims, &mut rng));
+        let shown =
+            show.is_some_and(|s| drv.game_holds_body(s, &mut tr, &mut player, anims, &mut rng));
         if !shown {
             drv.run(&frame, &mut tr, &mut player, &mut rng);
         }

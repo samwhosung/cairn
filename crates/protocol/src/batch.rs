@@ -74,8 +74,15 @@ pub enum Record<'a> {
     /// The state of the entity in `slot` that the game running on the server shows, as that game
     /// encodes it; a client that does not know the game passes over it.
     Game { slot: u16, state: &'a [u8] },
-    /// What the game has the entity in `slot` show, or with no slot this client's own mover.
-    Show { slot: Option<u16>, show: Show },
+    /// What the game has a body show.
+    Show { whose: Whose, show: Show },
+}
+
+/// Whose body a show is: an entity in view, by its slot, or this client's own mover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Whose {
+    Slot(u16),
+    Own,
 }
 
 /// What a game has a body show, in the install's `AnimationData.dbc` ids.
@@ -211,11 +218,11 @@ impl<'a> Batch<'a> {
                     }
                 }
                 SHOW => Record::Show {
-                    slot: Some(slot),
+                    whose: Whose::Slot(slot),
                     show: Show::read(r)?,
                 },
                 SHOW_OWN => Record::Show {
-                    slot: None,
+                    whose: Whose::Own,
                     show: Show::read(r)?,
                 },
                 other => return Err(Error::UnknownRecord(other)),
@@ -322,10 +329,13 @@ pub fn write_game(out: &mut Vec<u8>, slot: u16, state: &[u8]) -> usize {
     state.len()
 }
 
-/// Appends what the entity in `slot`, or with no slot the client's own mover, shows.
-pub fn write_show(out: &mut Vec<u8>, slot: Option<u16>, show: Show) {
-    head(out, OTHER, slot.unwrap_or(0));
-    out.push(if slot.is_some() { SHOW } else { SHOW_OWN });
+pub fn write_show(out: &mut Vec<u8>, whose: Whose, show: Show) {
+    let (slot, kind) = match whose {
+        Whose::Slot(slot) => (slot, SHOW),
+        Whose::Own => (0, SHOW_OWN),
+    };
+    head(out, OTHER, slot);
+    out.push(kind);
     let (how, anim) = match show {
         Show::Play(anim) => (PLAY, anim),
         Show::Hold(Some(anim)) => (HOLD, anim),
@@ -493,31 +503,31 @@ mod tests {
     #[test]
     fn what_a_body_shows_comes_back_for_a_slot_and_for_the_clients_own_mover() {
         let shows = [
-            (Some(3), Show::Play(16)),
-            (Some(SLOTS - 1), Show::Hold(Some(6))),
-            (Some(0), Show::Hold(None)),
-            (None, Show::Play(9)),
-            (None, Show::Hold(Some(6))),
-            (None, Show::Hold(None)),
+            (Whose::Slot(3), Show::Play(16)),
+            (Whose::Slot(SLOTS - 1), Show::Hold(Some(6))),
+            (Whose::Slot(0), Show::Hold(None)),
+            (Whose::Own, Show::Play(9)),
+            (Whose::Own, Show::Hold(Some(6))),
+            (Whose::Own, Show::Hold(None)),
         ];
         let mut bytes = Vec::new();
         let start = begin_batch(&mut bytes, 5);
-        for (slot, show) in shows {
-            write_show(&mut bytes, slot, show);
+        for (whose, show) in shows {
+            write_show(&mut bytes, whose, show);
         }
         let unknown = bytes.len() + 3;
-        write_show(&mut bytes, Some(1), Show::Play(1));
+        write_show(&mut bytes, Whose::Slot(1), Show::Play(1));
         bytes[unknown] = LET_GO + 1;
         finish_frame(&mut bytes, start);
         let (_, got) = records_of(&bytes);
         let mut want: Vec<Result<Record<'_>, Error>> = shows
             .into_iter()
-            .map(|(slot, show)| Ok(Record::Show { slot, show }))
+            .map(|(whose, show)| Ok(Record::Show { whose, show }))
             .collect();
         want.push(Err(Error::UnknownShow(LET_GO + 1)));
         assert_eq!(got, want);
         let mut one = Vec::new();
-        write_show(&mut one, Some(2), Show::Play(16));
+        write_show(&mut one, Whose::Slot(2), Show::Play(16));
         assert_eq!(one.len(), 6);
     }
 

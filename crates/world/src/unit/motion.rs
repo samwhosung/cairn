@@ -175,10 +175,8 @@ pub(crate) enum Mode {
         pose: StandState,
         clip: u16,
     },
-    /// A game's animation, played once.
-    Played(u16),
-    /// A game's pose, held.
-    Posed(u16),
+    ShowPlayed(u16),
+    ShowPosed(u16),
 }
 
 /// The gait a unit plays, the wanted id first and the fallbacks after it.

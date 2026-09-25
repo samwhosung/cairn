@@ -15,11 +15,8 @@ pub struct Played {
     pub first_saved_mismatch: Option<String>,
     pub shown_mismatches: u64,
     pub first_shown_mismatch: Option<String>,
-    /// Animations played once that the bots were told of, and poses held or let go.
     pub plays_told: u64,
     pub poses_told: u64,
-    /// Animations played once on a body out of a bot's view, which it must not be told of: one a
-    /// bot for each bot that did not see it.
     pub plays_out_of_view: u64,
 }
 
@@ -52,14 +49,9 @@ impl Played {
                 continue;
             };
             let to_it = stepper.played_to(c.conn);
-            let on_it = to_it.iter().filter(|(slot, _)| slot.is_none()).count();
-            let own = stepper.game().map_or(0, |g| {
-                let shows = &g.shows().played;
-                shows.iter().filter(|&&(n, _)| n == c.conn).count()
-            });
-            self.plays_out_of_view += (played - own - (to_it.len() - on_it)) as u64;
+            self.plays_out_of_view += (played - to_it.len()) as u64;
             let own_pose = stepper.pose_of(c.conn);
-            if let Some(what) = c.shown.differs(tick, &view, own_pose, &to_it) {
+            if let Some(what) = c.shown.first_difference(tick, &view, own_pose, &to_it) {
                 self.shown_mismatches += 1;
                 self.first_shown_mismatch
                     .get_or_insert_with(|| format!("tick {tick}: bot {}: {what}", c.conn));
@@ -72,9 +64,8 @@ impl Played {
             self.counts = game.counts().iter().map(|(&k, &v)| (k, v)).collect();
         }
         for c in clients {
-            let (played, held) = c.shown.told();
-            self.plays_told += played;
-            self.poses_told += held;
+            self.plays_told += c.shown.plays_told();
+            self.poses_told += c.shown.poses_told();
         }
     }
 }

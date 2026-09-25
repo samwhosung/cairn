@@ -1,6 +1,3 @@
-//! The window hosts melee and fights another player until it dies and rises, each shot checking
-//! what it shows; without the show, every check fails.
-
 use std::f32::consts::TAU;
 use std::net::SocketAddr;
 use std::sync::mpsc;
@@ -25,8 +22,7 @@ use crate::player::PlayerBody;
 const HZ: f32 = 60.0;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const RISE_TIMEOUT: Duration = Duration::from_secs(90);
-/// Three blows of 40 kill, and the dead lie long enough for a slow frame to catch them.
-const KNOBS: &str = "damage_min = 40\ndamage_max = 40\nrespawn_s = 30\n";
+const THREE_BLOWS_KILL: &str = "health = 100\ndamage_min = 40\ndamage_max = 40\nrespawn_s = 30\n";
 const STAND: u16 = 0;
 const DEATH: u16 = 1;
 const DEAD: u16 = 6;
@@ -45,7 +41,6 @@ struct Fighter {
     cue: mpsc::Sender<Cue>,
 }
 
-/// The other player's client, on a thread of its own: it faces west and swings when cued.
 fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
     let (ready_tx, ready_rx) = mpsc::channel();
     let (cue, cued) = mpsc::channel();
@@ -74,7 +69,6 @@ fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
     }
 }
 
-/// What a body plays: its game's show, the clip its driver runs, and whether that has played out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Plays {
     show: UnitShow,
@@ -124,13 +118,24 @@ struct Checked {
     saw: String,
 }
 
-/// The shots whose check did not come out `held`, with what each saw.
-fn unlike(checked: &[Checked], held: bool) -> Vec<String> {
+fn shots_that_held(checked: &[Checked]) -> Vec<String> {
+    shots(checked, true)
+}
+
+fn shots_that_failed(checked: &[Checked]) -> Vec<String> {
+    shots(checked, false)
+}
+
+fn shots(checked: &[Checked], held: bool) -> Vec<String> {
     checked
         .iter()
-        .filter(|c| c.held != held)
+        .filter(|c| c.held == held)
         .map(|c| format!("{}: {}", c.shot, c.saw))
         .collect()
+}
+
+fn hide_its_own_body(p: &mut Painter) {
+    p.orbit(0.0, 0.0);
 }
 
 struct Fight {
@@ -163,12 +168,11 @@ fn plays_clip(who: Option<Plays>, clip: u16) -> (bool, String) {
     )
 }
 
-/// The window, a human, stands in Goldshire facing east; the other, an orc, three yards east of
-/// it, spawned facing north and turned to face it.
 fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
+    let (human, orc) = (CharacterLook::naked(1, 0), CharacterLook::naked(2, 0));
     let feet = [GOLDSHIRE[0], GOLDSHIRE[1], 57.0];
-    let across = [GOLDSHIRE[0], GOLDSHIRE[1] - 3.0, 57.0];
-    let over = game::KnobsFile::parse(KNOBS, "the fight").expect("knobs");
+    let three_yards_east = [GOLDSHIRE[0], GOLDSHIRE[1] - 3.0, 57.0];
+    let over = game::KnobsFile::parse(THREE_BLOWS_KILL, "the fight").expect("knobs");
     let cfg = server::Config {
         game: Some(catalog::load("melee", None, &over.lines, 0).expect("melee")),
         spawns: vec![
@@ -177,17 +181,17 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
                 facing: EAST.to_radians(),
             },
             Spawn {
-                pos: across,
+                pos: three_yards_east,
                 facing: NORTH.to_radians(),
             },
         ],
         ..net::own_server(Some(0), 0, feet, EAST.to_radians())
     };
-    let mut p = Painter::hosting(cfg, feet, EAST, CharacterLook::naked(1, 0))?;
+    let mut p = Painter::hosting(cfg, feet, EAST, human)?;
     let net = p.app.world_mut().resource_mut::<Net>();
     let addr = net.hosted_addr().expect("the window hosts");
     net.into_inner().faults().no_show = !show;
-    let other = fighter(addr, CharacterLook::naked(2, 0));
+    let other = fighter(addr, orc);
     let deadline = Instant::now() + LOAD_TIMEOUT;
     let mut settled = false;
     p.clock().pause();
@@ -207,8 +211,6 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
         checked: Vec::new(),
     };
 
-    // Until the dead shot every wait is a count of frames, so the world has aged alike in every
-    // run when it is taken.
     let _ = other.cue.send(Cue::Swing);
     f.p.wait(0.4);
     f.shoot("1-the-other-swings", |p| {
@@ -229,9 +231,7 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     f.p.wait(2.2);
     f.swing();
     f.p.wait(4.0);
-    // Up close the window's own body fades out: its stance after its swings hangs on when the
-    // server's word of them came, and the dead pose does not.
-    f.p.orbit(0.0, 0.0);
+    hide_its_own_body(&mut f.p);
     f.p.wait(1.0);
     let lay_dead = f.shoot("4-the-other-lies-dead", |p| {
         let other = the_other(p);
@@ -245,7 +245,7 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     let placed = |stands: Option<([f32; 3], f32, u32)>| {
         stands.is_some_and(|(pos, facing, fl)| {
             let turned = (facing - NORTH.to_radians()).rem_euclid(TAU);
-            let at = (pos[0] - across[0]).hypot(pos[1] - across[1]);
+            let at = (pos[0] - three_yards_east[0]).hypot(pos[1] - three_yards_east[1]);
             fl & flags::ROOT == 0 && at < 0.05 && turned.min(TAU - turned) < 0.05
         })
     };
@@ -271,11 +271,11 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
 
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
-fn the_window_hosts_melee_and_fights_another_until_it_dies_and_rises() {
+fn the_window_hosts_melee_and_fights_another_until_the_other_dies_and_rises() {
     let Some(checked) = fight("fight", true) else {
         return;
     };
-    let failed = unlike(&checked, true);
+    let failed = shots_that_failed(&checked);
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
@@ -285,6 +285,6 @@ fn without_the_show_every_shot_of_the_fight_fails_its_check() {
     let Some(checked) = fight("fight-unshown", false) else {
         return;
     };
-    let held = unlike(&checked, false);
+    let held = shots_that_held(&checked);
     assert!(held.is_empty(), "{held:#?}");
 }

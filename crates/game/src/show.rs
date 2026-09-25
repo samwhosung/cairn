@@ -2,12 +2,12 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Anim(pub u16);
 
-/// The animations the games cairn carries show, by their `AnimationData.dbc` names.
+/// Animations by their `AnimationData.dbc` names.
 pub mod anim {
     use super::Anim;
 
     pub const DEATH: Anim = Anim(1);
-    /// The pose Death ends in: a character's model plays Death and holds its last frame.
+    /// The pose Death ends in: a character's model stands at Death's last frame.
     pub const DEAD: Anim = Anim(6);
     pub const COMBAT_WOUND: Anim = Anim(9);
     pub const ATTACK_UNARMED: Anim = Anim(16);
@@ -28,7 +28,13 @@ pub(crate) enum Show {
     Hold(Option<Anim>),
 }
 
-/// The poses the players' bodies hold, by body, and what this tick had them show.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BodyShow {
+    pub body: u32,
+    pub phase: u8,
+    pub show: Show,
+}
+
 #[derive(Default)]
 pub(crate) struct Poses {
     held: Vec<Option<Anim>>,
@@ -51,18 +57,17 @@ impl Poses {
         &self.held
     }
 
-    /// Takes a tick's shows, each `(body, phase, show)` in the order its rule made them.
-    pub fn settle(&mut self, mut shows: Vec<(u32, u8, Show)>) {
+    pub fn settle(&mut self, mut shows: Vec<BodyShow>) {
         self.tick.played.clear();
         self.tick.held.clear();
-        shows.sort_by_key(|&(n, phase, _)| (n, phase));
+        shows.sort_by_key(|s| (s.body, s.phase));
         let mut i = 0;
         while i < shows.len() {
-            let n = shows[i].0;
+            let n = shows[i].body;
             let was = self.held(n);
             let mut now = was;
-            while let Some(&(m, _, show)) = shows.get(i)
-                && m == n
+            while let Some(&BodyShow { body, show, .. }) = shows.get(i)
+                && body == n
             {
                 match show {
                     Show::Play(anim) => self.tick.played.push((n, anim)),

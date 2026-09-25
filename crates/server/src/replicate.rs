@@ -2,8 +2,9 @@ use std::fmt;
 
 use game::{Hosted, Id, Shows};
 use protocol::{
-    SLOTS, Show, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_game,
-    write_granted, write_move, write_place, write_show, write_state, write_turn, write_vanish,
+    SLOTS, Show, Whose, Wrapped, begin_batch, finish_frame, write_appear, write_correct,
+    write_game, write_granted, write_move, write_place, write_show, write_state, write_turn,
+    write_vanish,
 };
 
 use crate::grid::Grid;
@@ -416,7 +417,7 @@ impl Pass<'_> {
             self.built.shared_bytes += write_game(self.out, slot, state) as u64;
         }
         if let Some(pose) = game.held(id) {
-            write_show(self.out, Some(slot), Show::Hold(Some(pose.0)));
+            write_show(self.out, Whose::Slot(slot), Show::Hold(Some(pose.0)));
         }
     }
 
@@ -432,27 +433,23 @@ impl Pass<'_> {
         }
     }
 
-    /// What the bodies in view and the observer's own showed this tick; a body that came into view
-    /// was shown its pose as it appeared.
     fn write_shows(&mut self, me: u32, seen: &[Seen], shows: &Shows, came: &[u32]) {
-        let slot_of = |n: u32| {
+        let whose = |n: u32| {
             if n == me {
-                return Some(None);
+                return Some(Whose::Own);
             }
             let at = seen.binary_search_by_key(&n, |e| e.id).ok()?;
-            Some(Some(seen[at].slot))
+            Some(Whose::Slot(seen[at].slot))
         };
         for &(n, anim) in &shows.played {
-            if let Some(slot) = slot_of(n) {
-                write_show(self.out, slot, Show::Play(anim.0));
+            if let Some(whose) = whose(n) {
+                write_show(self.out, whose, Show::Play(anim.0));
             }
         }
         for &(n, pose) in &shows.held {
-            if n != me && came.binary_search(&n).is_ok() {
-                continue;
-            }
-            if let Some(slot) = slot_of(n) {
-                write_show(self.out, slot, Show::Hold(pose.map(|a| a.0)));
+            let posed_as_it_appeared = came.binary_search(&n).is_ok();
+            if let Some(whose) = whose(n).filter(|_| !posed_as_it_appeared) {
+                write_show(self.out, whose, Show::Hold(pose.map(|a| a.0)));
             }
         }
     }

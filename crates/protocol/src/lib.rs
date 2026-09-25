@@ -23,7 +23,7 @@ mod relay;
 
 pub use appearance::Appearance;
 pub use batch::{
-    Batch, Record, SLOTS, Show, Why, begin_batch, write_appear, write_correct, write_game,
+    Batch, Record, SLOTS, Show, Whose, Why, begin_batch, write_appear, write_correct, write_game,
     write_granted, write_move, write_place, write_show, write_state, write_turn, write_vanish,
 };
 pub use cadence::{Cadence, HEARTBEAT_MS};

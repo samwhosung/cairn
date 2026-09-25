@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use bevy::math::ops;
 use bevy::prelude::*;
 use bevy::time::Real;
-use protocol::{Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome};
+use protocol::{
+    Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome, Whose,
+};
 use server::Spawn;
 use world::CurrentMap;
 use world::coords::{bevy_to_wow, wow_to_bevy};
@@ -32,8 +34,7 @@ pub use remote::RemoteMotion;
 const SPAWN_SPACING_YD: f32 = 2.5;
 const SPAWNS: usize = 16;
 const SEEN_EVERY: Duration = Duration::from_millis(500);
-/// WoW's first action bar, 1 to 0 and then - and =: the game's actions 1 to 12.
-const ACTION_KEYS: [KeyCode; 12] = [
+const ACTION_BAR_KEYS: [KeyCode; 12] = [
     KeyCode::Digit1,
     KeyCode::Digit2,
     KeyCode::Digit3,
@@ -242,7 +243,7 @@ fn act(keys: Res<'_, ButtonInput<KeyCode>>, net: Res<'_, Net>) {
     if net.welcomed.is_none() {
         return;
     }
-    for (number, key) in (1..).zip(ACTION_KEYS) {
+    for (number, key) in (1..).zip(ACTION_BAR_KEYS) {
         if keys.just_pressed(key) {
             net.link.send(&ClientMessage::Action(number));
         }
@@ -350,9 +351,12 @@ fn take_batch(
         match record? {
             #[cfg(test)]
             Record::Show { .. } if others.faults.no_show => {}
-            Record::Show { slot: None, show } => {
+            Record::Show {
+                whose: Whose::Own,
+                show,
+            } => {
                 if let Some(own) = own.as_deref_mut() {
-                    others::told(own, show);
+                    others::apply_show(own, show);
                 }
             }
             Record::Correct { seq, why, movement } => {

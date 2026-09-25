@@ -119,7 +119,6 @@ impl Painter {
         Self::welcomed(through, feet, heading_deg, look)
     }
 
-    /// [`Painter::joined`], to a server of its own that others may join.
     pub(super) fn hosting(
         cfg: server::Config,
         feet: [f32; 3],

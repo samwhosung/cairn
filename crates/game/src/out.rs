@@ -2,7 +2,7 @@ use std::any::{Any, TypeId};
 
 use crate::engine::NEVER;
 use crate::hosted::BodyOrder;
-use crate::show::Show;
+use crate::show::{BodyShow, Show};
 use crate::{Anim, Game, Id, Kind, Letter, Spot, Tick};
 
 pub(crate) const ACT: u8 = 0;
@@ -34,7 +34,7 @@ pub struct Out<G: Game> {
     pub(crate) letters: Vec<(Id, Letter<G::Msg>)>,
     pub(crate) spawns: Vec<PendingSpawn>,
     pub(crate) orders: Vec<(u32, u8, BodyOrder)>,
-    pub(crate) shows: Vec<(u32, u8, Show)>,
+    pub(crate) shows: Vec<BodyShow>,
     pub(crate) counts: Vec<(&'static str, i64)>,
 }
 
@@ -130,7 +130,11 @@ impl<G: Game> Out<G> {
 
     fn show(&mut self, show: Show) {
         if self.me.is_player() {
-            self.shows.push((self.me.n, self.phase, show));
+            self.shows.push(BodyShow {
+                body: self.me.n,
+                phase: self.phase,
+                show,
+            });
         }
     }
 

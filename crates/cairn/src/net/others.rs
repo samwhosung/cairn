@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use protocol::{Appearance, Jump, Record, Show, State, flags};
+use protocol::{Appearance, Jump, Record, Show, State, Whose, flags};
 use world::Install;
 use world::coords::wow_to_bevy;
 use world::unit::{
@@ -154,7 +154,7 @@ impl Others {
                 *r = Relayed::of(r.entity, &state, at.server_ms, at.read_around);
             }),
             Record::Show {
-                slot: Some(slot),
+                whose: Whose::Slot(slot),
                 show,
             } => {
                 if let Some(r) = self.by_slot.get(&slot) {
@@ -162,7 +162,7 @@ impl Others {
                         .entity(r.entity)
                         .queue(move |mut entity: EntityWorldMut<'_>| {
                             if let Some(mut shown) = entity.get_mut::<UnitShow>() {
-                                told(&mut shown, show);
+                                apply_show(&mut shown, show);
                             }
                         });
                 }
@@ -171,7 +171,9 @@ impl Others {
             | Record::Granted { .. }
             | Record::Place { .. }
             | Record::Game { .. }
-            | Record::Show { slot: None, .. } => {}
+            | Record::Show {
+                whose: Whose::Own, ..
+            } => {}
         }
     }
 
@@ -215,8 +217,7 @@ impl Others {
     }
 }
 
-/// What a body is told to show, as its driver takes it.
-pub fn told(shown: &mut UnitShow, show: Show) {
+pub fn apply_show(shown: &mut UnitShow, show: Show) {
     match show {
         Show::Play(anim) => shown.play = Some(anim),
         Show::Hold(pose) => shown.pose = pose,

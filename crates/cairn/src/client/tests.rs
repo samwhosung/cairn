@@ -248,11 +248,9 @@ const DEATH: u16 = 1;
 const DEAD: u16 = 6;
 const ATTACK_UNARMED: u16 = 16;
 
-/// Melee where one blow kills and the dead rise after three seconds, served on a free port to two
-/// players standing three yards apart, face to face.
 fn one_blow_melee() -> server::Config {
     let over = game::KnobsFile::parse(
-        "damage_min = 100\ndamage_max = 100\nrespawn_s = 3\n",
+        "health = 100\ndamage_min = 100\ndamage_max = 100\nrespawn_s = 3\n",
         "one blow",
     )
     .expect("knobs");

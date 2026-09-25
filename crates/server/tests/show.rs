@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use game::{Anim, Delivery, Game, Id, Kind, Letter, Out, World};
-use protocol::{Appearance, Hello, LEN_BYTES, Record, ServerMessage, Show, VERSION};
+use protocol::{Appearance, Hello, LEN_BYTES, Record, ServerMessage, Show, VERSION, Whose};
 use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 
 const SWING: u32 = 1;
@@ -57,7 +57,6 @@ impl Kind<Mime> for Player {
     }
 }
 
-/// A body the client was shown something of: another by id, or its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum On {
     Other(u32),
@@ -70,6 +69,13 @@ struct Client {
 }
 
 impl Client {
+    fn on(&self, whose: Whose) -> On {
+        match whose {
+            Whose::Slot(slot) => On::Other(self.slots[&slot]),
+            Whose::Own => On::Own,
+        }
+    }
+
     fn shown(&mut self) -> Vec<(On, Show)> {
         let mut got = Vec::new();
         while let Some(frame) = self.link.next_frame() {
@@ -81,10 +87,7 @@ impl Client {
                     Record::Appear { slot, id, .. } => {
                         self.slots.insert(slot, id);
                     }
-                    Record::Show { slot, show } => {
-                        let on = slot.map_or(On::Own, |s| On::Other(self.slots[&s]));
-                        got.push((on, show));
-                    }
+                    Record::Show { whose, show } => got.push((self.on(whose), show)),
                     _ => {}
                 }
             }
@@ -149,10 +152,7 @@ fn a_body_is_shown_to_whoever_sees_it_and_its_player_and_a_pose_comes_with_the_a
             let played = stepper.played_to(id);
             let told: Vec<(On, Show)> = played
                 .iter()
-                .map(|&(slot, anim)| {
-                    let on = slot.map_or(On::Own, |s| On::Other(clients[id as usize].slots[&s]));
-                    (on, Show::Play(anim))
-                })
+                .map(|&(whose, anim)| (clients[id as usize].on(whose), Show::Play(anim)))
                 .collect();
             let plays: Vec<(On, Show)> = seen[seen.len() - 1][id as usize]
                 .iter()

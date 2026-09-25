@@ -2,18 +2,17 @@ use std::collections::BTreeMap;
 
 use std::num::NonZeroU64;
 
-use protocol::{LEN_BYTES, Record, ServerMessage, Show};
+use protocol::{LEN_BYTES, Record, ServerMessage, Show, Whose};
 use server::InView;
 
-/// Which of what it is shown a bot drops: a control that the checks of it can fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Nth(pub NonZeroU64);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Drops {
-    /// The nth game state.
-    pub state: Option<NonZeroU64>,
-    /// The nth animation played once.
-    pub played: Option<NonZeroU64>,
-    /// The nth pose held or let go.
-    pub held: Option<NonZeroU64>,
+    pub state: Option<Nth>,
+    pub play: Option<Nth>,
+    pub hold: Option<Nth>,
 }
 
 #[derive(Default)]
@@ -23,14 +22,12 @@ struct Held {
     pose: Option<u16>,
 }
 
-/// A bot's model of what the server shows it: the game's state of each entity in view, the pose
-/// each body holds and its own, and the animations played in the latest batch.
 #[derive(Default)]
 pub struct Shown {
     by_slot: BTreeMap<u16, Held>,
     own_pose: Option<u16>,
     tick: Option<u32>,
-    played: Vec<(Option<u16>, u16)>,
+    latest_plays: Vec<(Whose, u16)>,
     told: [u64; 3],
     drops: Drops,
 }
@@ -52,7 +49,7 @@ impl Shown {
             return;
         };
         self.tick = Some(batch.tick);
-        self.played.clear();
+        self.latest_plays.clear();
         for record in batch.flatten() {
             match record {
                 Record::Appear { slot, id, .. } => {
@@ -76,23 +73,23 @@ impl Shown {
                     }
                 }
                 Record::Show {
-                    slot,
+                    whose,
                     show: Show::Play(anim),
                 } => {
                     if !self.dropped(PLAYED) {
-                        self.played.push((slot, anim));
+                        self.latest_plays.push((whose, anim));
                     }
                 }
                 Record::Show {
-                    slot,
+                    whose,
                     show: Show::Hold(pose),
                 } => {
                     if self.dropped(HELD) {
                         continue;
                     }
-                    match slot {
-                        None => self.own_pose = pose,
-                        Some(slot) => {
+                    match whose {
+                        Whose::Own => self.own_pose = pose,
+                        Whose::Slot(slot) => {
                             if let Some(held) = self.by_slot.get_mut(&slot) {
                                 held.pose = pose;
                             }
@@ -106,23 +103,24 @@ impl Shown {
 
     fn dropped(&mut self, what: usize) -> bool {
         self.told[what] += 1;
-        let drop = [self.drops.state, self.drops.played, self.drops.held][what];
-        drop.is_some_and(|d| d.get() == self.told[what])
+        let drop = [self.drops.state, self.drops.play, self.drops.hold][what];
+        drop.is_some_and(|Nth(n)| n.get() == self.told[what])
     }
 
-    /// How many animations played once, and how many poses held or let go, it was told.
-    pub fn told(&self) -> (u64, u64) {
-        (self.told[PLAYED], self.told[HELD])
+    pub fn plays_told(&self) -> u64 {
+        self.told[PLAYED]
     }
 
-    /// Where this model parts from what the server shows after `tick`: the entities in view and
-    /// their state and pose, the bot's own pose, and each animation played in the tick, by slot.
-    pub fn differs(
+    pub fn poses_told(&self) -> u64 {
+        self.told[HELD]
+    }
+
+    pub fn first_difference(
         &self,
         tick: u32,
         view: &[InView<'_>],
         own_pose: Option<u16>,
-        played: &[(Option<u16>, u16)],
+        played: &[(Whose, u16)],
     ) -> Option<String> {
         let mut ours = self.by_slot.iter();
         for &InView {
@@ -164,8 +162,8 @@ impl Shown {
                 self.own_pose
             ));
         }
-        let ours: &[(Option<u16>, u16)] = if self.tick == Some(tick) {
-            &self.played
+        let ours: &[(Whose, u16)] = if self.tick == Some(tick) {
+            &self.latest_plays
         } else {
             &[]
         };
@@ -174,7 +172,7 @@ impl Shown {
         (told != meant).then(|| {
             format!(
                 "its animation {at} of the tick was told as {told:?}, and the server played \
-                 {meant:?} (by slot, and anim)"
+                 {meant:?}"
             )
         })
     }

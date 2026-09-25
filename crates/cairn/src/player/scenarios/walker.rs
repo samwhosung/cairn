@@ -49,7 +49,6 @@ pub enum Through {
         name: String,
         look: CharacterLook,
     },
-    /// A server of its own run as this config says, which others may join.
     Hosts(Box<server::Config>),
 }
 

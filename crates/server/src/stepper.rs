@@ -1,6 +1,7 @@
 use std::io;
 
 use game::{Delivery, Hosted};
+use protocol::Whose;
 use rayon::ThreadPool;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -134,23 +135,23 @@ impl Stepper {
         self.sim.game()?.held(id).map(|a| a.0)
     }
 
-    /// The animations this tick played on the bodies in observer `id`'s view, by slot, and on its
-    /// own, with no slot, in the order they were played.
-    pub fn played_to(&self, id: u32) -> Vec<(Option<u16>, u16)> {
+    /// The animations this tick played on the bodies in observer `id`'s view and on its own, by
+    /// body and then in the order its rules played them.
+    pub fn played_to(&self, id: u32) -> Vec<(Whose, u16)> {
         let (Some(game), Some(view)) = (self.sim.game(), self.sim.in_view(id)) else {
             return Vec::new();
         };
-        let slot_of = |n: u32| {
+        let whose = |n: u32| {
             if n == id {
-                return Some(None);
+                return Some(Whose::Own);
             }
             let at = view.binary_search_by_key(&n, |&(_, v)| v).ok()?;
-            Some(Some(view[at].0))
+            Some(Whose::Slot(view[at].0))
         };
         game.shows()
             .played
             .iter()
-            .filter_map(|&(n, anim)| Some((slot_of(n)?, anim.0)))
+            .filter_map(|&(n, anim)| Some((whose(n)?, anim.0)))
             .collect()
     }
 

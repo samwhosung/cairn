@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::hosted::{BodyOrder, Delivery, Hosted, Stages, Took, Turn};
 use crate::out::{ACT, Out, PendingSpawn, ROUND};
 use crate::record::Record;
-use crate::show::{Poses, Show, Shows};
+use crate::show::{BodyShow, Poses, Shows};
 use crate::space::Space;
 use crate::table::{Pair, Rows};
 use crate::{Anim, Game, Id, Kind, Kinds, Letter, Spot, Table, Tick, World, canon};
@@ -72,7 +72,7 @@ struct Gathered<G: Game> {
     mail: Vec<(Id, Letter<G::Msg>)>,
     spawns: Vec<PendingSpawn>,
     orders: Vec<(u32, u8, BodyOrder)>,
-    shows: Vec<(u32, u8, Show)>,
+    shows: Vec<BodyShow>,
 }
 
 impl<G: Game> Gathered<G> {
