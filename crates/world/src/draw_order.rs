@@ -7,7 +7,8 @@ use bevy::prelude::*;
 use bevy::render::erased_render_asset::{
     ErasedRenderAsset, ExtractedAssets as NewMaterials, prepare_erased_assets,
 };
-use bevy::render::render_asset::prepare_assets;
+use bevy::render::mesh::RenderMesh;
+use bevy::render::render_asset::{ExtractedAssets as NewMeshes, prepare_assets};
 use bevy::render::texture::GpuImage;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
@@ -39,6 +40,22 @@ where
     }
 }
 
+/// Meshes take their places in the GPU's slabs in id order.
+pub(crate) struct MeshSlabsPlugin;
+
+impl Plugin for MeshSlabsPlugin {
+    fn build(&self, app: &mut App) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.add_systems(
+                Render,
+                slabs_in_id_order
+                    .after(RenderSystems::ExtractCommands)
+                    .before(RenderSystems::PrepareAssets),
+            );
+        }
+    }
+}
+
 /// Bevy numbers a frame's new material bind groups, and frees its removed ones for reuse, in a hash
 /// order that takes in the type's id, which changes with the build; on one opaque pipeline the
 /// higher-numbered bind group wins an exact depth tie. Bevy's unload, run again on `removed`, then
@@ -57,4 +74,11 @@ fn bind_groups_in_id_order<M: Material>(
     for id in removed {
         MeshMaterial3d::<M>::unload_asset(id, &mut unload);
     }
+}
+
+/// Bevy's mesh allocator opens and numbers slabs in the order a frame's new meshes were extracted,
+/// a hash order that takes in the type's id, which changes with the build; the opaque pass orders
+/// one material's batches by slab.
+fn slabs_in_id_order(mut extracted: ResMut<'_, NewMeshes<RenderMesh>>) {
+    extracted.extracted.sort_unstable_by_key(|(id, _)| *id);
 }

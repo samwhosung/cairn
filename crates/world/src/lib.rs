@@ -129,6 +129,7 @@ impl Plugin for WorldPlugin {
             liquid::LiquidPlugin,
         ))
         .add_plugins((
+            draw_order::MeshSlabsPlugin,
             effects::EffectsPlugin,
             particles::ParticlePlugin,
             ribbons::RibbonPlugin,
