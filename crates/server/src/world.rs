@@ -51,6 +51,7 @@ pub struct Body {
     pub clock_spent_ms: u32,
     pub correction_seq: u32,
     pub corrected: Option<Correction>,
+    pub teleported_at: Option<u32>,
     pub moved_at: u32,
     pub flags_changed_at: u32,
     pub refused: u32,
@@ -369,6 +370,9 @@ impl Judge<'_> {
                 }
                 body.movement = m;
                 body.moved_at = tick;
+                if matches!(act, Act::Teleport { .. }) {
+                    body.teleported_at = Some(tick);
+                }
             }
             Verdict::Stale => {
                 body.stale += 1;

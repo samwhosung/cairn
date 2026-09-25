@@ -135,6 +135,7 @@ enum Got {
     Vanish(u32),
     Move(u32),
     Correct(u32, Why),
+    Granted([f32; 3]),
 }
 
 struct Client {
@@ -172,6 +173,7 @@ impl Client {
                 | Record::Turn { slot, .. }
                 | Record::State { slot, .. } => Got::Move(self.slots[&slot]),
                 Record::Correct { seq, why, .. } => Got::Correct(seq, why),
+                Record::Granted { movement } => Got::Granted(movement.pos),
             });
         }
         got
@@ -589,11 +591,19 @@ fn the_host_is_put_where_it_asks_and_a_guest_that_asks_is_put_back_and_told_why(
         "{:?}",
         asked.refused
     );
-    let corrected = |got: Vec<Got>| got.into_iter().find(|g| matches!(g, Got::Correct(..)));
-    assert_eq!(corrected(clients[0].next_batch(1)), None);
+    let answer = |got: Vec<Got>| {
+        let answers = got
+            .into_iter()
+            .filter(|g| matches!(g, Got::Correct(..) | Got::Granted(_)));
+        answers.collect::<Vec<_>>()
+    };
     assert_eq!(
-        corrected(clients[1].next_batch(1)),
-        Some(Got::Correct(1, Why::Teleport))
+        answer(clients[0].next_batch(1)),
+        [Got::Granted([500.0, 0.0, 0.0])]
+    );
+    assert_eq!(
+        answer(clients[1].next_batch(1)),
+        [Got::Correct(1, Why::Teleport)]
     );
     let after = run(vec![
         claim(0, 2, 1500, 0, running(1500, [503.0, 0.0, 0.0])),

@@ -116,7 +116,7 @@ impl Client {
                     got.push(Got::Correct(seq, why));
                     continue;
                 }
-                Record::Turn { .. } => continue,
+                Record::Turn { .. } | Record::Granted { .. } => continue,
                 Record::Move { slot, pos, .. } => (slot, pos),
                 Record::State { slot, state } => (slot, state.pos),
             };

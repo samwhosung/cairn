@@ -14,15 +14,16 @@ const KIND_SHIFT: u16 = 14;
 const APPEAR: u8 = 1;
 const VANISH: u8 = 2;
 const CORRECT: u8 = 3;
+const GRANTED: u8 = 4;
 
 /// How many slots a client's view has: one for each entity in it.
 pub const SLOTS: u16 = 1 << KIND_SHIFT;
 
 /// One piece of a tick's news for one client. Each record opens with a little-endian `u16`. A
-/// move, a turn or a state has its kind in the top two bits; an appear, a vanish or a correct
-/// shares the fourth kind and names itself in the next byte. The low 14 bits are a slot, the
-/// client's own number for an entity in its view, given by the appear that brings the entity in
-/// and free again once it vanishes; a correct's is 0.
+/// move, a turn or a state has its kind in the top two bits; every other record shares the fourth
+/// kind and names itself in the next byte. The low 14 bits are a slot, the client's own number for
+/// an entity in its view, given by the appear that brings the entity in and free again once it
+/// vanishes; a correct's and a grant's are 0.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Record<'a> {
     /// An entity came into view and holds `slot` from now on.
@@ -52,6 +53,9 @@ pub enum Record<'a> {
         why: Why,
         movement: Movement,
     },
+    /// The server took every teleport of this client's up to `movement`'s clock that no correction
+    /// answered, and holds its mover here at the end of the tick that took them.
+    Granted { movement: Movement },
 }
 
 /// Why the server refused a claim or a teleport.
@@ -103,7 +107,7 @@ impl fmt::Display for Why {
 
 /// One tick's news for one client: its records, read one by one as the batch is iterated. The
 /// tick is the time of every record in it. Every entity's position in it reads right around where
-/// the server holds the client's own mover, which a correction, coming first, names.
+/// the server holds the client's own mover, which a correction or a grant, coming first, names.
 pub struct Batch<'a> {
     pub tick: u32,
     records: Reader<'a>,
@@ -147,6 +151,9 @@ impl<'a> Batch<'a> {
                 CORRECT => Record::Correct {
                     seq: r.u32()?,
                     why: Why::read(r)?,
+                    movement: Movement::read(r)?,
+                },
+                GRANTED => Record::Granted {
                     movement: Movement::read(r)?,
                 },
                 other => return Err(Error::UnknownRecord(other)),
@@ -223,6 +230,12 @@ pub fn write_correct(out: &mut Vec<u8>, seq: u32, why: Why, movement: &Movement)
     out.push(CORRECT);
     out.extend_from_slice(&seq.to_le_bytes());
     out.push(why as u8);
+    movement.write(out);
+}
+
+pub fn write_granted(out: &mut Vec<u8>, movement: &Movement) {
+    head(out, OTHER, 0);
+    out.push(GRANTED);
     movement.write(out);
 }
 
@@ -328,6 +341,17 @@ mod tests {
                 Record::Vanish { slot: 1 },
             ]
         );
+    }
+
+    #[test]
+    fn a_grant_comes_back_with_the_movement_it_holds() {
+        let landed = running([-9439.1, 51.2, 57.25], 1.0);
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 5);
+        write_granted(&mut bytes, &landed);
+        finish_frame(&mut bytes, start);
+        let (_, got) = records_of(&bytes);
+        assert_eq!(got, vec![Ok(Record::Granted { movement: landed })]);
     }
 
     #[test]

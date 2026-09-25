@@ -150,7 +150,7 @@ impl Others {
             Record::State { slot, state } => self.relay(commands, slot, at, |r| {
                 *r = Relayed::of(r.entity, &state, at.server_ms, at.read_around);
             }),
-            Record::Correct { .. } => {}
+            Record::Correct { .. } | Record::Granted { .. } => {}
         }
     }
 

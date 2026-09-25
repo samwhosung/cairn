@@ -331,7 +331,7 @@ impl Client {
                 Ok(Record::Vanish { slot }) => {
                     self.watching.remove(&slot);
                 }
-                Ok(Record::Turn { .. }) => {}
+                Ok(Record::Turn { .. } | Record::Granted { .. }) => {}
                 Err(_) => {
                     self.tally.decode_errors += 1;
                     break;

@@ -29,7 +29,7 @@ impl Pos {
 
 /// A [`Pos`] as a batch carries it: the low 16 bits of each axis. They name one position in every
 /// 512 yd across and 2,048 yd up or down, so a receiver reads them against a point it knows is
-/// within half that of the entity, such as its own position.
+/// within half that of the entity, such as where the server holds its own mover.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Wrapped(pub [u16; 3]);
 

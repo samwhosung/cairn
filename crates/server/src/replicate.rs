@@ -1,8 +1,8 @@
 use std::fmt;
 
 use protocol::{
-    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_move,
-    write_state, write_turn, write_vanish,
+    SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_granted,
+    write_move, write_state, write_turn, write_vanish,
 };
 
 use crate::grid::Grid;
@@ -272,6 +272,9 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     {
         write_correct(&mut out, me.correction_seq, c.why, &me.movement);
         built.corrections += 1;
+    }
+    if me.teleported_at == Some(tick) {
+        write_granted(&mut out, &me.movement);
     }
     let mut pass = Pass {
         me: me.movement.pos,

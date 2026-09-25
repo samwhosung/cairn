@@ -1,6 +1,8 @@
 //! The player's own movement, claimed to the server as the client's cadence says, the teleports
-//! it asks for, and the corrections the server answers a refused claim or teleport with.
+//! it asks for, and the server's answers, a correction or a grant, with where the server holds the
+//! player until they come.
 
+use std::collections::VecDeque;
 use std::f32::consts::TAU;
 use std::time::Duration;
 
@@ -17,6 +19,8 @@ pub struct Claims {
     ack: u32,
     /// When the arc under way began, seconds: a landing claims how long it lasted.
     arc_began: Option<f32>,
+    claimed: [f32; 3],
+    awaiting: Option<Awaiting>,
     pub corrections: u32,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub why_put_back: Option<Why>,
@@ -26,12 +30,19 @@ pub struct Claims {
     pub teleports: u32,
 }
 
+struct Awaiting {
+    held: [f32; 3],
+    clocks: VecDeque<u32>,
+}
+
 impl Claims {
     pub fn new(spawn: &Movement) -> Self {
         Self {
             cadence: Cadence::new(spawn),
             ack: 0,
             arc_began: None,
+            claimed: spawn.pos,
+            awaiting: None,
             corrections: 0,
             why_put_back: None,
             sent: 0,
@@ -48,6 +59,34 @@ impl Claims {
         self.cadence.report_now();
         self.corrections += 1;
         self.why_put_back = Some(why);
+        self.awaiting = None;
+        self.claimed = movement.pos;
+    }
+
+    pub fn granted(&mut self, movement: &Movement) {
+        if let Some(a) = &mut self.awaiting {
+            while a.clocks.front().is_some_and(|&t| t <= movement.time) {
+                a.clocks.pop_front();
+            }
+            a.held = movement.pos;
+        }
+        if self.awaiting.as_ref().is_some_and(|a| a.clocks.is_empty()) {
+            self.awaiting = None;
+        }
+    }
+
+    pub fn read_around(&self, stands: [f32; 3]) -> [f32; 3] {
+        self.awaiting.as_ref().map_or(stands, |a| a.held)
+    }
+
+    pub(super) fn teleported(&mut self, movement: &Movement) {
+        let held = self.claimed;
+        let awaiting = self.awaiting.get_or_insert_with(|| Awaiting {
+            held,
+            clocks: VecDeque::new(),
+        });
+        awaiting.clocks.push_back(movement.time);
+        self.claimed = movement.pos;
     }
 }
 
@@ -114,6 +153,7 @@ pub(super) fn claim(
     };
     if teleported {
         claims.cadence = Cadence::new(&movement);
+        claims.teleported(&movement);
         link.send(&ClientMessage::Teleport(claim));
         claims.teleports += 1;
         return;
@@ -121,6 +161,7 @@ pub(super) fn claim(
     for _ in 0..claims.cadence.claims(&movement) {
         link.send(&ClientMessage::Claim(claim));
         claims.sent += 1;
+        claims.claimed = movement.pos;
     }
 }
 

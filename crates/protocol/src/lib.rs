@@ -21,8 +21,8 @@ mod relay;
 
 pub use appearance::Appearance;
 pub use batch::{
-    Batch, Record, SLOTS, Why, begin_batch, write_appear, write_correct, write_move, write_state,
-    write_turn, write_vanish,
+    Batch, Record, SLOTS, Why, begin_batch, write_appear, write_correct, write_granted, write_move,
+    write_state, write_turn, write_vanish,
 };
 pub use cadence::{Cadence, HEARTBEAT_MS};
 pub use error::Error;
@@ -32,4 +32,4 @@ pub use movement::{Jump, Movement, flags};
 pub use pos::{Angle, Pos, STEPS_PER_YD, Wrapped};
 pub use relay::{Changed, Intro, Relay, State};
 
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;

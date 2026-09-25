@@ -257,9 +257,13 @@ fn receive(
             Ok(ServerMessage::Batch(batch)) => {
                 net.latest_tick = Some(batch.tick);
                 let tick_ms = net.welcomed.map_or(0, |w| u32::from(w.tick_ms));
+                let stands = bevy_to_wow(player.pos);
                 let mut at = BatchContext {
                     server_ms: batch.tick.wrapping_mul(tick_ms),
-                    read_around: bevy_to_wow(player.pos),
+                    read_around: net
+                        .claims
+                        .as_ref()
+                        .map_or(stands, |c| c.read_around(stands)),
                     arrived_real_ms: real_ms_at(&real, arrived),
                     now_real_ms: real.elapsed_secs_f64() * 1000.0,
                     game_secs: time.elapsed_secs(),
@@ -313,6 +317,12 @@ fn take_batch(
                     );
                 }
             }
+            Record::Granted { movement } => {
+                if let Some(claims) = claims.as_deref_mut() {
+                    claims.granted(&movement);
+                    at.read_around = movement.pos;
+                }
+            }
             record => others.take(commands, record, at),
         }
     }
@@ -350,7 +360,7 @@ fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {
 mod tests {
     use protocol::{
         Intro, LEN_BYTES, Movement, Relay, Why, begin_batch, finish_frame, write_appear,
-        write_correct, write_move,
+        write_correct, write_granted, write_move, write_vanish,
     };
 
     use super::*;
@@ -397,7 +407,7 @@ mod tests {
             let real_ms = f64::from(tick) * 50.0;
             let mut at = BatchContext {
                 server_ms: tick * 50,
-                read_around: bevy_to_wow(self.player.pos),
+                read_around: self.claims.read_around(bevy_to_wow(self.player.pos)),
                 arrived_real_ms: real_ms,
                 now_real_ms: real_ms,
                 game_secs: 0.0,
@@ -415,24 +425,27 @@ mod tests {
             world.flush();
         }
 
-        fn neighbour_east_of_where_it_stood(&mut self) -> f32 {
+        fn east_of_where_it_stood(&mut self, id: u32) -> Option<f32> {
             let world = self.app.world_mut();
-            let mut remotes = world.query::<&RemoteMotion>();
-            let [m] = remotes.iter(world).collect::<Vec<_>>()[..] else {
-                panic!("one neighbour");
-            };
-            m.wow_pos[0] - STOOD[0]
+            let mut remotes = world.query::<(&OtherPlayer, &RemoteMotion)>();
+            remotes
+                .iter(world)
+                .find(|(p, _)| p.id == id)
+                .map(|(_, m)| m.wow_pos[0] - STOOD[0])
+        }
+
+        fn appear(&mut self, tick: u32, slot: u16, id: u32, x_east: f32) {
+            self.take(tick, |out| {
+                let intro = Intro::new(id, "Neighbour", &Appearance::default());
+                write_appear(out, slot, &intro, &Relay::of(&at(x_east)));
+            });
         }
     }
 
     #[test]
     fn a_batch_is_read_after_its_correction_where_the_player_was_put_back() {
         let mut r = Reader::new();
-        r.take(20, |out| {
-            let intro = Intro::new(7, "Neighbour", &Appearance::default());
-            write_appear(out, NEIGHBOUR, &intro, &Relay::of(&at(10.0)));
-        });
-        assert!((r.neighbour_east_of_where_it_stood() - 10.0).abs() < 0.01);
+        r.appear(20, NEIGHBOUR, 7, 10.0);
         r.player.put(wow_to_bevy(at(500.0).pos), 0.0);
         r.take(21, |out| {
             write_correct(out, 1, Why::Teleport, &at(0.0));
@@ -440,10 +453,64 @@ mod tests {
         });
         let back = bevy_to_wow(r.player.pos);
         assert!((back[0] - STOOD[0]).abs() < 0.01, "put back to {back:?}");
-        let east = r.neighbour_east_of_where_it_stood();
+        let east = r.east_of_where_it_stood(7).expect("in view");
         assert!(
             (east - 11.0).abs() < 0.01,
             "the neighbour read {east} yd east"
+        );
+    }
+
+    #[test]
+    fn a_landing_is_read_from_where_the_player_stood_until_the_server_takes_it() {
+        let mut r = Reader::new();
+        r.appear(20, NEIGHBOUR, 7, 9.0);
+        let landing = Movement {
+            time: 1000,
+            ..at(500.0)
+        };
+        r.player.put(wow_to_bevy(landing.pos), 0.0);
+        r.claims.teleported(&landing);
+        r.take(21, |out| {
+            write_move(out, NEIGHBOUR, &Relay::of(&at(10.0)));
+        });
+        let east = r.east_of_where_it_stood(7).expect("in view");
+        assert!(
+            (east - 10.0).abs() < 0.01,
+            "the neighbour read {east} yd east"
+        );
+        r.take(22, |out| {
+            write_granted(out, &landing);
+            write_vanish(out, NEIGHBOUR);
+            let intro = Intro::new(8, "Beside the landing", &Appearance::default());
+            write_appear(out, NEIGHBOUR + 1, &intro, &Relay::of(&at(505.0)));
+        });
+        let east = r.east_of_where_it_stood(8).expect("in view");
+        assert!(
+            (east - 505.0).abs() < 0.01,
+            "the new neighbour read {east} yd east"
+        );
+        r.take(23, |out| {
+            write_move(out, NEIGHBOUR + 1, &Relay::of(&at(506.0)));
+        });
+        let east = r.east_of_where_it_stood(8).expect("in view");
+        assert!(
+            (east - 506.0).abs() < 0.01,
+            "once taken, read {east} yd east"
+        );
+        assert_eq!(r.east_of_where_it_stood(7), None);
+        let again = Movement {
+            time: 2000,
+            ..at(1000.0)
+        };
+        r.player.put(wow_to_bevy(again.pos), 0.0);
+        r.claims.teleported(&again);
+        r.take(24, |out| {
+            write_move(out, NEIGHBOUR + 1, &Relay::of(&at(507.0)));
+        });
+        let east = r.east_of_where_it_stood(8).expect("in view");
+        assert!(
+            (east - 507.0).abs() < 0.01,
+            "landing again, read {east} yd east"
         );
     }
 
