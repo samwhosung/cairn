@@ -57,7 +57,7 @@ impl Window {
 }
 
 enum TileState {
-    Loading,
+    Unspawned,
     Drawn(Vec<Entity>),
     Empty,
     Failed,
@@ -66,12 +66,20 @@ enum TileState {
 struct Tile {
     handle: Handle<AdtTile>,
     state: TileState,
+    requested: u64,
+}
+
+impl Tile {
+    fn in_flight(&self, adts: &Assets<AdtTile>) -> bool {
+        matches!(self.state, TileState::Unspawned) && adts.get(&self.handle).is_none()
+    }
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct Streamer {
     wdt: Option<Handle<WdtIndex>>,
     tiles: BTreeMap<(u32, u32), Tile>,
+    requests: u64,
 }
 
 impl Streamer {
@@ -135,18 +143,40 @@ pub(crate) fn stream_terrain(
         .tiles()
         .filter(|&(x, y)| index.has_tile(x, y))
         .collect();
+    let Streamer {
+        tiles, requests, ..
+    } = &mut *streamer;
     for &(tx, ty) in &wanted {
-        streamer.tiles.entry((tx, ty)).or_insert_with(|| Tile {
-            handle: server.load(format!(
-                "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
-            )),
-            state: TileState::Loading,
+        tiles.entry((tx, ty)).or_insert_with(|| {
+            *requests += 1;
+            Tile {
+                handle: server.load(format!(
+                    "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
+                )),
+                state: TileState::Unspawned,
+                requested: *requests,
+            }
         });
     }
-    for tile in streamer.tiles.values_mut() {
-        if !matches!(tile.state, TileState::Loading) {
-            continue;
+    for tile in tiles.values_mut() {
+        if tile.in_flight(&adts)
+            && let LoadState::Failed(e) = server.load_state(&tile.handle)
+        {
+            warn!("a terrain tile failed to load: {e}");
+            tile.state = TileState::Failed;
         }
+    }
+    let any_in_flight = tiles.values().any(|t| t.in_flight(&adts));
+    let mut unspawned: Vec<(u64, (u32, u32))> = tiles
+        .iter()
+        .filter(|(_, t)| !any_in_flight && matches!(t.state, TileState::Unspawned))
+        .map(|(&key, t)| (t.requested, key))
+        .collect();
+    unspawned.sort_unstable();
+    for (_, key) in unspawned {
+        let Some(tile) = tiles.get_mut(&key) else {
+            continue;
+        };
         if let Some(adt) = adts.get(&tile.handle) {
             let mut entities = spawn_adt_liquids(
                 &mut commands,
@@ -172,14 +202,11 @@ pub(crate) fn stream_terrain(
             } else {
                 TileState::Drawn(entities)
             };
-        } else if let LoadState::Failed(e) = server.load_state(&tile.handle) {
-            warn!("a terrain tile failed to load: {e}");
-            tile.state = TileState::Failed;
         }
     }
     residency.terrain = wanted
         .iter()
-        .all(|key| !matches!(streamer.tiles[key].state, TileState::Loading));
+        .all(|key| !matches!(tiles[key].state, TileState::Unspawned));
 }
 
 #[cfg(test)]
