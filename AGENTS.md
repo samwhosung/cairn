@@ -13,6 +13,9 @@ at run time.
 - A game is a crate in `games/`, written on the `game` crate alone, that rolls only through its
   `World`; the server, the client and the bots find it by name in `catalog`, and nothing else names
   it.
+- A game shows a body only in the install's animations, through `Out::play` and `Out::hold`; the
+  client draws those alike for every game and never reads a game's own state to decide what to
+  draw.
 - No game data is stored in this repo: no game file, and nothing computed from one, such as a
   palette or a baked table. What the tools need, they compute from the player's install. A
   constant the game's own code uses, such as a speed or a noise table, is code.
