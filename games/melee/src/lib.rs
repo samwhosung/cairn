@@ -1,6 +1,6 @@
 //! Melee, a game on cairn: every player fights every other hand to hand, and the dead rise at their spawn.
 
-use game::{Game, Id, Kind, Letter, Out, Tick, World};
+use game::{Game, Id, Kind, Letter, Out, Tick, World, anim};
 
 pub const SWING: u32 = 1;
 
@@ -106,6 +106,8 @@ impl Kind<Melee> for Fighter {
                     me.health = me.health.saturating_sub(damage);
                     if me.health == 0 {
                         die(me, letter.from, w, out);
+                    } else {
+                        out.play(anim::COMBAT_WOUND);
                     }
                 }
                 Msg::Killed => {
@@ -126,6 +128,7 @@ fn swing(id: Id, me: &mut Fighter, w: &World<'_, Melee>, out: &mut Out<Melee>) {
     let k = w.knobs();
     me.swing_pending = false;
     me.ready_at = w.after_ms(k.swing_ms);
+    out.play(anim::ATTACK_UNARMED);
     out.count("swings", 1);
     if let Some(target) = nearest_in_front(id, w) {
         let damage = w.range(id, DAMAGE_ROLL, k.damage_min, k.damage_max) * k.damage_scale;
@@ -164,6 +167,8 @@ fn die(me: &mut Fighter, killer: Id, w: &World<'_, Melee>, out: &mut Out<Melee>)
         out.wake_at(at);
     }
     out.root(true);
+    out.play(anim::DEATH);
+    out.hold(Some(anim::DEAD));
     out.send(killer, Msg::Killed);
     out.count("deaths", 1);
     out.count("down", 1);
@@ -186,6 +191,7 @@ fn rise(
     me.health = w.knobs().health;
     out.place(spawn);
     out.root(false);
+    out.hold(None);
     out.count("respawns", 1);
     out.count("down", -1);
 }

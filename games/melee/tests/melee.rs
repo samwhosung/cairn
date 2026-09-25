@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 use std::ops::Range;
 
-use game::{BodyOrder, Delivery, Engine, Hosted, Id, Knobs as _, Spot, Turn};
+use game::{BodyOrder, Delivery, Engine, Hosted, Id, Knobs as _, Shows, Spot, Turn, anim};
 use melee::{Fighter, Knobs, Life, Melee, SWING};
 
 const QUICK: &str = "swing_ms = 50\ndamage_min = 30\ndamage_max = 30\nrespawn_s = 1\n";
@@ -68,6 +68,44 @@ fn a_swing_kills_in_front_the_killer_is_credited_and_the_dead_rise_at_their_spaw
     assert_eq!(
         (counts["deaths"], counts["respawns"], counts["down"]),
         (1, 1, 0)
+    );
+}
+
+#[test]
+fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
+    let mut e = engine(&[QUICK]);
+    let bodies = [at(0.0, 0.0, 0.0), at(3.0, 0.0, PI)];
+    let mut shown: Vec<Shows> = Vec::new();
+    for tick in 0..24 {
+        fight(&mut e, &bodies, tick..tick + 1);
+        shown.push(e.shows().clone());
+    }
+    let wounded = Shows {
+        played: vec![(0, anim::ATTACK_UNARMED), (1, anim::COMBAT_WOUND)],
+        held: vec![],
+    };
+    assert_eq!(shown[..3], [wounded.clone(), wounded.clone(), wounded]);
+    let killed = Shows {
+        played: vec![(0, anim::ATTACK_UNARMED), (1, anim::DEATH)],
+        held: vec![(1, Some(anim::DEAD))],
+    };
+    assert_eq!(
+        shown[3], killed,
+        "the killing blow plays Death, not a wound"
+    );
+    let missed = Shows {
+        played: vec![(0, anim::ATTACK_UNARMED)],
+        held: vec![],
+    };
+    assert!(
+        shown[4..23].iter().all(|s| *s == missed),
+        "a swing at no one"
+    );
+    assert_eq!(e.held(1), None);
+    assert_eq!(
+        shown[23].held,
+        [(1, None)],
+        "the dead rise and let go of the pose"
     );
 }
 
