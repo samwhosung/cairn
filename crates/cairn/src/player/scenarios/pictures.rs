@@ -22,12 +22,13 @@ use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
-use super::walker::time_update;
+use super::alone::{self, Judged, Pace};
+use super::walker::{Through, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::flags::FALLING;
 use crate::player::state::Player;
-use crate::player::{Mode, PlayerBody, PlayerPlugin};
+use crate::player::{Mode, PlayerBody, PlayerPlugin, Teleported};
 use crate::shot::{Pipelines, headless_plugins, watch_pipelines, write_png};
 use crate::view::Pose;
 
@@ -71,16 +72,28 @@ const ON_THE_SAND_OF_THE_WESTFALL_COAST: Stand = Stand {
     heading: 0.0,
 };
 
+/// Its own server, like a [`super::walker::Walker`]'s, judges its walk when it drops.
 pub(super) struct Painter {
     pub(super) app: App,
     target: Handle<Image>,
     out: PathBuf,
+    pace: Pace,
+    unjudged: bool,
 }
 
 impl Painter {
     /// Headings in degrees: 0 north, 90 west.
     fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
-        let mut painter = Self::build([xy[0], xy[1], 500.0], heading_deg, look, None)?;
+        Self::standing(xy, heading_deg, look, Some(Through::ItsOwn(None)))
+    }
+
+    fn standing(
+        xy: [f32; 2],
+        heading_deg: f32,
+        look: CharacterLook,
+        through: Option<Through>,
+    ) -> Option<Self> {
+        let mut painter = Self::build([xy[0], xy[1], 500.0], heading_deg, look, through)?;
         painter.stand_on(xy);
         Some(painter)
     }
@@ -93,32 +106,26 @@ impl Painter {
         heading_deg: f32,
         look: CharacterLook,
     ) -> Option<Self> {
-        let hello = crate::net::hello("Painter".into(), &look);
-        let mut painter = Self::build(feet, heading_deg, look, Some(Net::connect(server, hello)))?;
-        painter.clock().pause();
-        let deadline = Instant::now() + LOAD_TIMEOUT;
-        let spawn = loop {
-            let welcome = painter
-                .app
-                .world()
-                .get_resource::<Net>()
-                .and_then(Net::welcome);
-            if let Some(w) = welcome {
-                break w.spawn.pos;
-            }
-            assert!(Instant::now() < deadline, "no welcome from the server");
-            painter.app.update();
-            std::thread::sleep(STEP);
-        };
+        let through = Through::Loopback(server, "Painter".into(), look.clone());
+        let mut painter = Self::build(feet, heading_deg, look, Some(through))?;
+        let spawn = painter
+            .app
+            .world()
+            .get_resource::<Net>()
+            .and_then(Net::welcome)
+            .expect("a welcome")
+            .spawn
+            .pos;
         painter.stand_on([spawn[0], spawn[1]]);
         Some(painter)
     }
 
+    /// Without `through`, no server at all.
     fn build(
         feet: [f32; 3],
         heading_deg: f32,
         look: CharacterLook,
-        net: Option<Net>,
+        through: Option<Through>,
     ) -> Option<Self> {
         let (Some(data), Some(out)) = (
             std::env::var_os("WOW_DATA"),
@@ -130,23 +137,31 @@ impl Painter {
         let install = Install::open(&PathBuf::from(data)).expect("open the install");
         let map = CurrentMap::find(&install.0, "Azeroth").expect("the map");
         let tables = CharacterTables::load(&install).expect("the character tables");
+        let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
+        let over_loopback = matches!(through, Some(Through::Loopback(..)));
+        let unjudged = matches!(through, Some(Through::ItsOwn(_)));
+        let net = through.map(|t| match t {
+            Through::ItsOwn(record) => alone::own_server(map.id, pose, &look, record),
+            Through::Loopback(addr, name, as_) => Net::connect(addr, crate::net::hello(name, &as_)),
+        });
         let mut app = App::new();
         world::register_source(&mut app, &install);
         app.add_plugins(headless_plugins())
             .insert_resource(map)
             .insert_resource(tables)
             .insert_resource(TimeOfDay { minute: 12 * 60 })
-            .insert_resource(time_update(net.is_some(), STEP))
+            .insert_resource(time_update(over_loopback, STEP))
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
-                    pose: Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0),
+                    pose,
                     mode: Mode::Walk,
                     look,
                 },
                 world::LoadersPlugin,
                 world::WorldPlugin,
             ));
+        let joins = net.is_some();
         if let Some(net) = net {
             app.insert_resource(net).add_plugins(NetPlugin);
         }
@@ -167,6 +182,8 @@ impl Painter {
             app,
             target,
             out: PathBuf::from(out),
+            pace: Pace::default(),
+            unjudged,
         };
         painter.app.update();
         let camera = painter
@@ -177,7 +194,29 @@ impl Painter {
             .expect("the follow camera");
         let view = RenderTarget::Image(painter.target.clone().into());
         painter.app.world_mut().entity_mut(camera).insert(view);
+        if joins {
+            painter.await_welcome();
+        }
+        if !over_loopback {
+            painter.pace.start();
+        }
         Some(painter)
+    }
+
+    fn await_welcome(&mut self) {
+        self.clock().pause();
+        let deadline = Instant::now() + LOAD_TIMEOUT;
+        while self
+            .app
+            .world()
+            .get_resource::<Net>()
+            .and_then(Net::welcome)
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "no welcome from the server");
+            self.app.update();
+            std::thread::sleep(STEP);
+        }
     }
 
     fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
@@ -208,6 +247,7 @@ impl Painter {
         player.horiz_vel = Vec3::ZERO;
         player.airborne_since = None;
         player.settling = true;
+        self.app.world_mut().write_message(Teleported);
         self.settle();
         self.clock().unpause();
     }
@@ -290,6 +330,7 @@ impl Painter {
 
     fn run(&mut self, frames: usize) {
         for _ in 0..frames {
+            self.pace.wait(STEP);
             self.app.update();
         }
     }
@@ -319,6 +360,18 @@ impl Painter {
         write_png(&image, &path).expect("the picture writes");
         eprintln!("wrote {}", path.display());
         self.clock().unpause();
+    }
+}
+
+impl Drop for Painter {
+    fn drop(&mut self) {
+        if self.unjudged && !std::thread::panicking() {
+            let judged = alone::judge(&mut self.app);
+            assert!(
+                judged.as_ref().is_some_and(Judged::honest),
+                "the painter's own server put it back: {judged:?}"
+            );
+        }
     }
 }
 
@@ -485,9 +538,32 @@ fn a_tauren_and_a_gnome_stand_where_the_human_does() {
     }
 }
 
+/// A bare `cairn`'s first view: the body settles where the window's camera looks, as nothing
+/// stands it anywhere.
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn the_walker_starts_where_a_bare_window_looks() {
+    let pose = crate::args::parse(Vec::new()).expect("a bare command").pose;
+    let (feet, heading) = (pose.target.to_array(), pose.heading.to_degrees());
+    let look = CharacterLook::naked(1, 0);
+    let Some(mut p) = Painter::build(feet, heading, look, Some(Through::ItsOwn(None))) else {
+        return;
+    };
+    p.clock().pause();
+    p.settle();
+    p.clock().unpause();
+    p.wait(2.0);
+    p.shoot("start-1-standing");
+    p.orbit(std::f32::consts::PI, 4.0);
+    p.wait(1.0);
+    p.shoot("start-2-face");
+}
+
+/// Each frame is held to a window's pace before it is timed.
 pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
     let mut costs: Vec<Duration> = (0..frames)
         .map(|_| {
+            p.pace.wait(STEP);
             let t = Instant::now();
             p.app.update();
             t.elapsed()
@@ -508,15 +584,26 @@ pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
 #[test]
 #[ignore = "a measurement, for a release build on a GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_frame_cost_of_goldshire() {
-    let Some(mut p) = Painter::new(GOLDSHIRE, EAST, CharacterLook::naked(1, 0)) else {
-        return;
-    };
-    p.wait(2.0);
-    let standing = frame_costs(&mut p, 600);
-    let rigs = rig_census(&mut p);
-    p.key(KeyCode::KeyW, ButtonState::Pressed);
-    let running = frame_costs(&mut p, 1200);
-    eprintln!("goldshire: standing {standing} with {rigs}; running {running}");
+    for round in 1..=2 {
+        for (served, through) in [
+            ("through its own server", Some(Through::ItsOwn(None))),
+            ("with no server", None),
+        ] {
+            let look = CharacterLook::naked(1, 0);
+            let Some(mut p) = Painter::standing(GOLDSHIRE, EAST, look, through) else {
+                return;
+            };
+            p.wait(2.0);
+            let standing = frame_costs(&mut p, 600);
+            let rigs = rig_census(&mut p);
+            p.key(KeyCode::KeyW, ButtonState::Pressed);
+            let running = frame_costs(&mut p, 1200);
+            eprintln!(
+                "goldshire {served}, round {round}: standing {standing} with {rigs}; running \
+                 {running}"
+            );
+        }
+    }
 }
 
 fn rig_census(p: &mut Painter) -> String {

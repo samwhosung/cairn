@@ -1,6 +1,7 @@
 //! The body walked through the real install, headless, one fixed step at a time, by the same
 //! plugins and keys the window uses. Every scenario skips without `WOW_DATA`.
 
+mod alone;
 mod heard;
 mod honest;
 mod liar;

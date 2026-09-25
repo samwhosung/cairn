@@ -1,4 +1,5 @@
-//! A headless client driven by scripted keys at a fixed step.
+//! A headless client driven by scripted keys at a fixed step, through its own server as a bare
+//! window is, or through another's.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -18,9 +19,10 @@ use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::{CharacterLook, CharacterTables};
 use world::{CurrentMap, Install, WorldCamera};
 
+use super::alone::{self, Judged, Pace};
 use crate::net::{Net, NetPlugin};
 use crate::player::state::Player;
-use crate::player::{Mode, PlayerPlugin};
+use crate::player::{Mode, PlayerPlugin, Teleported};
 use crate::view::Pose;
 
 #[derive(Clone, Copy, Debug)]
@@ -31,14 +33,26 @@ pub struct Frame {
     pub flags: u32,
 }
 
+/// Whether a walker's own server has yet to say what it made of the walk: dropping the walker
+/// then asks, and fails unless no claim was refused.
 pub struct Walker {
     pub app: App,
     step: Duration,
-    last_frame_began: Option<Instant>,
+    pace: Pace,
+    unjudged: bool,
 }
 
-pub fn time_update(joined: bool, step: Duration) -> TimeUpdateStrategy {
-    if joined {
+/// How a client reaches its server.
+pub enum Through {
+    /// Its own, in-process, as a bare window; `Some` names where it records its inputs.
+    ItsOwn(Option<PathBuf>),
+    /// Another's, over loopback, as `name` looking like `look`.
+    Loopback(SocketAddr, String, CharacterLook),
+}
+
+/// Over loopback a client keeps the wall clock, as a window does; alone, a fixed step.
+pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
+    if over_loopback {
         TimeUpdateStrategy::Automatic
     } else {
         TimeUpdateStrategy::ManualDuration(step)
@@ -77,7 +91,7 @@ pub fn ready(walkers: &mut [&mut Walker]) {
     round(walkers);
     round(walkers);
     for w in walkers.iter_mut() {
-        w.pace();
+        w.pace.start();
     }
 }
 
@@ -92,7 +106,7 @@ impl Walker {
     /// A client on `map` whose body starts with its feet at `feet` (WoW), facing `heading_deg`
     /// (0 north, 90 west), stepped at `hz`. `None` without `WOW_DATA`.
     pub fn new(map: &str, feet: [f32; 3], heading_deg: f32, hz: f32) -> Option<Self> {
-        Self::build(map, feet, heading_deg, hz, None, None)
+        Self::build(map, feet, heading_deg, hz, None, Through::ItsOwn(None))
     }
 
     pub fn dressed(
@@ -102,7 +116,26 @@ impl Walker {
         hz: f32,
         look: CharacterLook,
     ) -> Option<Self> {
-        Self::build(map, feet, heading_deg, hz, Some(look), None)
+        Self::build(
+            map,
+            feet,
+            heading_deg,
+            hz,
+            Some(look),
+            Through::ItsOwn(None),
+        )
+    }
+
+    /// [`Walker::new`] on Azeroth, its server writing every input to `log`.
+    pub fn recorded(feet: [f32; 3], heading_deg: f32, hz: f32, log: PathBuf) -> Option<Self> {
+        Self::build(
+            "Azeroth",
+            feet,
+            heading_deg,
+            hz,
+            None,
+            Through::ItsOwn(Some(log)),
+        )
     }
 
     /// A client on Azeroth that joins the server at `server` as `look` and stands where its
@@ -115,17 +148,22 @@ impl Walker {
 
     /// [`Walker::joined`], but not yet [`ready`].
     pub fn welcomed(server: SocketAddr, name: &str, look: CharacterLook, hz: f32) -> Option<Self> {
-        let hello = crate::net::hello(name.to_owned(), &look);
-        let net = Net::connect(server, hello);
-        Self::build("Azeroth", [0.0; 3], 0.0, hz, None, Some(net))
-    }
-
-    fn pace(&mut self) {
-        self.last_frame_began = Some(Instant::now());
+        let through = Through::Loopback(server, name.to_owned(), look);
+        let mut walker = Self::build("Azeroth", [0.0; 3], 0.0, hz, None, through)?;
+        walker.await_welcome();
+        Some(walker)
     }
 
     pub fn settled(&self) -> bool {
-        !self.player().settling && self.app.world().resource::<CollisionResidency>().settled()
+        self.net().is_none_or(|n| n.welcome().is_some())
+            && !self.player().settling
+            && self.app.world().resource::<CollisionResidency>().settled()
+    }
+
+    /// What the walker's own server made of its walk, which dropping it no longer asks.
+    pub fn judged(&mut self) -> Option<Judged> {
+        self.unjudged = false;
+        alone::judge(&mut self.app)
     }
 
     fn build(
@@ -134,7 +172,7 @@ impl Walker {
         heading_deg: f32,
         hz: f32,
         dressed: Option<CharacterLook>,
-        net: Option<Net>,
+        through: Through,
     ) -> Option<Self> {
         let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
             eprintln!("skipped: WOW_DATA is not set");
@@ -146,6 +184,13 @@ impl Walker {
             .then(|| CharacterTables::load(&install).expect("the character tables"));
         let current = CurrentMap::find(&install.0, map).expect("the map");
         let step = Duration::from_secs_f64(1.0 / f64::from(hz));
+        let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
+        let look = dressed.unwrap_or_else(|| CharacterLook::naked(1, 0));
+        let over_loopback = matches!(through, Through::Loopback(..));
+        let net = match through {
+            Through::ItsOwn(record) => alone::own_server(current.id, pose, &look, record),
+            Through::Loopback(addr, name, as_) => Net::connect(addr, crate::net::hello(name, &as_)),
+        };
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin, InputPlugin));
         world::register_source(&mut app, &install);
@@ -155,33 +200,31 @@ impl Walker {
             .init_asset::<StandardMaterial>()
             .add_plugins(world::LoadersPlugin)
             .insert_resource(current)
-            .insert_resource(time_update(net.is_some(), step))
+            .insert_resource(time_update(over_loopback, step))
             .add_plugins((
                 CollisionPlugin,
                 PlayerPlugin {
-                    pose: Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0),
+                    pose,
                     mode: Mode::Walk,
-                    look: dressed.unwrap_or_else(|| CharacterLook::naked(1, 0)),
+                    look,
                 },
-            ));
+            ))
+            .insert_resource(net)
+            .add_plugins(NetPlugin);
         if let Some(tables) = tables {
             app.insert_resource(tables);
-        }
-        let joining = net.is_some();
-        if let Some(net) = net {
-            app.insert_resource(net).add_plugins(NetPlugin);
         }
         app.finish();
         app.cleanup();
         let mut walker = Self {
             app,
             step,
-            last_frame_began: None,
+            pace: Pace::default(),
+            unjudged: !over_loopback,
         };
-        if joining {
-            walker.await_welcome();
-        } else {
+        if !over_loopback {
             walker.settle();
+            walker.pace.start();
         }
         Some(walker)
     }
@@ -213,7 +256,7 @@ impl Walker {
         Some(Self::dressed("Azeroth", [xy[0], xy[1], 500.0], heading_deg, hz, look)?.grounded(xy))
     }
 
-    fn grounded(mut self, xy: [f32; 2]) -> Self {
+    pub fn grounded(mut self, xy: [f32; 2]) -> Self {
         let ground = self
             .ground_under(xy[0], xy[1], 500.0)
             .expect("ground under the point");
@@ -233,7 +276,8 @@ impl Walker {
         bevy_to_wow(self.player().pos)
     }
 
-    /// Puts the feet at a WoW position, at rest, and settles there.
+    /// Puts the feet at a WoW position, at rest, asks the server to put them there too, and settles
+    /// there.
     pub fn teleport(&mut self, wow: Vec3) {
         let mut player = self.app.world_mut().resource_mut::<Player>();
         player.pos = wow_to_bevy(wow.to_array());
@@ -241,6 +285,7 @@ impl Walker {
         player.horiz_vel = Vec3::ZERO;
         player.airborne_since = None;
         player.settling = true;
+        self.app.world_mut().write_message(Teleported);
         self.settle();
     }
 
@@ -320,12 +365,7 @@ impl Walker {
     pub fn run(&mut self, n: usize) -> Vec<Frame> {
         (0..n)
             .map(|_| {
-                if let Some(last) = &mut self.last_frame_began {
-                    std::thread::sleep(
-                        (*last + self.step).saturating_duration_since(Instant::now()),
-                    );
-                    *last = Instant::now();
-                }
+                self.pace.wait(self.step);
                 self.app.update();
                 let p = self.player();
                 Frame {
@@ -429,5 +469,17 @@ impl Walker {
     pub fn remove(&mut self, e: Entity) {
         self.app.world_mut().despawn(e);
         self.app.update();
+    }
+}
+
+impl Drop for Walker {
+    fn drop(&mut self) {
+        if self.unjudged && !std::thread::panicking() {
+            let judged = self.judged();
+            assert!(
+                judged.as_ref().is_some_and(Judged::honest),
+                "the walker's own server put it back: {judged:?}"
+            );
+        }
     }
 }

@@ -1,12 +1,17 @@
-//! Landing from flight, which the server is asked for.
+//! The window alone through its own server: a landing granted there, refused on another's, and
+//! replayed.
 
 use bevy::input::keyboard::KeyCode;
 use protocol::Why;
+use server::{InputOrder, Replay, Replicate};
+use world::coords::wow_to_bevy;
 use world::unit::CharacterLook;
 
 use super::honest::{Stand, serve};
 use super::walker::Walker;
 use super::{MEADOW, horizontal};
+use crate::player::Mode;
+use crate::player::state::Player;
 
 const HZ: f32 = 60.0;
 /// Five hundred yards north of the meadow, over open ground.
@@ -32,6 +37,28 @@ fn run_on(w: &mut Walker) {
     w.run(90);
     w.release(KeyCode::KeyW);
     w.run(30);
+}
+
+#[test]
+fn alone_a_landing_five_hundred_yards_off_is_granted_and_walked_on_from() {
+    let Some(mut w) = Walker::on_ground(MEADOW, 0.0, HZ) else {
+        return;
+    };
+    let stood = w.wow();
+    let ground = w.fly_over(FAR);
+    w.land([FAR[0], FAR[1], ground + ABOVE]);
+    w.settle();
+    run_on(&mut w);
+    let end = w.wow();
+    let judged = w.judged().expect("its own server");
+    eprintln!(
+        "landed {:.1} yd from where it stood, ran on to {end:?}",
+        horizontal(stood, end)
+    );
+    assert!(judged.honest(), "{judged:?}");
+    assert_eq!(judged.teleports, 2, "stood on the meadow, then landed");
+    assert!(judged.claims > 4, "{judged:?}");
+    assert!(horizontal(end, [FAR[0], FAR[1], 0.0]) < 15.0, "{end:?}");
 }
 
 #[test]
@@ -66,4 +93,60 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
         summary.refused, refused,
         "only the landing, and nothing after it"
     );
+}
+
+/// The control: the landing as it was before it asked, the body put there and claimed from.
+#[test]
+fn a_body_moved_without_asking_is_put_back() {
+    let Some(mut w) = Walker::on_ground(MEADOW, 0.0, HZ) else {
+        return;
+    };
+    let stood = w.wow();
+    let ground = w.fly_over(FAR);
+    let world = w.app.world_mut();
+    *world.resource_mut::<Mode>() = Mode::Walk;
+    let mut player = world.resource_mut::<Player>();
+    player.pos = wow_to_bevy([FAR[0], FAR[1], ground + ABOVE]);
+    player.settling = true;
+    let back = put_back(&mut w);
+    run_on(&mut w);
+    let judged = w.judged().expect("its own server");
+    eprintln!(
+        "moved without asking: {judged:?}, put back {:.4} yd from where it stood",
+        horizontal(stood, back)
+    );
+    assert_eq!(judged.refused, [(Why::Speed, 1)]);
+    assert_eq!(judged.corrections, 1);
+    assert!(horizontal(stood, back) < 0.01, "{back:?} against {stood:?}");
+}
+
+#[test]
+fn a_solo_walk_with_a_landing_replays_to_the_same_world_at_every_tick() {
+    let dir = std::env::temp_dir().join(format!("cairn-solo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir");
+    let log = dir.join("inputs.log");
+    let Some(w) = Walker::recorded([MEADOW[0], MEADOW[1], 500.0], 0.0, HZ, log.clone()) else {
+        return;
+    };
+    let mut w = w.grounded(MEADOW);
+    let ground = w.fly_over(FAR);
+    w.land([FAR[0], FAR[1], ground + ABOVE]);
+    w.settle();
+    run_on(&mut w);
+    let judged = w.judged().expect("its own server");
+    assert!(judged.honest() && judged.teleports == 2, "{judged:?}");
+    let how = Replay {
+        threads: 1,
+        order: InputOrder::Canonical,
+        keep_refusals: true,
+        replicate: Replicate::No,
+    };
+    let replayed = server::replay(&log, &how).expect("a replay");
+    eprintln!(
+        "replayed {} ticks to {:016x}: first mismatch {:?}",
+        replayed.ticks, replayed.hash, replayed.first_mismatch
+    );
+    assert_eq!(replayed.first_mismatch, None);
+    assert!(replayed.ticks > 100 && replayed.refusals.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
