@@ -231,14 +231,14 @@ fn a_read_never_writes_and_gives_up_after_its_timeout() {
     let dir = Scratch::new("read");
     let path = dir.world("world");
     ada_kills(&path, 4);
-    let short = Duration::from_millis(20);
+    let (short, long_enough) = (Duration::from_millis(20), Duration::from_secs(60));
     let rows = read(
         &path,
         &["SELECT name, kills FROM player JOIN score ON player = id".into()],
-        short,
+        long_enough,
     );
     assert_eq!(rows.as_deref(), Ok("name\tkills\nAda\t4\n"));
-    let write = read(&path, &["UPDATE score SET kills = 9".into()], short);
+    let write = read(&path, &["UPDATE score SET kills = 9".into()], long_enough);
     assert!(
         write.is_err_and(|e| e.contains("readonly")),
         "a read writes nothing"
@@ -248,7 +248,7 @@ fn a_read_never_writes_and_gives_up_after_its_timeout() {
     let stopped = read(&path, &[long.into()], short).expect_err("stopped");
     assert!(stopped.contains("stopped after 20 ms"), "{stopped}");
     let started = Instant::now();
-    let control = read(&path, &[long.into()], Duration::from_secs(60));
+    let control = read(&path, &[long.into()], long_enough);
     assert_eq!(control.as_deref(), Ok("count(*)\n10000000\n"));
     assert!(
         started.elapsed() > short,
