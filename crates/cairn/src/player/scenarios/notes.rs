@@ -12,7 +12,8 @@ use world::unit::CharacterLook;
 use world::{CurrentMap, FOV_Y, Install, PlacedModel, Placements, WorldCamera};
 
 use super::INN_WALL;
-use super::pictures::{FACING_A_GOLDSHIRE_LAMPPOST, Painter, SIZE, STEP};
+use super::painter::{Painter, SIZE, STEP};
+use super::pictures::FACING_A_GOLDSHIRE_LAMPPOST;
 use crate::args::{self, Mode};
 use crate::note::{Notes, Pointer};
 use crate::player::camera::CameraControl;

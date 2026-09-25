@@ -14,10 +14,9 @@ use world::rig::ModelAnimations;
 use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
 use super::honest::{Stand, serve};
+use super::painter::{Painter, frame_costs, rig_census};
 use super::pair::Act;
-use super::pictures::{
-    EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS, Painter, frame_costs, rig_census,
-};
+use super::pictures::{EAST, GOLDSHIRE, ON_THE_SNOW_OUTSIDE_KHARANOS};
 use super::walker::Walker;
 use crate::net::{OtherPlayer, RemoteMotion};
 use crate::player::state::Player;

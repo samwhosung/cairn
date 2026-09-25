@@ -7,6 +7,7 @@ mod heard;
 mod honest;
 mod liar;
 mod notes;
+mod painter;
 mod pair;
 mod pictures;
 mod solo;

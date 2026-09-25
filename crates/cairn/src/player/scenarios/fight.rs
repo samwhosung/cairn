@@ -13,7 +13,8 @@ use server::Spawn;
 use world::rig::ModelAnimations;
 use world::unit::{CharacterLook, UnitShow};
 
-use super::pictures::{EAST, GOLDSHIRE, Painter};
+use super::painter::Painter;
+use super::pictures::{EAST, GOLDSHIRE};
 use super::together::{others_dressed_and_skinned, wait};
 use super::walker::{Walker, ready};
 use crate::net::{self, Net, OtherPlayer, RemoteMotion};
