@@ -6,9 +6,15 @@ an editor that agents drive, and a server that scales from one player to a crowd
 It uses the look, the movement and the assets of World of Warcraft 1.12.1, read at runtime from
 your own copy of the game. No game data is included here, and none ever will be.
 
-**Status:** just started. `WOW_DATA=<your install>/Data cargo run -p cairn` walks a window over the
-terrain as the client walks, swims and collides, lit by the hour under its sky and horizon;
-`-- --help` shows the controls, the maps, the cameras and the headless shot.
+It is not a game. cairn shows the world as WoW shows it and decides only how you move; combat,
+loot, quests and every other rule belong to the games built on it.
+
+**Status:** early. `WOW_DATA=<your install>/Data cargo run -p cairn` walks a character through the
+world as the client walks, swims and collides, lit by the hour under its sky and heard as the
+client hears it; `-- --help` shows the controls, the looks, the maps, the cameras and the
+headless shot. `--host` serves the world from the window for others to `--connect` to, and the
+`server` and `bots` crates serve it alone and walk a crowd against it. The editor, saving and a
+place for game rules are still to come.
 
 ## Working on it
 
