@@ -256,6 +256,11 @@ fn a_read_never_writes_and_gives_up_after_its_timeout() {
                 SELECT count(*) FROM c";
     let stopped = read(&path, &[long.into()], short).expect_err("stopped");
     assert!(stopped.contains("stopped after 20 ms"), "{stopped}");
+    let before_it_starts = read(&path, &[long.into()], Duration::ZERO);
+    assert!(
+        before_it_starts.is_err_and(|e| e.contains("stopped after 0 ms")),
+        "a timeout that runs out before the read starts still stops it"
+    );
     let started = Instant::now();
     let control = read(&path, &[long.into()], long_enough);
     assert_eq!(control.as_deref(), Ok("count(*)\n10000000\n"));

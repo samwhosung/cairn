@@ -1,10 +1,11 @@
 use std::fmt::Write;
 use std::path::Path;
-use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, ErrorCode, OpenFlags};
+
+const STEPS_BETWEEN_CHECKS: i32 = 1000;
 
 /// Runs each statement on the world's file at `path` without writing to it, each in a read of its
 /// own that gives up after `timeout`, as a live server keeps writing. Returns what they read: for
@@ -17,17 +18,11 @@ pub fn read(path: &Path, statements: &[String], timeout: Duration) -> Result<Str
     conn.pragma_update(None, "query_only", true).map_err(at)?;
     let mut out = String::new();
     for sql in statements {
-        let (stop, stopped) = mpsc::channel::<()>();
-        let interrupt = conn.get_interrupt_handle();
-        let watch = std::thread::spawn(move || {
-            if stopped.recv_timeout(timeout) == Err(mpsc::RecvTimeoutError::Timeout) {
-                interrupt.interrupt();
-            }
-        });
-        let result = rows(&conn, sql, &mut out);
-        let _ = stop.send(());
-        let _ = watch.join();
-        result.map_err(|e| match e.sqlite_error_code() {
+        let deadline = Instant::now() + timeout;
+        let past_it = move || Instant::now() >= deadline;
+        conn.progress_handler(STEPS_BETWEEN_CHECKS, Some(past_it))
+            .map_err(at)?;
+        rows(&conn, sql, &mut out).map_err(|e| match e.sqlite_error_code() {
             Some(ErrorCode::OperationInterrupted) => format!(
                 "{sql}: stopped after {} ms, the longest a read may take here",
                 timeout.as_millis()
