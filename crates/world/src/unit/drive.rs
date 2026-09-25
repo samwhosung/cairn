@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::time::Duration;
 
 use bevy::animation::graph::AnimationNodeIndex;
@@ -650,12 +651,16 @@ type Driven<'w, 's> = Query<
     ),
 >;
 
+/// Every body rolls from the one stream, so they take it in the order they stand; only bodies
+/// standing exactly together take it in the order the world keeps them.
 pub(crate) fn drive_units(
     time: Res<'_, Time>,
     mut rng: ResMut<'_, AnimRng>,
     mut units: Driven<'_, '_>,
 ) {
-    for (mut drv, anims, mut player, mut tr, motion, mut show, transform) in &mut units {
+    let mut units: Vec<_> = units.iter_mut().collect();
+    units.sort_by(|a, b| placed_before(a.6, b.6));
+    for (mut drv, anims, mut player, mut tr, motion, mut show, transform) in units {
         let motion = motion.copied().unwrap_or_default();
         drv.ease_wound(&mut player);
         let before = (drv.mode, drv.armed_gait, drv.upper_body_one_shot);
@@ -696,6 +701,19 @@ pub(crate) fn drive_units(
             drv.lay_wound(&tr, &mut player, anims, &mut rng, (id, &motion));
         }
     }
+}
+
+fn placed_before(a: &Transform, b: &Transform) -> Ordering {
+    let values = |t: &Transform| {
+        let (p, r) = (t.translation, t.rotation);
+        [p.x, p.y, p.z, r.x, r.y, r.z, r.w]
+    };
+    let (a, b) = (values(a), values(b));
+    a.iter()
+        .zip(&b)
+        .map(|(a, b)| a.total_cmp(b))
+        .find(|o| o.is_ne())
+        .unwrap_or(Ordering::Equal)
 }
 
 #[cfg(test)]

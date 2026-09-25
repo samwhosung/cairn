@@ -754,4 +754,5 @@ fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
 }
 
 mod idle;
+mod order;
 mod wound;
