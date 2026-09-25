@@ -14,7 +14,6 @@ use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::time::{Real, TimeUpdateStrategy};
 use bevy::window::{PrimaryWindow, WindowResolution};
 use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
@@ -103,13 +102,20 @@ impl Painter {
         Self::welcomed(through, feet, heading_deg, look)
     }
 
+    /// A painter hosting the server on `clock`, which judges it once it is dropped.
     pub(super) fn hosting(
-        cfg: server::Config,
+        clock: &Served,
         feet: [f32; 3],
         heading_deg: f32,
         look: CharacterLook,
     ) -> Option<Self> {
-        Self::welcomed(Through::Hosts(Box::new(cfg)), feet, heading_deg, look)
+        let through = Through::Clock {
+            clock: clock.clone(),
+            name: "Host".into(),
+            look: look.clone(),
+            host: true,
+        };
+        Self::welcomed(through, feet, heading_deg, look)
     }
 
     fn welcomed(
@@ -301,20 +307,6 @@ impl Painter {
 
     pub(super) fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
         self.app.world_mut().resource_mut::<Time<Virtual>>()
-    }
-
-    /// Bevy steps the real clock by the step too, and the other players' moves replay on it.
-    pub(super) fn keep_time_by_its_frames(&mut self) {
-        self.app
-            .insert_resource(TimeUpdateStrategy::ManualDuration(STEP));
-        self.pace.start();
-    }
-
-    pub(super) fn level_with_the_wall(&mut self) {
-        self.app
-            .world_mut()
-            .resource_mut::<Time<Real>>()
-            .update_with_instant(Instant::now());
     }
 
     pub(super) fn stand_on(&mut self, xy: [f32; 2]) {

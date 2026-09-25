@@ -44,9 +44,7 @@ pub struct Walker {
 
 pub enum Through {
     /// Its own server, as its host, on a clock of its own that its frames step.
-    ItsOwn {
-        record: Option<PathBuf>,
-    },
+    ItsOwn { record: Option<PathBuf> },
     /// Its own server on the wall clock, as a bare window runs one.
     ItsOwnInRealTime,
     Loopback {
@@ -54,7 +52,6 @@ pub enum Through {
         name: String,
         look: CharacterLook,
     },
-    Hosts(Box<server::Config>),
     /// The server on a test's clock, as its host or a guest.
     Clock {
         clock: Served,
@@ -69,10 +66,7 @@ impl Through {
     pub fn hosted(&self) -> bool {
         matches!(
             self,
-            Self::ItsOwn { .. }
-                | Self::ItsOwnInRealTime
-                | Self::Hosts(_)
-                | Self::Clock { host: true, .. }
+            Self::ItsOwn { .. } | Self::ItsOwnInRealTime | Self::Clock { host: true, .. }
         )
     }
 
@@ -96,7 +90,6 @@ impl Through {
             }
             Self::ItsOwnInRealTime => (alone::own_server(map, pose, look), None),
             Self::Loopback { addr, name, look } => (Net::connect(addr, hello(name, &look)), None),
-            Self::Hosts(cfg) => (hosts(*cfg, look), None),
             Self::Clock {
                 clock,
                 name,
@@ -208,24 +201,6 @@ impl Walker {
             None,
             Through::ItsOwn { record: Some(log) },
         )
-    }
-
-    /// A client on Azeroth that joins the server at `server` as `look`, stepped at `hz` and paced
-    /// to the wall clock, not yet [`ready`].
-    pub fn welcomed_over_loopback(
-        server: SocketAddr,
-        name: &str,
-        look: CharacterLook,
-        hz: f32,
-    ) -> Option<Self> {
-        let through = Through::Loopback {
-            addr: server,
-            name: name.to_owned(),
-            look,
-        };
-        let mut walker = Self::build("Azeroth", [0.0; 3], 0.0, hz, None, through)?;
-        walker.await_welcome();
-        Some(walker)
     }
 
     /// A client on Azeroth that joins the server on `clock` as a guest of `look` and stands where
@@ -586,10 +561,6 @@ impl Walker {
         self.app.world_mut().despawn(e);
         self.frame();
     }
-}
-
-pub fn hosts(cfg: server::Config, look: &CharacterLook) -> Net {
-    Net::host(cfg, hello("Host".into(), look)).expect("a server of its own")
 }
 
 impl Drop for Walker {

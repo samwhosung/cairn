@@ -1,8 +1,7 @@
+use std::cell::RefCell;
 use std::f32::consts::TAU;
-use std::net::SocketAddr;
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::rc::Rc;
+use std::time::Duration;
 
 use bevy::animation::transition::AnimationTransitions;
 use bevy::input::ButtonState;
@@ -13,15 +12,15 @@ use server::Spawn;
 use world::rig::ModelAnimations;
 use world::unit::{CharacterLook, UnitShow};
 
+use super::clock::{self, Served};
 use super::painter::Painter;
 use super::pictures::{EAST, GOLDSHIRE};
-use super::together::{others_dressed_and_skinned, wait};
+use super::together::arrive;
 use super::walker::{Walker, ready};
 use crate::net::{self, Net, OtherPlayer, RemoteMotion};
 use crate::player::PlayerBody;
 
 const HZ: f32 = 60.0;
-const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const RISE_TIMEOUT: Duration = Duration::from_secs(90);
 const THREE_BLOWS_KILL: &str = "health = 100\ndamage_min = 40\ndamage_max = 40\nrespawn_s = 30\n";
 const STAND: u16 = 0;
@@ -33,41 +32,26 @@ const READY_UNARMED: u16 = 25;
 const NORTH: f32 = 0.0;
 const WEST: f32 = 90.0;
 
-enum Cue {
-    Swing,
-    Done,
-}
-
+/// The other fighter's client, on the painter's clock: it swings once when told to.
 struct Fighter {
-    ready: mpsc::Receiver<()>,
-    cue: mpsc::Sender<Cue>,
+    w: Walker,
+    swing: bool,
 }
 
-fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
-    let (ready_tx, ready_rx) = mpsc::channel();
-    let (cue, cued) = mpsc::channel();
-    thread::spawn(move || {
-        let Some(mut w) = Walker::welcomed_over_loopback(server, "Fighter", look, HZ) else {
-            return;
-        };
+impl Fighter {
+    fn joined(clock: &Served, look: CharacterLook) -> Self {
+        let mut w = Walker::welcomed(clock, "Fighter", look).expect("the install");
         w.aim(WEST);
         ready(&mut [&mut w]);
-        let _ = ready_tx.send(());
-        loop {
-            match cued.try_recv() {
-                Ok(Cue::Swing) => {
-                    w.tap(KeyCode::Digit1);
-                }
-                Ok(Cue::Done) | Err(mpsc::TryRecvError::Disconnected) => return,
-                Err(mpsc::TryRecvError::Empty) => {
-                    w.run(1);
-                }
-            }
+        Self { w, swing: false }
+    }
+
+    fn frame(&mut self) {
+        if std::mem::take(&mut self.swing) {
+            self.w.tap(KeyCode::Digit1);
+        } else {
+            self.w.run(1);
         }
-    });
-    Fighter {
-        ready: ready_rx,
-        cue,
     }
 }
 
@@ -196,7 +180,7 @@ fn stands_ready(who: Option<Plays>) -> bool {
     })
 }
 
-fn meet(show: bool, three_yards_east: [f32; 3]) -> Option<(Painter, Fighter)> {
+fn meet(show: bool, three_yards_east: [f32; 3]) -> Option<(Painter, Rc<RefCell<Fighter>>)> {
     let (human, orc) = (CharacterLook::naked(1, 0), CharacterLook::naked(2, 0));
     let feet = [GOLDSHIRE[0], GOLDSHIRE[1], 57.0];
     let over = game::KnobsFile::parse(THREE_BLOWS_KILL, "the fight").expect("knobs");
@@ -212,24 +196,15 @@ fn meet(show: bool, three_yards_east: [f32; 3]) -> Option<(Painter, Fighter)> {
                 facing: NORTH.to_radians(),
             },
         ],
-        ..net::own_server(Some(0), 0, feet, EAST.to_radians())
+        ..net::own_server(None, 0, feet, EAST.to_radians())
     };
-    let mut p = Painter::hosting(cfg, feet, EAST, human)?;
-    let net = p.app.world_mut().resource_mut::<Net>();
-    let addr = net.hosted_addr().expect("the window hosts");
-    net.into_inner().faults().no_show = !show;
-    let other = fighter(addr, orc);
-    let deadline = Instant::now() + LOAD_TIMEOUT;
-    let mut settled = false;
-    p.clock().pause();
-    while !(settled && p.arrived() && others_dressed_and_skinned(&mut p)) {
-        assert!(Instant::now() < deadline, "the fighters never arrived");
-        settled |= other.ready.try_recv().is_ok();
-        wait(&mut p, 0.0);
-    }
-    p.clock().unpause();
-    p.keep_time_by_its_frames();
-    p.level_with_the_wall();
+    let clock = clock::serve(&cfg, clock::step_at(HZ));
+    let mut p = Painter::hosting(&clock, feet, EAST, human)?;
+    p.app.world_mut().resource_mut::<Net>().faults().no_show = !show;
+    let other = Rc::new(RefCell::new(Fighter::joined(&clock, orc)));
+    let beside = other.clone();
+    p.beside(move || beside.borrow_mut().frame());
+    arrive(&mut p);
     p.orbit(0.0, 6.0);
     p.wait(2.0);
     Some((p, other))
@@ -244,7 +219,7 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
         checked: Vec::new(),
     };
 
-    let _ = other.cue.send(Cue::Swing);
+    other.borrow_mut().swing = true;
     f.p.wait(0.4);
     f.shoot("1-the-other-swings", |p| {
         plays_clip(the_other(p), ATTACK_UNARMED)
@@ -278,7 +253,6 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
     });
 
     f.p.orbit(0.0, 6.0);
-    f.p.level_with_the_wall();
     let placed = |stands: Option<([f32; 3], f32, u32)>| {
         stands.is_some_and(|(pos, facing, fl)| {
             let turned = (facing - NORTH.to_radians()).rem_euclid(TAU);
@@ -286,9 +260,9 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
             fl & flags::ROOT == 0 && at < 0.05 && turned.min(TAU - turned) < 0.05
         })
     };
-    let risen_by = Instant::now() + RISE_TIMEOUT;
+    let risen_by = f.p.clock().elapsed() + RISE_TIMEOUT;
     while !placed(where_the_other_stands(&mut f.p)) {
-        assert!(Instant::now() < risen_by, "the other never rose");
+        assert!(f.p.clock().elapsed() < risen_by, "the other never rose");
         f.p.run(1);
     }
     f.p.wait(1.5);
@@ -311,7 +285,6 @@ fn fight(name: &'static str, show: bool) -> Option<Vec<Checked>> {
         let held = stands_ready(other) && stands_ready(own);
         (held, format!("{other:?}, its own {own:?}"))
     });
-    let _ = other.cue.send(Cue::Done);
     Some(f.checked)
 }
 
