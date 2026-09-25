@@ -17,6 +17,12 @@ const CORRECT: u8 = 3;
 const GRANTED: u8 = 4;
 const PLACE: u8 = 5;
 const GAME: u8 = 6;
+const SHOW: u8 = 7;
+const SHOW_OWN: u8 = 8;
+
+const PLAY: u8 = 0;
+const HOLD: u8 = 1;
+const LET_GO: u8 = 2;
 
 /// How many slots a client's view has: one for each entity in it.
 pub const SLOTS: u16 = 1 << KIND_SHIFT;
@@ -25,7 +31,7 @@ pub const SLOTS: u16 = 1 << KIND_SHIFT;
 /// move, a turn or a state has its kind in the top two bits; every other record shares the fourth
 /// kind and names itself in the next byte. The low 14 bits are a slot, the client's own number for
 /// an entity in its view, given by the appear that brings the entity in and free again once it
-/// vanishes; a correct's, a grant's and a place's are 0.
+/// vanishes; a correct's, a grant's, a place's and an own show's are 0.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Record<'a> {
     /// An entity came into view and holds `slot` from now on.
@@ -68,6 +74,29 @@ pub enum Record<'a> {
     /// The state of the entity in `slot` that the game running on the server shows, as that game
     /// encodes it; a client that does not know the game passes over it.
     Game { slot: u16, state: &'a [u8] },
+    /// What the game has the entity in `slot` show, or with no slot this client's own mover.
+    Show { slot: Option<u16>, show: Show },
+}
+
+/// What a game has a body show, in the install's `AnimationData.dbc` ids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Show {
+    /// The animation plays once, from its start.
+    Play(u16),
+    /// The body holds this pose until it is told another, or lets it go with `None`.
+    Hold(Option<u16>),
+}
+
+impl Show {
+    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+        let (how, anim) = (r.u8()?, r.u16()?);
+        match how {
+            PLAY => Ok(Self::Play(anim)),
+            HOLD => Ok(Self::Hold(Some(anim))),
+            LET_GO => Ok(Self::Hold(None)),
+            other => Err(Error::UnknownShow(other)),
+        }
+    }
 }
 
 /// Why the server refused a claim or a teleport.
@@ -181,6 +210,14 @@ impl<'a> Batch<'a> {
                         state: r.bytes(len)?,
                     }
                 }
+                SHOW => Record::Show {
+                    slot: Some(slot),
+                    show: Show::read(r)?,
+                },
+                SHOW_OWN => Record::Show {
+                    slot: None,
+                    show: Show::read(r)?,
+                },
                 other => return Err(Error::UnknownRecord(other)),
             },
         })
@@ -283,6 +320,19 @@ pub fn write_game(out: &mut Vec<u8>, slot: u16, state: &[u8]) -> usize {
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(state);
     state.len()
+}
+
+/// Appends what the entity in `slot`, or with no slot the client's own mover, shows.
+pub fn write_show(out: &mut Vec<u8>, slot: Option<u16>, show: Show) {
+    head(out, OTHER, slot.unwrap_or(0));
+    out.push(if slot.is_some() { SHOW } else { SHOW_OWN });
+    let (how, anim) = match show {
+        Show::Play(anim) => (PLAY, anim),
+        Show::Hold(Some(anim)) => (HOLD, anim),
+        Show::Hold(None) => (LET_GO, 0),
+    };
+    out.push(how);
+    out.extend_from_slice(&anim.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -438,6 +488,37 @@ mod tests {
         cut.pop();
         finish_frame(&mut cut, start);
         assert_eq!(records_of(&cut).1, vec![Err(Error::Truncated)]);
+    }
+
+    #[test]
+    fn what_a_body_shows_comes_back_for_a_slot_and_for_the_clients_own_mover() {
+        let shows = [
+            (Some(3), Show::Play(16)),
+            (Some(SLOTS - 1), Show::Hold(Some(6))),
+            (Some(0), Show::Hold(None)),
+            (None, Show::Play(9)),
+            (None, Show::Hold(Some(6))),
+            (None, Show::Hold(None)),
+        ];
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 5);
+        for (slot, show) in shows {
+            write_show(&mut bytes, slot, show);
+        }
+        let unknown = bytes.len() + 3;
+        write_show(&mut bytes, Some(1), Show::Play(1));
+        bytes[unknown] = LET_GO + 1;
+        finish_frame(&mut bytes, start);
+        let (_, got) = records_of(&bytes);
+        let mut want: Vec<Result<Record<'_>, Error>> = shows
+            .into_iter()
+            .map(|(slot, show)| Ok(Record::Show { slot, show }))
+            .collect();
+        want.push(Err(Error::UnknownShow(LET_GO + 1)));
+        assert_eq!(got, want);
+        let mut one = Vec::new();
+        write_show(&mut one, Some(2), Show::Play(16));
+        assert_eq!(one.len(), 6);
     }
 
     #[test]

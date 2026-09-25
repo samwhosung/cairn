@@ -153,7 +153,8 @@ impl Others {
             Record::Correct { .. }
             | Record::Granted { .. }
             | Record::Place { .. }
-            | Record::Game { .. } => {}
+            | Record::Game { .. }
+            | Record::Show { .. } => {}
         }
     }
 

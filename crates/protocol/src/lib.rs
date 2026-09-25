@@ -8,7 +8,7 @@
 //! teleport is a claim under a kind of its own, for a move no claim could make; the server
 //! decides who may make one. When the server runs a game, a client's action is a number the game
 //! gives meaning to, and a batch carries the game's state of each entity in view as the game
-//! encodes it.
+//! encodes it, and what the game has each body in view and the client's own show.
 
 mod appearance;
 mod batch;
@@ -23,8 +23,8 @@ mod relay;
 
 pub use appearance::Appearance;
 pub use batch::{
-    Batch, Record, SLOTS, Why, begin_batch, write_appear, write_correct, write_game, write_granted,
-    write_move, write_place, write_state, write_turn, write_vanish,
+    Batch, Record, SLOTS, Show, Why, begin_batch, write_appear, write_correct, write_game,
+    write_granted, write_move, write_place, write_show, write_state, write_turn, write_vanish,
 };
 pub use cadence::{Cadence, HEARTBEAT_MS};
 pub use error::Error;
@@ -34,4 +34,4 @@ pub use movement::{Jump, Movement, flags};
 pub use pos::{Angle, Pos, STEPS_PER_YD, Wrapped};
 pub use relay::{Changed, Intro, Relay, State};
 
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;

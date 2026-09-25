@@ -127,7 +127,10 @@ impl Client {
                         [movement.pos[0], movement.pos[1]],
                         movement.flags,
                     ),
-                    Record::Turn { .. } | Record::Vanish { .. } | Record::Granted { .. } => {
+                    Record::Turn { .. }
+                    | Record::Vanish { .. }
+                    | Record::Granted { .. }
+                    | Record::Show { .. } => {
                         continue;
                     }
                 });

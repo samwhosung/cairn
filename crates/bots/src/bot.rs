@@ -416,7 +416,7 @@ impl Reader {
                 Ok(Record::Place { seq, .. }) => {
                     let _ = self.corrections.send(seq);
                 }
-                Ok(Record::Granted { .. } | Record::Game { .. }) => {}
+                Ok(Record::Granted { .. } | Record::Game { .. } | Record::Show { .. }) => {}
                 Err(_) => self.unsent.decode_errors += 1,
             }
         }

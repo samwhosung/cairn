@@ -117,7 +117,9 @@ impl Client {
                     continue;
                 }
                 Record::Turn { .. } | Record::Granted { .. } => continue,
-                Record::Place { .. } | Record::Game { .. } => unreachable!("no game runs here"),
+                Record::Place { .. } | Record::Game { .. } | Record::Show { .. } => {
+                    unreachable!("no game runs here")
+                }
                 Record::Move { slot, pos, .. } => (slot, pos),
                 Record::State { slot, state } => (slot, state.pos),
             };
