@@ -1,0 +1,10 @@
+# Melee. A variant is an overlay of the keys it changes, and an unknown key is an error.
+
+health = 100          # a player's full health
+swing_ms = 2000       # after a swing, how long until the next may go
+reach = 5             # how near, in yards, a swing's target must stand...
+arc_deg = 180         # ...and within how wide an arc about the swinger's facing
+damage_min = 10       # a hit's damage is rolled between these...
+damage_max = 20
+damage_scale = 1      # ...and then multiplied by this
+respawn_s = 10        # death: back at the spawn after this long, at full health; `never` stays dead

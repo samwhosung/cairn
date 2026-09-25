@@ -32,11 +32,13 @@ gates enforce the rest.
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`bots`](crates/bots) — Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict
 - [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, or renders one shot of it to a PNG
+- [`catalog`](crates/catalog) — The games cairn carries, looked up by name for the server, the client and the bots
 - [`character`](crates/character) — World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
 - [`game`](crates/game) — The rule API a game on the server is written on: kinds of rows in typed tables, rules that read last tick's world and write only their own row, messages, timers, spawning and knobs, and the tick that runs them
 - [`light`](crates/light) — Reads World of Warcraft 1.12.1 lighting tables into fog, sun, sky and water colour by place, weather and time, and traces the sun and moon through the day
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
+- [`melee`](games/melee) — A game on the rule API: every player fights every other hand to hand, and the dead rise at their spawn
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
 - [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
 - [`protocol`](crates/protocol) — The native wire between cairn's client and server: frames, the messages each side sends, and their encoding
