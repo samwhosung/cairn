@@ -6,6 +6,7 @@ mod fight;
 mod heard;
 mod honest;
 mod liar;
+mod notes;
 mod pair;
 mod pictures;
 mod solo;

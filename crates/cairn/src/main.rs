@@ -10,6 +10,7 @@ mod client;
 mod fixture;
 mod fly;
 mod net;
+mod note;
 mod player;
 mod shot;
 mod view;
@@ -46,6 +47,9 @@ fn main() -> AppExit {
         && joining.world.is_none()
     {
         joining.world = server::default_world(joining.game.as_ref().map(|g| g.name.as_str()));
+    }
+    if matches!(args.mode, args::Mode::Window(_)) && args.notes.is_none() {
+        args.notes = server::data_dir().map(|dir| dir.join("notes"));
     }
     let install = match install() {
         Ok(install) => install,

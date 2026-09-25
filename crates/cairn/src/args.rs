@@ -15,7 +15,7 @@ const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
              [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
-             [--game NAME [--knobs FILE] [--overlay FILE]]
+             [--game NAME [--knobs FILE] [--overlay FILE]] [--notes DIR]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
          else can join it. --connect joins a running server, which places the player; --host
@@ -66,9 +66,15 @@ a held right button steers, both run. Num Lock runs on its own, keypad / walks. 
 Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, a held
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is if the server lets the player teleport, as the window's own server
-does; Ctrl+Shift+F again walks on from where the body stood.";
+does; Ctrl+Shift+F again walks on from where the body stood.
 
-const FLAGS: [&str; 26] = [
+Ctrl+Shift+N leaves a note about the spot under the pointer, or the middle of the window
+while a held button hides the pointer: the frame with the spot ringed, and the camera it
+was drawn from, what the spot shows and the commands that open the view again. Each note
+is a directory named by its time (UTC) in the user's data directory (on macOS
+~/Library/Application Support/cairn/notes), or in --notes DIR.";
+
+const FLAGS: [&str; 27] = [
     "age",
     "at",
     "az",
@@ -86,6 +92,7 @@ const FLAGS: [&str; 26] = [
     "look",
     "map",
     "name",
+    "notes",
     "out",
     "overlay",
     "race",
@@ -120,6 +127,8 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
+    /// Where the window's notes go; the binary gives the default.
+    pub notes: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -264,6 +273,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, shot)?;
+    let notes = given.remove("notes").map(PathBuf::from);
+    if shot && notes.is_some() {
+        return Err("--notes is for the window".into());
+    }
     let mode = match out {
         Some(path) => {
             shot_joins_nothing(&given, host)?;
@@ -283,6 +296,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         display,
         world_age,
         look,
+        notes,
     })
 }
 

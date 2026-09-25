@@ -26,6 +26,7 @@ use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 use super::alone::{self, Pace};
 use super::walker::{Through, hosts, time_update};
 use crate::net::{Net, NetPlugin};
+use crate::note::NotePlugin;
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::flags::FALLING;
 use crate::player::state::Player;
@@ -33,8 +34,8 @@ use crate::player::{Mode, PlayerBody, PlayerPlugin, Teleported};
 use crate::shot::{Pipelines, headless_plugins, watch_pipelines, write_png};
 use crate::view::Pose;
 
-const STEP: Duration = Duration::from_nanos(16_666_667);
-const SIZE: UVec2 = UVec2::new(1280, 720);
+pub(super) const STEP: Duration = Duration::from_nanos(16_666_667);
+pub(super) const SIZE: UVec2 = UVec2::new(1280, 720);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const FRAMES_TO_REACH_THE_IMAGE: usize = 3;
 
@@ -49,7 +50,7 @@ pub(super) struct Stand {
     pub(super) heading: f32,
 }
 
-const FACING_A_GOLDSHIRE_LAMPPOST: Stand = Stand {
+pub(super) const FACING_A_GOLDSHIRE_LAMPPOST: Stand = Stand {
     xy: [-9433.0, 44.0],
     heading: 215.0,
 };
@@ -85,7 +86,7 @@ pub(super) struct Painter {
 
 impl Painter {
     /// Headings in degrees: 0 north, 90 west.
-    fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
+    pub(super) fn new(xy: [f32; 2], heading_deg: f32, look: CharacterLook) -> Option<Self> {
         Self::standing(
             xy,
             heading_deg,
@@ -191,6 +192,9 @@ impl Painter {
                 },
                 world::LoadersPlugin,
                 world::WorldPlugin,
+                NotePlugin {
+                    dir: Some(PathBuf::from(&out).join("notes")),
+                },
             ));
         let joins = net.is_some();
         if let Some(net) = net {
@@ -378,6 +382,14 @@ impl Painter {
             self.pace.wait(STEP);
             self.app.update();
         }
+    }
+
+    /// One frame at the step, and what its update cost.
+    pub(super) fn timed_frame(&mut self) -> Duration {
+        self.pace.wait(STEP);
+        let t = Instant::now();
+        self.app.update();
+        t.elapsed()
     }
 
     pub(super) fn wait(&mut self, secs: f32) {
@@ -631,14 +643,7 @@ fn the_walker_starts_where_a_bare_window_looks() {
 }
 
 pub(super) fn frame_costs(p: &mut Painter, frames: usize) -> String {
-    let mut costs: Vec<Duration> = (0..frames)
-        .map(|_| {
-            p.pace.wait(STEP);
-            let t = Instant::now();
-            p.app.update();
-            t.elapsed()
-        })
-        .collect();
+    let mut costs: Vec<Duration> = (0..frames).map(|_| p.timed_frame()).collect();
     costs.sort();
     let at = |q: f32| costs[((costs.len() - 1) as f32 * q) as usize].as_secs_f64() * 1e3;
     let mean = costs.iter().sum::<Duration>().as_secs_f64() * 1e3 / costs.len() as f64;

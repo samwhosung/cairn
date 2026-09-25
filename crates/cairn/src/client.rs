@@ -4,7 +4,7 @@ use world::unit::{BodySkin, CharacterLook};
 use world::{CurrentMap, Install};
 
 use crate::args::{self, Args, Mode};
-use crate::{fixture, net, player, shot};
+use crate::{fixture, net, note, player, shot};
 
 pub fn assemble(
     app: &mut App,
@@ -39,6 +39,7 @@ pub fn assemble(
                     look: look.clone(),
                 },
                 sound_plugin(args.mute),
+                note::NotePlugin { dir: args.notes },
             ));
             let start = args.pose.target.to_array();
             net::join(app, &joining, &look, map.id, start, args.pose.heading)?;

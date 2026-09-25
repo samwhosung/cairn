@@ -166,6 +166,14 @@ fn a_window_keeps_its_own_world_where_it_is_told() {
 }
 
 #[test]
+fn the_window_leaves_its_notes_where_it_is_told() {
+    assert_eq!(parsed("").expect("parses").notes, None);
+    let notes = parsed("--notes a/b --fly").expect("parses").notes;
+    assert_eq!(notes, Some(PathBuf::from("a/b")));
+    assert!(parsed("shot --notes a/b --out a.png").is_err());
+}
+
+#[test]
 fn a_shot_ages_its_world_two_and_a_half_seconds_unless_told() {
     let age = |line: &str| parsed(line).expect("parses").world_age;
     assert_eq!(age("shot --out a.png"), Duration::from_millis(2500));
