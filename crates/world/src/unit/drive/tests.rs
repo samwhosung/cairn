@@ -616,6 +616,28 @@ fn a_one_shot_on_the_run_plays_above_the_lower_spine_and_the_run_goes_on_under_i
 }
 
 #[test]
+fn a_one_shot_told_again_on_the_run_starts_over_at_the_weight_it_had() {
+    let mut app = app();
+    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
+    swing_blends_in_over(&mut app, unit, 0.2);
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 50);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 1);
+    let swing = upper_body(&app, unit).expect("the swing, started over");
+    assert!(
+        (swing.weight - 8.0).abs() < 1e-6 && (swing.seek - 0.01).abs() < 1e-6,
+        "{swing:?}"
+    );
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(RUN), Mode::Gait)
+    );
+}
+
+#[test]
 fn standing_still_a_one_shot_takes_the_whole_body_and_one_on_the_run_cuts_it_short() {
     let mut app = app();
     let unit = dressed_fighter(&mut app, body_with_upper_nodes);

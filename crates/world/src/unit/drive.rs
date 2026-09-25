@@ -245,6 +245,10 @@ impl UnitDriver {
         repeat: RepeatAnimation,
         blend_secs: f32,
     ) {
+        if self.upper_body_one_shot == Some(node) {
+            player.start(node).set_repeat(repeat);
+            return;
+        }
         self.fade_upper_body(player, blend_secs);
         if let Some(fade) = &mut self.upper_body_fade
             && fade.fading_out == Some(node)
