@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use protocol::flags;
-use server::{Rules, View};
+use server::{Limits, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
 use crate::lie::{Clock, Lie, Malformed};
@@ -15,7 +15,7 @@ pub struct Spec {
     pub place: Place,
     pub seconds: f32,
     pub seed: u64,
-    pub rules: Rules,
+    pub limits: Limits,
     pub view: View,
     pub tick_ms: u16,
     pub delay_ms: u32,
@@ -80,7 +80,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         place: region::place("flat").ok_or_else(|| bad_place("flat"))?,
         seconds: DEFAULT_SECONDS,
         seed: 1,
-        rules: server.rules,
+        limits: server.limits,
         view: server.view,
         tick_ms: server.tick_ms,
         delay_ms: DEFAULT_DELAY_MS,
@@ -90,7 +90,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
     };
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
-    let (mut view_at, mut rules_at) = (None, None);
+    let (mut view_at, mut limits_at) = (None, None);
     for s in &text.settings {
         let fault = |what: String| Bad::at(&s.at, what);
         match s.key.as_str() {
@@ -102,12 +102,12 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         }
         match s.key.as_str() {
             "view.radius" | "view.grey" => view_at = Some(&s.at),
-            key if key.starts_with("rules.") => rules_at = Some(&s.at),
+            key if key.starts_with("limits.") => limits_at = Some(&s.at),
             _ => {}
         }
     }
-    if let Err(e) = spec.view.check(&spec.rules) {
-        let at = view_at.or(rules_at).cloned();
+    if let Err(e) = spec.view.check(&spec.limits) {
+        let at = view_at.or(limits_at).cloned();
         return Err(Bad {
             at,
             what: e.to_string(),
@@ -135,7 +135,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         let gait_speed = match d.group.gait {
             Gait::Run => RUN,
             Gait::Walk => WALK,
-            Gait::Swim => Rules::default().swim,
+            Gait::Swim => Limits::default().swim,
         };
         let clock = d.group.clock_at_start_ms;
         let lie = d.group.lie.map(|l| Lie {
@@ -198,8 +198,8 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
         "client.delay_ms" => spec.delay_ms = whole(v)?,
         "client.jitter_ms" => spec.jitter_ms = whole(v)?,
         key => {
-            let knob = if let Some(k) = key.strip_prefix("rules.") {
-                rules_knob(&mut spec.rules, k)
+            let knob = if let Some(k) = key.strip_prefix("limits.") {
+                limits_knob(&mut spec.limits, k)
             } else if let Some(k) = key.strip_prefix("view.") {
                 view_knob(&mut spec.view, k)
             } else {
@@ -230,8 +230,8 @@ impl Knob<'_> {
     }
 }
 
-/// The movement check's tunables, by the name after `rules.`.
-pub fn rules_knob<'a>(r: &'a mut Rules, name: &str) -> Option<Knob<'a>> {
+/// The movement check's tunables, by the name after `limits.`.
+pub fn limits_knob<'a>(r: &'a mut Limits, name: &str) -> Option<Knob<'a>> {
     Some(match name {
         "walk" => Knob::F32(&mut r.walk),
         "run" => Knob::F32(&mut r.run),
@@ -499,11 +499,11 @@ mod tests {
 
     #[test]
     fn every_tunable_of_the_movement_check_and_the_view_is_a_key() {
-        let mut rules = Rules::default();
-        let names = debug_field_names(&format!("{rules:?}"));
+        let mut limits = Limits::default();
+        let names = debug_field_names(&format!("{limits:?}"));
         assert!(names.len() >= 14, "{names:?}");
         for name in names {
-            assert!(rules_knob(&mut rules, &name).is_some(), "rules.{name}");
+            assert!(limits_knob(&mut limits, &name).is_some(), "limits.{name}");
         }
         let mut view = View::default();
         for name in debug_field_names(&format!("{view:?}")) {
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn keys_set_the_knobs_and_a_liar_gets_an_honest_twin() {
         let text = settings(&[
-            ("rules.run", "14"),
+            ("limits.run", "14"),
             ("view.near.every", "2"),
             ("place", "flat"),
             ("place.radius", "80"),
@@ -562,7 +562,7 @@ mod tests {
         ]);
         let s = spec(text, Path::new("x/fast.scenario")).expect("a spec");
         assert_eq!(s.name, "fast");
-        assert!((s.rules.run - 14.0).abs() < 1e-6);
+        assert!((s.limits.run - 14.0).abs() < 1e-6);
         assert_eq!(s.view.tiers[0].every, 2);
         assert!(
             matches!(s.place.region, Region::Disk { radius, .. } if (radius - 80.0).abs() < 1e-6)
@@ -588,8 +588,8 @@ mod tests {
                 .to_string()
         };
         assert_eq!(
-            fault(&[("seconds", "9"), ("rules.speed", "7")]),
-            "t.scenario:2: `rules.speed` is not a key a scenario sets"
+            fault(&[("seconds", "9"), ("limits.speed", "7")]),
+            "t.scenario:2: `limits.speed` is not a key a scenario sets"
         );
         assert_eq!(
             fault(&[("bots.a.count", "1"), ("bots.a.lie.fast", "2")]),

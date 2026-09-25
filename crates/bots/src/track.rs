@@ -251,7 +251,7 @@ pub fn plan(s: &Place, ground: &Ground, spawn: &Spawn, walk: &Walk) -> Track {
         s,
         ground,
         rng: XorShift64Star::new(walk.seed),
-        slope: server::Rules::default().climb,
+        slope: server::Limits::default().climb,
         run: walk.run_speed,
     };
     let mut legs = vec![Leg {

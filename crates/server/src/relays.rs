@@ -9,7 +9,7 @@ const ENTITIES_PER_TASK: usize = 256;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hot {
     pub pos: [f32; 3],
-    pub alive: bool,
+    pub present: bool,
     pub state_changed_at: u32,
     pub pos_changed_at: u32,
     pub facing_changed_at: u32,
@@ -55,7 +55,7 @@ impl Relays {
                         }
                         *r = fresh;
                         h.pos = b.movement.pos;
-                        h.alive = b.alive;
+                        h.present = b.present;
                     }
                 });
             });

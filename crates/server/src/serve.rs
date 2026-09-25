@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use crate::limits::Limits;
 use crate::log::{Header, LogWriter};
 use crate::net::Shared;
 use crate::replicate::View;
-use crate::rules::Rules;
 use crate::sim::{Batches, Sim};
 use crate::stats::{Summary, TickStats, process_cpu_ns};
 use crate::world::{InputOrder, Spawn};
@@ -23,7 +23,7 @@ pub struct Config {
     pub map: u32,
     /// Where players join, in turn; with none, everyone joins at the map's origin.
     pub spawns: Vec<Spawn>,
-    pub rules: Rules,
+    pub limits: Limits,
     pub view: View,
     /// Where to write every tick's inputs and world hash, for replay.
     pub record: Option<PathBuf>,
@@ -34,7 +34,7 @@ pub struct Config {
 impl Config {
     pub(crate) fn check(&self) -> io::Result<()> {
         self.view
-            .check(&self.rules)
+            .check(&self.limits)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
     }
 }
@@ -48,7 +48,7 @@ impl Default for Config {
             tick_ms: 50,
             map: 0,
             spawns: Vec::new(),
-            rules: Rules::default(),
+            limits: Limits::default(),
             view: View::default(),
             record: None,
             window: None,
@@ -106,7 +106,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
         .map_err(io::Error::other)?;
     let mut sim = Sim::new(
         cfg.spawns.clone(),
-        cfg.rules,
+        cfg.limits,
         cfg.view,
         cfg.map,
         cfg.tick_ms,
@@ -116,7 +116,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared) -> io::Result<Summary> {
             path,
             &Header {
                 tick_ms: cfg.tick_ms,
-                check: cfg.rules.check,
+                check: cfg.limits.check,
                 spawns: sim.world().spawns().to_vec(),
             },
         )?),

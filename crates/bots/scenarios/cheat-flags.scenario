@@ -1,10 +1,10 @@
 place = flat
 seconds = 30
-rules.run = 7
-rules.walk = 2.5
-rules.swim = 4.722
-rules.tolerance = 0.1
-rules.slack = 0.5
+limits.run = 7
+limits.walk = 2.5
+limits.swim = 4.722
+limits.tolerance = 0.1
+limits.slack = 0.5
 bots.walkers.count = 20
 
 bots.swim-on-land.count = 1

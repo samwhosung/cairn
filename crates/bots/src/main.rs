@@ -46,7 +46,7 @@ usage: bots [--addr HOST:PORT | --in-process] [--scenario goldshire|elwynn] [--c
 
 A scenario file is lines of `key = value` and `expect PATH OP VALUE`, `#` starting a comment:
 `base = FILE` lays the file over another; `place` (goldshire, elwynn or flat), `seconds`,
-`seed`, `tick_ms`, `client.delay_ms`, `client.jitter_ms`, `rules.*` and `view.*` set the world,
+`seed`, `tick_ms`, `client.delay_ms`, `client.jitter_ms`, `limits.*` and `view.*` set the world,
 and `bots.NAME.count` with the rest of `bots.NAME.*` a group of bots: its script, pace, spawn and
 lies. An expectation reads a number of the verdict: `NAME.FIELD` a group's, any other path the
 scenario's.
@@ -142,9 +142,9 @@ fn load(args: &[String]) -> Result<(), String> {
             spawns: region::spawns(&place, &ground, count, 1)?,
             tick_threads: num(&f, "server-threads", 1)?,
             io_threads: 1,
-            rules: server::Rules {
+            limits: server::Limits {
                 check: !f.contains_key("unchecked"),
-                ..server::Rules::default()
+                ..server::Limits::default()
             },
             ..server::Config::default()
         };

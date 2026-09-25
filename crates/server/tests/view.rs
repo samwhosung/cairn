@@ -1,6 +1,6 @@
 use std::io::ErrorKind;
 
-use server::{Config, InputOrder, PastReach, Rules, Stepper, View};
+use server::{Config, InputOrder, Limits, PastReach, Stepper, View};
 
 fn config(radius: f32, run: f32) -> Config {
     Config {
@@ -8,9 +8,9 @@ fn config(radius: f32, run: f32) -> Config {
             radius,
             ..View::default()
         },
-        rules: Rules {
+        limits: Limits {
             run,
-            ..Rules::default()
+            ..Limits::default()
         },
         tick_threads: 1,
         io_threads: 1,
@@ -20,14 +20,14 @@ fn config(radius: f32, run: f32) -> Config {
 
 #[test]
 fn a_view_past_what_the_wire_reaches_is_refused_by_name_and_the_same_within_it_runs() {
-    let run = Rules::default().run;
+    let run = Limits::default().run;
     for (radius, run, reach) in [(250.0, run, 242.0), (230.0, 14.0, 228.0)] {
         let past = PastReach {
             view_yd: radius + View::default().grey,
             reach_yd: reach,
         };
         let cfg = config(radius, run);
-        assert_eq!(cfg.view.check(&cfg.rules), Err(past));
+        assert_eq!(cfg.view.check(&cfg.limits), Err(past));
         let refused = server::start(cfg.clone())
             .err()
             .expect("a view past reach refused");
@@ -39,7 +39,7 @@ fn a_view_past_what_the_wire_reaches_is_refused_by_name_and_the_same_within_it_r
         assert_eq!(refused.to_string(), past.to_string());
 
         let within = config(reach - 1.0 - View::default().grey, run);
-        assert_eq!(within.view.check(&within.rules), Ok(()));
+        assert_eq!(within.view.check(&within.limits), Ok(()));
         server::start(within.clone())
             .expect("a view within reach")
             .stop()

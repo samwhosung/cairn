@@ -5,7 +5,7 @@ use crate::world::Body;
 
 /// The mover's speeds, yards per second, and how much slack the check of a claim allows.
 #[derive(Clone, Copy, Debug)]
-pub struct Rules {
+pub struct Limits {
     pub walk: f32,
     pub run: f32,
     pub run_back: f32,
@@ -35,7 +35,7 @@ pub struct Rules {
     pub check: bool,
 }
 
-impl Default for Rules {
+impl Default for Limits {
     fn default() -> Self {
         Self {
             walk: 2.5,
@@ -77,7 +77,7 @@ impl ClockPin {
     }
 }
 
-impl Rules {
+impl Limits {
     /// How fast a mover whose flags are `f` crosses the ground; an arc keeps its launch speed,
     /// which is at most a run.
     pub fn speed(&self, f: u32) -> f32 {
@@ -251,26 +251,32 @@ mod tests {
 
     #[test]
     fn a_run_within_its_speed_passes_and_a_faster_one_is_refused() {
-        let rules = Rules::default();
+        let limits = Limits::default();
         let body = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD);
         let honest = claim(1500, flags::FORWARD, [3.5, 0.0, 0.2]);
-        assert_eq!(rules.judge(&body, &honest, 1500), Verdict::Accept);
+        assert_eq!(limits.judge(&body, &honest, 1500), Verdict::Accept);
         let fast = claim(1500, flags::FORWARD, [7.0, 0.0, 0.0]);
-        assert_eq!(rules.judge(&body, &fast, 1500), Verdict::Refuse(Why::Speed));
+        assert_eq!(
+            limits.judge(&body, &fast, 1500),
+            Verdict::Refuse(Why::Speed)
+        );
         let walking = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD | flags::WALK_MODE);
         let still_walking = claim(1500, flags::FORWARD | flags::WALK_MODE, [3.5, 0.0, 0.0]);
         assert_eq!(
-            rules.judge(&walking, &still_walking, 1500),
+            limits.judge(&walking, &still_walking, 1500),
             Verdict::Refuse(Why::Speed)
         );
         let standing = last_at([0.0, 0.0, 0.0], 1000, 0);
         let started_late = claim(1200, flags::FORWARD, [1.4, 0.0, 0.0]);
-        assert_eq!(rules.judge(&standing, &started_late, 1200), Verdict::Accept);
+        assert_eq!(
+            limits.judge(&standing, &started_late, 1200),
+            Verdict::Accept
+        );
     }
 
     #[test]
     fn a_fall_down_a_steep_face_slides_across_but_a_walk_downhill_does_not() {
-        let rules = Rules::default();
+        let limits = Limits::default();
         let body = last_at(
             [-9084.98, 89.80, 109.80],
             1033,
@@ -283,11 +289,11 @@ mod tests {
                 ..claim(1516, 0, [-9087.70, 83.08, 98.60]).movement
             },
         };
-        assert_eq!(rules.judge(&body, &landed, 1516), Verdict::Accept);
+        assert_eq!(limits.judge(&body, &landed, 1516), Verdict::Accept);
         let body = last_at([0.0, 0.0, 10.0], 1000, flags::FORWARD);
         let downhill = claim(1500, flags::FORWARD, [7.24, 0.0, -1.2]);
         assert_eq!(
-            rules.judge(&body, &downhill, 1500),
+            limits.judge(&body, &downhill, 1500),
             Verdict::Refuse(Why::Speed)
         );
         let fell_on_the_flat = Claim {
@@ -298,47 +304,47 @@ mod tests {
             },
         };
         assert_eq!(
-            rules.judge(&body, &fell_on_the_flat, 1500),
+            limits.judge(&body, &fell_on_the_flat, 1500),
             Verdict::Refuse(Why::Speed)
         );
     }
 
     #[test]
     fn a_teleport_and_a_rewind_are_refused() {
-        let rules = Rules::default();
+        let limits = Limits::default();
         let body = last_at([0.0, 0.0, 0.0], 1000, 0);
         let teleport = claim(1500, 0, [200.0, 0.0, 0.0]);
         assert_eq!(
-            rules.judge(&body, &teleport, 1500),
+            limits.judge(&body, &teleport, 1500),
             Verdict::Refuse(Why::Speed)
         );
         let rewind = claim(900, 0, [0.0, 0.0, 0.0]);
         assert_eq!(
-            rules.judge(&body, &rewind, 1500),
+            limits.judge(&body, &rewind, 1500),
             Verdict::Refuse(Why::Clock)
         );
     }
 
     #[test]
     fn a_pin_made_late_catches_up_once_but_a_fast_clock_runs_out_of_budget() {
-        let rules = Rules::default();
+        let limits = Limits::default();
         let mut body = last_at([0.0, 0.0, 0.0], 1000, flags::FORWARD);
         body.clock = Some(ClockPin {
             client_ms: 1000,
             server_ms: 6000,
         });
         let prompt = claim(7000, flags::FORWARD, [40.0, 0.0, 0.0]);
-        assert_eq!(rules.judge(&body, &prompt, 7000), Verdict::Accept);
-        rules.pin_clock(&mut body, 7000, 7000);
+        assert_eq!(limits.judge(&body, &prompt, 7000), Verdict::Accept);
+        limits.pin_clock(&mut body, 7000, 7000);
         assert_eq!(body.clock.map(|p| p.lead_ms(8000, 8000)), Some(1000));
 
         let mut body = last_at([0.0, 0.0, 0.0], 0, flags::FORWARD);
         let refused_at = (1..200u32).find(|&k| {
             let (client, server) = (k * 600, k * 500);
             let c = claim(client, flags::FORWARD, [0.0, 0.0, 0.0]);
-            match rules.judge(&body, &c, server) {
+            match limits.judge(&body, &c, server) {
                 Verdict::Accept => {
-                    rules.pin_clock(&mut body, client, server);
+                    limits.pin_clock(&mut body, client, server);
                     body.movement.time = client;
                     false
                 }
@@ -354,17 +360,17 @@ mod tests {
 
     #[test]
     fn claims_before_the_latest_correction_are_stale_and_unchecked_claims_pass() {
-        let mut rules = Rules::default();
+        let mut limits = Limits::default();
         let mut body = last_at([0.0, 0.0, 0.0], 1000, 0);
         body.correction_seq = 2;
         let teleport = claim(1500, 0, [500.0, 0.0, 0.0]);
-        assert_eq!(rules.judge(&body, &teleport, 1500), Verdict::Stale);
+        assert_eq!(limits.judge(&body, &teleport, 1500), Verdict::Stale);
         body.correction_seq = 0;
-        rules.check = false;
-        assert_eq!(rules.judge(&body, &teleport, 1500), Verdict::Accept);
+        limits.check = false;
+        assert_eq!(limits.judge(&body, &teleport, 1500), Verdict::Accept);
         let nan = claim(1500, 0, [f32::NAN, 0.0, 0.0]);
         assert_eq!(
-            rules.judge(&body, &nan, 1500),
+            limits.judge(&body, &nan, 1500),
             Verdict::Refuse(Why::Malformed)
         );
     }

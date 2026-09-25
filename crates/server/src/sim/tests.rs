@@ -97,7 +97,7 @@ fn crowd_inputs(players: u32, ticks: u32) -> Vec<Vec<Stamped>> {
 
 fn hashes(threads: usize, order: InputOrder, inputs: &[Vec<Stamped>]) -> (Vec<u64>, u32) {
     let spawns = (0..60).map(|p| spawn(p as f32 * 3.0, 0.0)).collect();
-    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, Limits::default(), View::default(), 0, 50);
     let pool = pool(threads);
     let nobody = Shared::new();
     let mut refused = 0;
@@ -193,7 +193,7 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
         spawn(150.0, 0.0),
         spawn(60.0, 0.0),
     ];
-    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, Limits::default(), View::default(), 0, 50);
     let shared = Shared::new();
     let mut rx = Vec::new();
     for conn in 0..4 {
@@ -262,7 +262,7 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
 #[test]
 fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catches_up() {
     let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
-    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, Limits::default(), View::default(), 0, 50);
     let shared = Shared::new();
     let (slow, rx) = Outbox::channel();
     let mut rx = Client::new(rx);
@@ -314,7 +314,7 @@ fn a_client_that_falls_behind_gets_flag_changes_but_no_refreshes_until_it_catche
 #[test]
 fn a_client_the_server_gives_up_on_leaves_at_the_next_tick() {
     let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
-    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, Limits::default(), View::default(), 0, 50);
     let shared = Shared::new();
     let (outbox, rx) = Outbox::channel();
     let mut ada = Client::new(rx);
@@ -357,21 +357,21 @@ fn a_client_the_server_gives_up_on_leaves_at_the_next_tick() {
 
 #[test]
 fn a_body_put_out_of_reach_leaves_at_once_and_comes_where_it_lands_by_the_recheck() {
-    let unchecked = Rules {
+    let unchecked = Limits {
         check: false,
-        ..Rules::default()
+        ..Limits::default()
     };
     put_out_of_reach(unchecked, join(0), |time, to| claim(0, 1, time, 0, to));
 }
 
 #[test]
 fn a_host_that_lands_out_of_reach_leaves_its_guests_at_once_and_comes_where_it_lands() {
-    put_out_of_reach(Rules::default(), host_join(0), |time, to| {
+    put_out_of_reach(Limits::default(), host_join(0), |time, to| {
         teleport(0, 1, time, to)
     });
 }
 
-fn put_out_of_reach(rules: Rules, first: Stamped, put: impl Fn(u32, Movement) -> Stamped) {
+fn put_out_of_reach(limits: Limits, first: Stamped, put: impl Fn(u32, Movement) -> Stamped) {
     let spawns = vec![
         spawn(0.0, 0.0),
         spawn(-10.0, 0.0),
@@ -379,7 +379,7 @@ fn put_out_of_reach(rules: Rules, first: Stamped, put: impl Fn(u32, Movement) ->
         spawn(400.0, 5.0),
         spawn(395.0, -5.0),
     ];
-    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, limits, View::default(), 0, 50);
     let shared = Shared::new();
     let mut clients: Vec<Client> = (0..5)
         .map(|conn| {
@@ -451,12 +451,12 @@ fn put_out_of_reach(rules: Rules, first: Stamped, put: impl Fn(u32, Movement) ->
 
 #[test]
 fn a_body_put_out_of_reach_overhead_leaves_at_once_and_is_not_brought_back() {
-    let rules = Rules {
+    let limits = Limits {
         check: false,
-        ..Rules::default()
+        ..Limits::default()
     };
     let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
-    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, limits, View::default(), 0, 50);
     let shared = Shared::new();
     let (outbox, rx) = Outbox::channel();
     shared.hold_outbox(1, outbox);
@@ -495,11 +495,11 @@ fn a_body_put_out_of_reach_overhead_leaves_at_once_and_is_not_brought_back() {
 fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
     let xs = [0.0, 150.0, 20.0, 40.0, 60.0, 80.0, 160.0];
     let spawns = xs.iter().map(|&x| spawn(x, 0.0)).collect();
-    let rules = Rules {
+    let limits = Limits {
         check: false,
-        ..Rules::default()
+        ..Limits::default()
     };
-    let mut sim = Sim::new(spawns, rules, View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, limits, View::default(), 0, 50);
     let shared = Shared::new();
     let (outbox, rx) = Outbox::channel();
     shared.hold_outbox(0, outbox);
@@ -554,7 +554,7 @@ fn a_recheck_lets_go_of_the_far_and_brings_in_the_near_on_freed_slots() {
 #[test]
 fn the_host_is_put_where_it_asks_and_a_guest_that_asks_is_put_back_and_told_why() {
     let spawns = vec![spawn(0.0, 0.0), spawn(10.0, 0.0)];
-    let mut sim = Sim::new(spawns, Rules::default(), View::default(), 0, 50);
+    let mut sim = Sim::new(spawns, Limits::default(), View::default(), 0, 50);
     let shared = Shared::new();
     let mut clients: Vec<Client> = (0..2)
         .map(|conn| {

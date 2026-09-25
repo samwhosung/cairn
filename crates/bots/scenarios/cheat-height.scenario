@@ -1,8 +1,8 @@
 place = flat
 seconds = 30
-rules.climb = 1.2
-rules.rise = 2.7
-rules.fall = 60.148
+limits.climb = 1.2
+limits.rise = 2.7
+limits.fall = 60.148
 bots.walkers.count = 20
 
 bots.rise.count = 1
@@ -22,7 +22,7 @@ bots.under-100.lie.shift = 0 0 -100
 
 expect walkers.corrections == 0
 
-# A known hole: a claim may climb `rules.climb` yards for every yard of ground and `rules.rise`
+# A known hole: a claim may climb `limits.climb` yards for every yard of ground and `limits.rise`
 # more, with or without a jump, and the server holds no ground to fall to.
 expect rise.lies_refused == 0
 expect rise.past_honest_yd > 100

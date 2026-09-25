@@ -249,9 +249,9 @@ mod tests {
 
     #[test]
     fn an_overlay_replaces_its_bases_settings_and_expectations_and_keeps_their_order() {
-        let base = "# the base\nseconds = 60\nrules.run = 7\nexpect a.corrections > 0\nexpect claims > 1\n";
+        let base = "# the base\nseconds = 60\nlimits.run = 7\nexpect a.corrections > 0\nexpect claims > 1\n";
         let variant =
-            "base = base.scenario\nrules.run = 14 # faster\nname = v\nexpect a.corrections == 0\n";
+            "base = base.scenario\nlimits.run = 14 # faster\nname = v\nexpect a.corrections == 0\n";
         let files = [("s/base.scenario", base), ("s/variant.scenario", variant)];
         let text = read_all(&files, "s/variant.scenario").expect("a scenario");
         let settings: Vec<(&str, &str, usize)> = text
@@ -263,7 +263,7 @@ mod tests {
             settings,
             [
                 ("seconds", "60", 2),
-                ("rules.run", "14", 2),
+                ("limits.run", "14", 2),
                 ("name", "v", 3)
             ]
         );
@@ -279,7 +279,7 @@ mod tests {
             ("twice.scenario", "seed = 1\nseed = 2\n"),
             ("orphan.scenario", "base = missing.scenario\n"),
             ("own.scenario", "base = own.scenario\n"),
-            ("key.scenario", "seconds = 6\nRules.Run = 7\n"),
+            ("key.scenario", "seconds = 6\nLimits.Run = 7\n"),
         ];
         let fault = |path: &str| read_all(&files, path).expect_err(path).to_string();
         assert_eq!(
@@ -289,7 +289,7 @@ mod tests {
         assert!(fault("twice.scenario").starts_with("twice.scenario:2: `seed` again"));
         assert!(fault("orphan.scenario").starts_with("orphan.scenario:1: missing.scenario:"));
         assert!(fault("own.scenario").contains("its own base"));
-        assert!(fault("key.scenario").starts_with("key.scenario:2: `Rules.Run` is not a key"));
+        assert!(fault("key.scenario").starts_with("key.scenario:2: `Limits.Run` is not a key"));
     }
 
     #[test]

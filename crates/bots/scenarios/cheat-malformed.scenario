@@ -1,6 +1,6 @@
 place = flat
 seconds = 20
-rules.bound = 17066.666
+limits.bound = 17066.666
 bots.walkers.count = 20
 
 bots.nan.count = 1

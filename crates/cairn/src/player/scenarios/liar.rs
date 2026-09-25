@@ -6,7 +6,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, Rules, Spawn};
+use server::{Config, Limits, Spawn};
 use world::unit::CharacterLook;
 
 use super::MEADOW;
@@ -137,9 +137,9 @@ fn lie_beside(every: Duration, check: bool) -> Option<Seen> {
         tick_threads: 1,
         io_threads: 1,
         spawns: vec![spawn(0.0), spawn(3.0)],
-        rules: Rules {
+        limits: Limits {
             check,
-            ..Rules::default()
+            ..Limits::default()
         },
         ..Config::default()
     })

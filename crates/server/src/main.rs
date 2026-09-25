@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use server::{
-    Config, InputOrder, Refusal, Replay, Replicate, Rules, Spawn, Summary, Window, ground_between,
+    Config, InputOrder, Limits, Refusal, Replay, Replicate, Spawn, Summary, Window, ground_between,
 };
 
 const USAGE: &str = "\
@@ -102,9 +102,9 @@ fn serve(args: &[String]) -> Result<(), String> {
         tick_threads: num(&f, "threads", defaults.tick_threads)?,
         io_threads: num(&f, "io-threads", defaults.io_threads)?,
         spawns,
-        rules: Rules {
+        limits: Limits {
             check: !f.contains_key("unchecked"),
-            ..Rules::default()
+            ..Limits::default()
         },
         record: f.get("record").map(PathBuf::from),
         window,
@@ -152,9 +152,9 @@ fn replay(args: &[String]) -> Result<(), String> {
         },
     };
     let r = server::replay(Path::new(path), &how).map_err(|e| format!("{path}: {e}"))?;
-    let rules = Rules::default();
+    let limits = Limits::default();
     for refusal in &r.refusals {
-        println!("{}", refusal_line(refusal, &rules));
+        println!("{}", refusal_line(refusal, &limits));
     }
     let verdict = r
         .first_mismatch
@@ -171,7 +171,7 @@ fn replay(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn refusal_line(r: &Refusal, rules: &Rules) -> String {
+fn refusal_line(r: &Refusal, limits: &Limits) -> String {
     let at = |m: &server::Movement| {
         format!(
             "t={} flags={:#x} ({:.2}, {:.2}, {:.2})",
@@ -189,7 +189,7 @@ fn refusal_line(r: &Refusal, rules: &Rules) -> String {
         at(&r.claim),
         ground_between(&r.last, &r.claim),
         r.claim.time.saturating_sub(r.last.time),
-        rules.ground_allowed(&r.last, &r.claim),
+        limits.ground_allowed(&r.last, &r.claim),
     )
 }
 

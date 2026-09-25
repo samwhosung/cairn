@@ -2,7 +2,7 @@
 # landing the server grants, or a body put back at its spawn.
 place = flat
 seconds = 10
-rules.check = no
+limits.check = no
 view.aoi_every = 5
 
 bots.left.count = 4

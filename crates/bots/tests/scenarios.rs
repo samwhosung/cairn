@@ -148,18 +148,18 @@ fn a_view_past_what_the_wire_reaches_is_refused_at_its_line_and_one_within_it_ru
 fn an_unknown_key_is_refused_at_its_line_and_a_known_one_is_taken() {
     let unknown = scratch(
         "unknown.scenario",
-        &over("flat.scenario", "seconds = 5\nrules.speed = 7\n"),
+        &over("flat.scenario", "seconds = 5\nlimits.speed = 7\n"),
     );
     let out = run(&unknown, &[]);
     assert_eq!(out.status.code(), Some(2));
     let fault = format!(
-        "{}:3: `rules.speed` is not a key a scenario sets",
+        "{}:3: `limits.speed` is not a key a scenario sets",
         unknown.display()
     );
     assert_eq!(said(&out).trim(), fault);
     let known = scratch(
         "known.scenario",
-        &over("flat.scenario", "seconds = 5\nrules.run = 7\n"),
+        &over("flat.scenario", "seconds = 5\nlimits.run = 7\n"),
     );
     let out = run(&known, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", said(&out));

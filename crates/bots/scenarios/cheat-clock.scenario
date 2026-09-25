@@ -1,10 +1,10 @@
 place = flat
 seconds = 90
-rules.run = 7
-rules.tolerance = 0.1
-rules.slack = 0.5
-rules.clock_slack_ms = 1000
-rules.clock_budget_ms = 10000
+limits.run = 7
+limits.tolerance = 0.1
+limits.slack = 0.5
+limits.clock_slack_ms = 1000
+limits.clock_budget_ms = 10000
 bots.walkers.count = 20
 
 bots.clock-fast.count = 1
@@ -38,7 +38,7 @@ bots.banked.lie.set = forward
 
 expect walkers.corrections == 0
 
-# Taken while its clock leads by no more than `rules.clock_slack_ms` and `rules.clock_budget_ms`,
+# Taken while its clock leads by no more than `limits.clock_slack_ms` and `limits.clock_budget_ms`,
 # eleven seconds, which a clock a quarter fast spends in 44 seconds; then refused.
 expect clock-fast.through_after_s < 1
 expect clock-fast.caught_after_s > 40

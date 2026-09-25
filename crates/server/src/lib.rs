@@ -1,11 +1,11 @@
 //! The world server: a 20 Hz bulk-synchronous tick that checks and relays movement.
 
 mod grid;
+mod limits;
 mod log;
 mod net;
 mod relays;
 mod replicate;
-mod rules;
 mod serve;
 mod sim;
 mod stats;
@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
+pub use limits::{Limits, Why, ground_between};
 pub use net::InProcess;
 pub use protocol::Movement;
 pub use replicate::{PastReach, Tier, View};
-pub use rules::{Rules, Why, ground_between};
 pub use serve::{Config, Window};
 pub use stats::{PHASES, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns};
 pub use stepper::{Link, Stepper};
@@ -148,9 +148,9 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
         tick_threads: how.threads,
         tick_ms: log.header.tick_ms,
         spawns: log.header.spawns.clone(),
-        rules: Rules {
+        limits: Limits {
             check: log.header.check,
-            ..Rules::default()
+            ..Limits::default()
         },
         ..Config::default()
     };

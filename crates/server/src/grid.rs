@@ -25,7 +25,7 @@ impl Grid {
 
     pub fn rebuild(&mut self, bodies: &[Body]) {
         let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
-        for b in bodies.iter().filter(|b| b.alive) {
+        for b in bodies.iter().filter(|b| b.present) {
             for a in 0..2 {
                 lo[a] = lo[a].min(b.movement.pos[a]);
                 hi[a] = hi[a].max(b.movement.pos[a]);
@@ -42,7 +42,7 @@ impl Grid {
         self.cell_of.clear();
         self.ids.clear();
         for b in bodies {
-            let c = if b.alive {
+            let c = if b.present {
                 self.cell_index(b.movement.pos)
             } else {
                 u32::MAX
@@ -77,7 +77,7 @@ impl Grid {
         (y * self.w + x) as u32
     }
 
-    pub fn living_within(&self, bodies: &[Body], at: [f32; 3], r: f32, out: &mut Vec<u32>) {
+    pub fn present_within(&self, bodies: &[Body], at: [f32; 3], r: f32, out: &mut Vec<u32>) {
         let (x0, y0) = self.cell_xy([at[0] - r, at[1] - r, 0.0]);
         let (x1, y1) = self.cell_xy([at[0] + r, at[1] + r, 0.0]);
         let r2 = r * r;
@@ -101,19 +101,19 @@ mod tests {
     use super::*;
     use protocol::Movement;
 
-    fn at(x: f32, y: f32, alive: bool) -> Body {
+    fn at(x: f32, y: f32, present: bool) -> Body {
         Body {
             movement: Movement {
                 pos: [x, y, 0.0],
                 ..Movement::default()
             },
-            alive,
+            present,
             ..Body::default()
         }
     }
 
     #[test]
-    fn a_query_finds_exactly_the_living_within_range() {
+    fn a_query_finds_exactly_the_present_within_range() {
         let bodies: Vec<Body> = (0..400)
             .map(|i| at((i % 20) as f32 * 13.0, (i / 20) as f32 * 11.0, i % 7 != 0))
             .collect();
@@ -121,13 +121,13 @@ mod tests {
         grid.rebuild(&bodies);
         for (centre, r) in [([0.0, 0.0, 0.0], 30.0), ([120.0, 100.0, 9.0], 101.0)] {
             let mut got = Vec::new();
-            grid.living_within(&bodies, centre, r, &mut got);
+            grid.present_within(&bodies, centre, r, &mut got);
             got.sort_unstable();
             let want: Vec<u32> = (0..bodies.len() as u32)
                 .filter(|&i| {
                     let p = bodies[i as usize].movement.pos;
                     let d2 = (p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2);
-                    bodies[i as usize].alive && d2 <= r * r
+                    bodies[i as usize].present && d2 <= r * r
                 })
                 .collect();
             assert_eq!(got, want);
@@ -139,7 +139,7 @@ mod tests {
         let mut grid = Grid::new(50.0);
         grid.rebuild(&[at(5.0, 5.0, false)]);
         let mut got = Vec::new();
-        grid.living_within(&[at(5.0, 5.0, false)], [5.0, 5.0, 0.0], 100.0, &mut got);
+        grid.present_within(&[at(5.0, 5.0, false)], [5.0, 5.0, 0.0], 100.0, &mut got);
         assert!(got.is_empty());
     }
 }

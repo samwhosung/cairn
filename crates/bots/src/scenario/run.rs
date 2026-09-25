@@ -91,7 +91,7 @@ pub fn run(
     let cfg = Config {
         tick_threads: threads,
         spawns: briefs.iter().map(|b| b.spawn).collect(),
-        rules: spec.rules,
+        limits: spec.limits,
         view: spec.view,
         tick_ms: spec.tick_ms,
         ..Config::default()

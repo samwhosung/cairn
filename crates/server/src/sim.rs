@@ -5,10 +5,10 @@ use rayon::ThreadPool;
 use rayon::prelude::*;
 
 use crate::grid::Grid;
+use crate::limits::Limits;
 use crate::net::Shared;
 use crate::relays::Relays;
 use crate::replicate::{Built, Observer, Scene, Scratch, View, send_batch};
-use crate::rules::Rules;
 use crate::stats::{PHASES, Phase, TickStats};
 use crate::world::{InputOrder, Refusal, Spawn, Stamped, World};
 
@@ -35,9 +35,9 @@ pub struct Sim {
 }
 
 impl Sim {
-    pub fn new(spawns: Vec<Spawn>, rules: Rules, view: View, map: u32, tick_ms: u16) -> Self {
+    pub fn new(spawns: Vec<Spawn>, limits: Limits, view: View, map: u32, tick_ms: u16) -> Self {
         Self {
-            world: World::new(spawns, rules),
+            world: World::new(spawns, limits),
             grid: Grid::new(view.radius * 0.5),
             relays: Relays::default(),
             observers: Vec::new(),
@@ -126,7 +126,7 @@ impl Sim {
         }
         st.wall_ns[3] = lap_ns(&mut clock);
         let bodies = world.stepped();
-        observers.retain(|o| bodies[o.id as usize].alive);
+        observers.retain(|o| bodies[o.id as usize].present);
         let built = if let Batches::Send(clients) = batches {
             let scene = Scene {
                 world,
@@ -152,7 +152,7 @@ impl Sim {
         st.wall_ns[4] = lap_ns(&mut clock);
         st.hash = world.hash(&phases[5]);
         st.wall_ns[5] = lap_ns(&mut clock);
-        st.players = world.alive() as u32;
+        st.players = world.present() as u32;
         st.claims = stepped.claims;
         st.refused = stepped.refused;
         st.stale = stepped.stale;

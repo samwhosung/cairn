@@ -6,9 +6,9 @@ use protocol::{
 };
 
 use crate::grid::Grid;
+use crate::limits::Limits;
 use crate::net::{Outbox, Shared};
 use crate::relays::{Hot, Relays};
-use crate::rules::Rules;
 use crate::world::World;
 
 const HELD_CLAIM_AGE_S: f32 = 2.0;
@@ -20,19 +20,19 @@ struct Reach {
 }
 
 impl Reach {
-    fn of(rules: &Rules) -> Self {
+    fn of(limits: &Limits) -> Self {
         let fastest = [
-            rules.walk,
-            rules.run,
-            rules.run_back,
-            rules.swim,
-            rules.swim_back,
+            limits.walk,
+            limits.run,
+            limits.run_back,
+            limits.swim,
+            limits.swim_back,
         ]
         .into_iter()
         .fold(0.0, f32::max);
         Self {
             across: (Wrapped::REACH_YD[0] - fastest * HELD_CLAIM_AGE_S).max(0.0),
-            up: (Wrapped::REACH_YD[2] - rules.fall * HELD_CLAIM_AGE_S).max(0.0),
+            up: (Wrapped::REACH_YD[2] - limits.fall * HELD_CLAIM_AGE_S).max(0.0),
         }
     }
 }
@@ -112,7 +112,7 @@ impl fmt::Display for PastReach {
         write!(
             f,
             "a view of {:.1} yd, its radius and grey, goes past the {:.1} yd a batch's positions \
-             reach with these movement rules",
+             reach with these movement limits",
             self.view_yd, self.reach_yd
         )
     }
@@ -121,9 +121,9 @@ impl fmt::Display for PastReach {
 impl std::error::Error for PastReach {}
 
 impl View {
-    /// Refuses a view whose radius and grey go past what a batch's positions reach under `rules`.
-    pub fn check(&self, rules: &Rules) -> Result<(), PastReach> {
-        let (view_yd, reach_yd) = (self.radius + self.grey, Reach::of(rules).across);
+    /// Refuses a view whose radius and grey go past what a batch's positions reach under `limits`.
+    pub fn check(&self, limits: &Limits) -> Result<(), PastReach> {
+        let (view_yd, reach_yd) = (self.radius + self.grey, Reach::of(limits).across);
         if view_yd <= reach_yd {
             Ok(())
         } else {
@@ -278,7 +278,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     }
     let mut pass = Pass {
         me: me.movement.pos,
-        reach: Reach::of(world.rules()),
+        reach: Reach::of(world.limits()),
         relays: scene.relays,
         view,
         tick,
@@ -289,7 +289,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     };
     if o.fresh || (tick + o.id).is_multiple_of(view.aoi_every.max(1)) {
         s.near.clear();
-        scene.grid.living_within(
+        scene.grid.present_within(
             bodies,
             me.movement.pos,
             view.radius + view.grey,
@@ -402,7 +402,7 @@ impl Pass<'_> {
     }
 
     fn keep(&mut self, e: &mut Seen) -> bool {
-        if !self.relays.hot[e.id as usize].alive {
+        if !self.relays.hot[e.id as usize].present {
             self.vanish(e.slot);
             return false;
         }

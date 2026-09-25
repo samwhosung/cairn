@@ -54,7 +54,7 @@ impl Stepper {
             .map_err(io::Error::other)?;
         let sim = Sim::new(
             cfg.spawns.clone(),
-            cfg.rules,
+            cfg.limits,
             cfg.view,
             cfg.map,
             cfg.tick_ms,

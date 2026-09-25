@@ -1,4 +1,4 @@
 base = goldshire.scenario
-rules.run = 14
+limits.run = 14
 expect sprinters.corrections == 0
 expect sprinters.refused.all == 0

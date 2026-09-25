@@ -1,7 +1,7 @@
 place = flat
 seconds = 120
-rules.run = 7
-rules.tolerance = 0.1
+limits.run = 7
+limits.tolerance = 0.1
 bots.walkers.count = 20
 
 bots.teleport-once.count = 1

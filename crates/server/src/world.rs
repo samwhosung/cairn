@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use protocol::{Appearance, Claim, Hello, Movement};
 use rayon::prelude::*;
 
-use crate::rules::{ClockPin, Rules, Verdict, Why};
+use crate::limits::{ClockPin, Limits, Verdict, Why};
 use crate::stats::Phase;
 
 const ENTITIES_PER_TASK: usize = 256;
@@ -48,7 +48,7 @@ pub enum InputOrder {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Body {
     pub movement: Movement,
-    pub alive: bool,
+    pub present: bool,
     pub clock: Option<ClockPin>,
     pub clock_spent_ms: u32,
     pub correction_seq: u32,
@@ -127,12 +127,12 @@ pub struct World {
     may_teleport: Vec<bool>,
     id_of: HashMap<u32, u32>,
     spawns: Vec<Spawn>,
-    rules: Rules,
+    limits: Limits,
     keep_refusals: bool,
 }
 
 impl World {
-    pub fn new(spawns: Vec<Spawn>, rules: Rules) -> Self {
+    pub fn new(spawns: Vec<Spawn>, limits: Limits) -> Self {
         let spawns = if spawns.is_empty() {
             vec![Spawn {
                 pos: [0.0; 3],
@@ -150,7 +150,7 @@ impl World {
             may_teleport: Vec::new(),
             id_of: HashMap::new(),
             spawns,
-            rules,
+            limits,
             keep_refusals: false,
         }
     }
@@ -167,8 +167,8 @@ impl World {
         &self.spawns
     }
 
-    pub fn rules(&self) -> &Rules {
-        &self.rules
+    pub fn limits(&self) -> &Limits {
+        &self.limits
     }
 
     pub fn stepped(&self) -> &[Body] {
@@ -183,8 +183,8 @@ impl World {
         &self.looks[id as usize]
     }
 
-    pub fn alive(&self) -> usize {
-        self.next.iter().filter(|b| b.alive).count()
+    pub fn present(&self) -> usize {
+        self.next.iter().filter(|b| b.present).count()
     }
 
     pub fn admit(&mut self, inputs: &[Stamped]) -> Vec<Admitted> {
@@ -204,7 +204,7 @@ impl World {
                     facing: spawn.facing,
                     ..Movement::default()
                 },
-                alive: true,
+                present: true,
                 moved_at: self.tick,
                 flags_changed_at: self.tick,
                 ..Body::default()
@@ -267,7 +267,7 @@ impl World {
         debug_assert!(acts.is_sorted_by_key(Act::id));
         let prev = &self.prev;
         let judge = Judge {
-            rules: &self.rules,
+            limits: &self.limits,
             tick: self.tick,
             keep_refusals: self.keep_refusals,
         };
@@ -326,14 +326,14 @@ impl World {
 }
 
 struct Judge<'a> {
-    rules: &'a Rules,
+    limits: &'a Limits,
     tick: u32,
     keep_refusals: bool,
 }
 
 impl Judge<'_> {
     fn apply(&self, body: &mut Body, act: &Act, done: &mut Stepped) {
-        if !body.alive {
+        if !body.present {
             return;
         }
         let tick = self.tick;
@@ -343,7 +343,7 @@ impl Judge<'_> {
             } => (
                 received_ms,
                 claim,
-                self.rules.judge(body, &claim, received_ms),
+                self.limits.judge(body, &claim, received_ms),
             ),
             Act::Teleport {
                 received_ms,
@@ -352,12 +352,12 @@ impl Judge<'_> {
                 ..
             } => {
                 let verdict = self
-                    .rules
+                    .limits
                     .judge_teleport(body, &claim, received_ms, may_teleport);
                 (received_ms, claim, verdict)
             }
             Act::Leave { .. } => {
-                body.alive = false;
+                body.present = false;
                 body.moved_at = tick;
                 return;
             }
@@ -366,7 +366,7 @@ impl Judge<'_> {
         match verdict {
             Verdict::Accept => {
                 let m = claim.movement;
-                self.rules.pin_clock(body, m.time, received_ms);
+                self.limits.pin_clock(body, m.time, received_ms);
                 if m.flags != body.movement.flags {
                     body.flags_changed_at = tick;
                 }
@@ -406,7 +406,7 @@ fn hash_body(id: u32, b: &Body) -> u64 {
     let pin = b.clock.unwrap_or_default();
     let words = [
         id,
-        u32::from(b.alive),
+        u32::from(b.present),
         m.time,
         m.flags,
         m.pos[0].to_bits(),

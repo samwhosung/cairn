@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::limits::Why;
 use crate::replicate::Built;
-use crate::rules::Why;
 
 pub use clock::{process_cpu_ns, thread_cpu_ns};
 
