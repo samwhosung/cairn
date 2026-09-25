@@ -40,14 +40,15 @@ impl Claims {
     }
 
     pub fn correct(&mut self, player: &mut Player, seq: u32, why: Why, movement: &Movement) {
-        player.pos = wow_to_bevy(movement.pos);
+        let put = wow_to_bevy(movement.pos);
+        let past_the_streamed_collision = put.distance(player.pos) > world::FARCLIP;
+        player.pos = put;
         player.face_yaw = movement.facing;
         player.model_yaw = movement.facing;
         player.vel_y = 0.0;
         player.horiz_vel = Vec3::ZERO;
         player.airborne_since = None;
-        // Put back far from where it was, the body waits for the collision there.
-        player.settling = true;
+        player.settling |= past_the_streamed_collision;
         self.ack = seq;
         self.cadence.report_now();
         self.corrections += 1;
@@ -155,6 +156,19 @@ mod tests {
         assert!(
             (j.cos - 1.0).abs() < 1e-5 && j.sin.abs() < 1e-5 && (j.xy_speed - 7.0).abs() < 1e-4
         );
+    }
+
+    #[test]
+    fn only_a_body_put_back_past_the_far_clip_waits_for_its_collision() {
+        let mut claims = Claims::new(&Movement::default());
+        let put = |x: f32| Movement {
+            pos: [x, 0.0, 0.0],
+            ..Movement::default()
+        };
+        let (mut near, mut far) = (Player::default(), Player::default());
+        claims.correct(&mut near, 1, Why::Speed, &put(3.0));
+        claims.correct(&mut far, 2, Why::Teleport, &put(500.0));
+        assert_eq!((near.settling, far.settling), (false, true));
     }
 
     #[test]
