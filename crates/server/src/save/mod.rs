@@ -282,9 +282,16 @@ impl Roster {
     }
 }
 
-/// The file a world is kept in unless told otherwise: in the user's data directory, named after
-/// the game it runs, or `world` with none.
+/// The file a world is kept in unless told otherwise: in [`data_dir`], named after the game it
+/// runs, or `world` with none.
 pub fn default_world(game: Option<&str>) -> Option<PathBuf> {
+    let name = format!("{}.sqlite", game.unwrap_or("world"));
+    Some(data_dir()?.join("worlds").join(name))
+}
+
+/// cairn's directory in the user's data directory: on macOS
+/// `~/Library/Application Support/cairn`.
+pub fn data_dir() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
     let data = if cfg!(target_os = "macos") {
         var("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"))
@@ -295,8 +302,7 @@ pub fn default_world(game: Option<&str>) -> Option<PathBuf> {
             .map(PathBuf::from)
             .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".local/share")))
     }?;
-    let name = format!("{}.sqlite", game.unwrap_or("world"));
-    Some(data.join("cairn").join("worlds").join(name))
+    Some(data.join("cairn"))
 }
 
 #[cfg(test)]
