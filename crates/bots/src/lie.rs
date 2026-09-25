@@ -85,6 +85,10 @@ impl Lie {
         (self.from_ms..self.to_ms).contains(&t)
     }
 
+    pub fn jumps(&self) -> bool {
+        self.shift.iter().any(|&d| d != 0.0)
+    }
+
     /// How many times as far along its route as its body the lie's claims may get.
     pub fn reach(&self) -> f32 {
         let clock = match self.clock {

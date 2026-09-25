@@ -103,7 +103,7 @@ impl Mover {
         let mut claim = truth;
         for (lie, told) in &mut self.lies {
             if lie.holds_at(t) {
-                if !told.begun {
+                if !told.begun && lie.jumps() {
                     self.cadence.report_now();
                 }
                 claim = lie.tell(told, t, &claim, &route);
@@ -290,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lie_goes_out_the_frame_it_begins_and_every_frame_when_told_to() {
+    fn a_jump_goes_out_the_frame_it_begins_and_every_frame_when_told_to() {
         let track = Track::of(vec![leg(0, 5000, run(None))]);
         let under = Lie {
             from_ms: 1250,
