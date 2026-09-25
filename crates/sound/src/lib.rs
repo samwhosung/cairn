@@ -5,6 +5,7 @@
 )]
 
 mod anim_events;
+mod combat;
 mod config;
 mod emitter_pool;
 mod footsteps;

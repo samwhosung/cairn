@@ -9,8 +9,18 @@ pub struct Bus(pub u8);
 impl Bus {
     /// Uncapped: the bus of every play that names none.
     pub const DEFAULT: Bus = Bus(0);
+    /// The attacker's grunt, one in the world at a time.
+    pub const EXERTION: Bus = Bus(5);
+    /// A connecting swing's whoosh, two at once.
+    pub const WEAPON_SWING: Bus = Bus(6);
+    /// The cry of another body hit, two at once.
+    pub const INJURY: Bus = Bus(7);
+    /// The cry of the listener's own body hit, one at a time.
+    pub const SELF_INJURY: Bus = Bus(8);
     /// The terrain step of a footfall, six at once.
     pub const FOOTSTEP: Bus = Bus(9);
+    /// A blow's contact, four at once.
+    pub const MELEE_IMPACT: Bus = Bus(10);
 }
 
 /// The client's per-bus caps, a table no code writes.

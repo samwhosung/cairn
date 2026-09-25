@@ -6,6 +6,7 @@ mod kits;
 mod providers;
 mod voices;
 mod water;
+mod weapons;
 
 use std::fmt;
 use std::io::Cursor;
@@ -17,8 +18,9 @@ pub use areas::{AreaAudio, AreaSounds, ZoneIntro, ZoneMusic};
 pub use footsteps::Footsteps;
 pub use kits::{Kit, KitCatalog, kit_flags};
 pub use providers::{SoundProvider, SoundProviders};
-pub use voices::CreatureVoices;
+pub use voices::{CreatureVoices, Voice};
 pub use water::WaterSounds;
+pub use weapons::{Impact, WeaponSounds, impact_slot};
 
 /// Why a sound table could not be loaded.
 #[derive(Debug)]

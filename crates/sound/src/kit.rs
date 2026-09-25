@@ -85,6 +85,11 @@ impl SoundKits {
         &self.catalog
     }
 
+    /// One draw off the stream the shots' variations share.
+    pub(crate) fn roll(&mut self) -> u32 {
+        self.rng.next()
+    }
+
     pub(crate) fn read(&self, path: &str) -> Result<Vec<u8>> {
         let chain = self.chain.as_ref().context("no install to read from")?;
         chain.read(path).with_context(|| format!("reading {path}"))

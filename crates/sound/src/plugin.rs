@@ -129,6 +129,7 @@ impl Plugin for SoundPlugin {
                 load_providers,
                 crate::footsteps::load_footsteps,
                 crate::liquid_loop::load_water_sounds,
+                crate::combat::load_weapons,
             ),
         )
         .add_systems(PreUpdate, stamp_clock)
@@ -150,6 +151,7 @@ impl Plugin for SoundPlugin {
                 crate::zone::report_stream_voices,
                 crate::reverb::zone_reverb,
                 crate::anim_events::route_anim_events,
+                crate::combat::combat_sounds,
                 crate::emitter_pool::release_on_despawn,
                 crate::emitter_pool::pump_emitters,
                 crate::footsteps::footstep_sounds,
@@ -160,6 +162,10 @@ impl Plugin for SoundPlugin {
             )
                 .chain()
                 .in_set(SoundSystems),
+        )
+        .add_systems(
+            Update,
+            crate::combat::death_cries.before(world::unit::UnitSystems),
         )
         .add_systems(Last, crate::health::render_offline);
     }
