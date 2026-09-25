@@ -1,13 +1,18 @@
+use std::borrow::Cow;
 use std::io;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use game::{Delivery, Hosted};
 use protocol::Whose;
 use rayon::ThreadPool;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::error::TryRecvError;
 
-use crate::net::{Outbox, Shared};
+use crate::log::LogWriter;
+use crate::net::{InProcess, Outbox, Reader, ServerEnd, Shared, Standing};
 use crate::save::{Keeping, Player, Roster, scan};
-use crate::serve::Config;
+use crate::serve::{Config, log};
 use crate::sim::{Batches, Sim};
 use crate::stats::TickStats;
 use crate::world::{InputOrder, Refusal, Stamped};
@@ -20,6 +25,16 @@ pub struct Stepper {
     order: InputOrder,
     clients: Shared,
     batches: bool,
+    inside: Vec<Inside>,
+    log: Option<LogWriter>,
+}
+
+/// A connection from inside the process whose bytes are read, and whose frames are handed over,
+/// when the stepper's caller says.
+struct Inside {
+    reader: Reader,
+    end: ServerEnd,
+    link: Link,
 }
 
 /// An entity in an observer's view: the slot its client knows it by, the game's state of it, and
@@ -66,10 +81,16 @@ impl Link {
 impl Stepper {
     /// A world on `cfg`, from its file when it names one, saving to it; each tick's results
     /// reach the links once its changes are committed, unless `cfg.saving` lets them out early.
+    /// Writes every tick's inputs where `cfg.record` says.
     pub fn new(cfg: &Config, order: InputOrder, delivery: Delivery) -> io::Result<Self> {
         cfg.check()?;
         let opened = cfg.open_world()?;
-        Self::with(cfg.sim(opened, delivery)?, cfg, order)
+        let mut stepper = Self::with(cfg.sim(opened, delivery)?, cfg, order)?;
+        stepper.log = match &cfg.record {
+            Some(path) => Some(log(path, cfg, &stepper.sim)?),
+            None => None,
+        };
+        Ok(stepper)
     }
 
     /// A world on `cfg` that knows `players` and keeps no file.
@@ -93,6 +114,8 @@ impl Stepper {
             order,
             clients: Shared::new(),
             batches: true,
+            inside: Vec::new(),
+            log: None,
         })
     }
 
@@ -201,8 +224,13 @@ impl Stepper {
         first_difference(&self.sim.keeping(), &file)
     }
 
-    /// Saves where every player stands, commits every change and closes the world's file.
+    /// Saves where every player stands, commits every change and closes the world's file and the
+    /// log of inputs.
     pub fn finish(mut self) -> Result<(), String> {
+        if let Some(log) = self.log.take() {
+            log.finish()
+                .map_err(|e| format!("the log of inputs: {e}"))?;
+        }
         self.sim.stop();
         self.sim
             .take_writer()
@@ -231,22 +259,91 @@ impl Stepper {
         link
     }
 
+    /// Opens a connection from inside the process, the host's or a guest's, numbered after every
+    /// other such: its bytes are read by [`Stepper::receive`] as a socket's would be, and the
+    /// server's frames reach it by [`Stepper::hand_over`].
+    pub fn connect_in_process(&mut self, host: bool) -> InProcess {
+        let conn = self.clients.next_conn();
+        let standing = if host {
+            Standing::Host
+        } else {
+            Standing::Guest
+        };
+        let (client, end) = InProcess::open();
+        let link = self.connect(conn);
+        self.inside.push(Inside {
+            reader: Reader::new(conn, standing),
+            end,
+            link,
+        });
+        client
+    }
+
+    /// Reads what each connection from inside the process has sent since the last call, as
+    /// received at `received_ms`, for the next tick; one whose client has hung up leaves at it.
+    pub fn receive(&mut self, received_ms: u32) {
+        let (latest, mut inputs) = (self.next_tick(), Vec::new());
+        self.inside.retain_mut(|c| {
+            loop {
+                match c.end.from_client.try_recv() {
+                    Ok(bytes) => {
+                        self.clients
+                            .bytes_in
+                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        let behind_by = |ticks| c.link.behind_by(ticks);
+                        if c.reader
+                            .read(&bytes, received_ms, latest, behind_by, &mut inputs)
+                        {
+                            continue;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => return true,
+                    Err(TryRecvError::Disconnected) => {}
+                }
+                inputs.extend(c.reader.leave(received_ms));
+                drop(self.clients.take_outbox(c.reader.conn));
+                return false;
+            }
+        });
+        self.clients.push(&mut inputs);
+    }
+
+    /// Hands each connection from inside the process what the server has sent it since the last
+    /// call, as written at `at`, and closes those the server has let go.
+    pub fn hand_over(&mut self, at: Instant) {
+        self.inside.retain_mut(|c| {
+            while let Some(frame) = c.link.next_frame() {
+                c.link.taken_in(frame.len());
+                if c.end.to_client.send((frame, at)).is_err() {
+                    break;
+                }
+            }
+            !c.link.closed()
+        });
+    }
+
     /// Runs one tick on `inputs`, which must be sorted by connection and then in the order each
-    /// connection sent them, and on the leave of any client the last tick gave up on.
+    /// connection sent them, on what [`Stepper::receive`] read, and on the leave of any client the
+    /// last tick gave up on.
     pub fn tick(&mut self, inputs: &[Stamped]) -> TickStats {
         let batches = if self.batches {
             Batches::Send(&self.clients)
         } else {
             Batches::Skip
         };
-        let given_up = self.clients.take_inputs();
-        let mut st = if given_up.is_empty() {
-            self.sim.tick(&self.pool, inputs, self.order, batches)
+        let taken = self.clients.take_inputs();
+        let all = if taken.is_empty() {
+            Cow::Borrowed(inputs)
         } else {
-            let mut all = [inputs, &given_up].concat();
+            let mut all = [inputs, &taken].concat();
             all.sort_by_key(|s| (s.conn, s.nth));
-            self.sim.tick(&self.pool, &all, self.order, batches)
+            Cow::Owned(all)
         };
+        let mut st = self.sim.tick(&self.pool, &all, self.order, batches);
+        if let Some(log) = &mut self.log {
+            log.tick(st.tick, &all, st.hash)
+                .unwrap_or_else(|why| panic!("the log of inputs: {why}"));
+        }
         self.sim.release();
         if let Some(writer) = self.sim.writer() {
             let waited = writer

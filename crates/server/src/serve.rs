@@ -241,7 +241,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::
     Ok(summary)
 }
 
-fn log(path: &std::path::Path, cfg: &Config, sim: &Sim) -> io::Result<LogWriter> {
+pub(crate) fn log(path: &std::path::Path, cfg: &Config, sim: &Sim) -> io::Result<LogWriter> {
     let header = Header {
         tick_ms: cfg.tick_ms,
         check: cfg.limits.check,

@@ -138,6 +138,10 @@ impl Shared {
         self.started.elapsed().as_millis() as u32
     }
 
+    pub fn next_conn(&self) -> u32 {
+        self.next_conn.fetch_add(1, Ordering::Relaxed)
+    }
+
     pub fn take_inputs(&self) -> Vec<Stamped> {
         let mut inputs =
             std::mem::take(&mut *self.inbox.lock().unwrap_or_else(PoisonError::into_inner));
@@ -182,7 +186,7 @@ impl Shared {
         self.push(&mut leave);
     }
 
-    fn push(&self, batch: &mut Vec<Stamped>) {
+    pub fn push(&self, batch: &mut Vec<Stamped>) {
         if !batch.is_empty() {
             let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
             inbox.append(batch);
@@ -232,23 +236,114 @@ impl InProcess {
     }
 }
 
-pub fn connect_host(shared: &Arc<Shared>, runtime: &Handle) -> InProcess {
-    let (to_server, from_client) = mpsc::unbounded_channel();
-    let (to_client, from_server) = std_mpsc::channel();
-    let incoming = Incoming::Here(from_client, Vec::new());
-    open(shared, runtime, Standing::Host, incoming, |rx, outbox| {
-        hand_over(rx, to_client, outbox.on_written())
-    });
-    InProcess {
-        to_server,
-        from_server,
+/// The server's end of an [`InProcess`] connection: what its client sent, and where the server's
+/// frames go.
+pub struct ServerEnd {
+    pub from_client: mpsc::UnboundedReceiver<Vec<u8>>,
+    pub to_client: std_mpsc::Sender<(Vec<u8>, Instant)>,
+}
+
+impl InProcess {
+    pub(crate) fn open() -> (Self, ServerEnd) {
+        let (to_server, from_client) = mpsc::unbounded_channel();
+        let (to_client, from_server) = std_mpsc::channel();
+        let client = Self {
+            to_server,
+            from_server,
+        };
+        let end = ServerEnd {
+            from_client,
+            to_client,
+        };
+        (client, end)
     }
 }
 
+pub fn connect_host(shared: &Arc<Shared>, runtime: &Handle) -> InProcess {
+    let (client, end) = InProcess::open();
+    let incoming = Incoming::Here(end.from_client, Vec::new());
+    open(shared, runtime, Standing::Host, incoming, |rx, outbox| {
+        hand_over(rx, end.to_client, outbox.on_written())
+    });
+    client
+}
+
 #[derive(Clone, Copy)]
-enum Standing {
+pub enum Standing {
     Guest,
     Host,
+}
+
+/// A connection's bytes read as the server reads them: a hello, then claims, teleports and actions
+/// in the order sent, and reports of the latest tick seen as how far behind the client is.
+pub struct Reader {
+    pub conn: u32,
+    standing: Standing,
+    frames: Frames,
+    nth: u32,
+    joined: bool,
+}
+
+impl Reader {
+    pub fn new(conn: u32, standing: Standing) -> Self {
+        Self {
+            conn,
+            standing,
+            frames: Frames::default(),
+            nth: 0,
+            joined: false,
+        }
+    }
+
+    /// Reads `bytes`, received at `received_ms` when the latest tick was `latest_tick`, into
+    /// `inputs`; false once they break the protocol, when the connection closes.
+    pub fn read(
+        &mut self,
+        bytes: &[u8],
+        received_ms: u32,
+        latest_tick: u32,
+        behind_by: impl Fn(u32),
+        inputs: &mut Vec<Stamped>,
+    ) -> bool {
+        self.frames.extend(bytes);
+        loop {
+            let input = match self.frames.next_frame().map(|f| f.map(ClientMessage::read)) {
+                Ok(None) => return true,
+                Ok(Some(Ok(ClientMessage::Hello(h)))) if !self.joined && h.version == VERSION => {
+                    self.joined = true;
+                    match self.standing {
+                        Standing::Guest => Input::Join(h),
+                        Standing::Host => Input::HostJoin(h),
+                    }
+                }
+                Ok(Some(Ok(ClientMessage::Claim(c)))) if self.joined => Input::Claim(c),
+                Ok(Some(Ok(ClientMessage::Teleport(c)))) if self.joined => Input::Teleport(c),
+                Ok(Some(Ok(ClientMessage::Action(number)))) if self.joined => Input::Action(number),
+                Ok(Some(Ok(ClientMessage::Seen(tick)))) if self.joined => {
+                    behind_by(latest_tick.saturating_sub(tick));
+                    continue;
+                }
+                _ => return false,
+            };
+            inputs.push(Stamped {
+                conn: self.conn,
+                nth: self.nth,
+                received_ms,
+                input,
+            });
+            self.nth += 1;
+        }
+    }
+
+    /// The leave of a connection that has closed, once its hello was in.
+    pub fn leave(&self, received_ms: u32) -> Option<Stamped> {
+        self.joined.then_some(Stamped {
+            conn: self.conn,
+            nth: self.nth,
+            received_ms,
+            input: Input::Leave,
+        })
+    }
 }
 
 enum Incoming {
@@ -278,12 +373,13 @@ fn open<W: Future<Output = ()> + Send + 'static>(
     incoming: Incoming,
     writing: impl FnOnce(mpsc::UnboundedReceiver<Vec<u8>>, &Outbox) -> W,
 ) {
-    let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
+    let conn = shared.next_conn();
     let (outbox, rx) = Outbox::channel();
     let (behind, hung_up) = (outbox.behind.clone(), outbox.hung_up());
     let writer = runtime.spawn(writing(rx, &outbox));
     shared.hold_outbox(conn, outbox);
-    let reader = runtime.spawn(read(conn, incoming, standing, behind, shared.clone()));
+    let reader = Reader::new(conn, standing);
+    let reader = runtime.spawn(read(reader, incoming, behind, shared.clone()));
     runtime.spawn(async move {
         hung_up.await;
         reader.abort();
@@ -319,62 +415,28 @@ async fn write(
 }
 
 async fn read(
-    conn: u32,
+    mut reader: Reader,
     mut incoming: Incoming,
-    standing: Standing,
     behind: Arc<AtomicU32>,
     shared: Arc<Shared>,
 ) {
-    let mut frames = Frames::default();
-    let (mut nth, mut joined, mut batch) = (0u32, false, Vec::new());
-    'conn: while let Some(bytes) = incoming.next().await {
+    let mut batch = Vec::new();
+    while let Some(bytes) = incoming.next().await {
         shared
             .bytes_in
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        frames.extend(bytes);
-        let received_ms = shared.ms_since_start();
-        loop {
-            let input = match frames.next_frame().map(|f| f.map(ClientMessage::read)) {
-                Ok(None) => break,
-                Ok(Some(Ok(ClientMessage::Hello(h)))) if !joined && h.version == VERSION => {
-                    joined = true;
-                    match standing {
-                        Standing::Guest => Input::Join(h),
-                        Standing::Host => Input::HostJoin(h),
-                    }
-                }
-                Ok(Some(Ok(ClientMessage::Claim(c)))) if joined => Input::Claim(c),
-                Ok(Some(Ok(ClientMessage::Teleport(c)))) if joined => Input::Teleport(c),
-                Ok(Some(Ok(ClientMessage::Action(number)))) if joined => Input::Action(number),
-                Ok(Some(Ok(ClientMessage::Seen(tick)))) if joined => {
-                    let now = shared.latest_tick.load(Ordering::Relaxed);
-                    behind.store(now.saturating_sub(tick), Ordering::Relaxed);
-                    continue;
-                }
-                _ => {
-                    shared.push(&mut batch);
-                    break 'conn;
-                }
-            };
-            batch.push(Stamped {
-                conn,
-                nth,
-                received_ms,
-                input,
-            });
-            nth += 1;
+        let (received_ms, latest) = (
+            shared.ms_since_start(),
+            shared.latest_tick.load(Ordering::Relaxed),
+        );
+        let behind_by = |ticks| behind.store(ticks, Ordering::Relaxed);
+        let open = reader.read(bytes, received_ms, latest, behind_by, &mut batch);
+        shared.push(&mut batch);
+        if !open {
+            break;
         }
-        shared.push(&mut batch);
     }
-    if joined {
-        let received_ms = shared.ms_since_start();
-        batch.push(Stamped {
-            conn,
-            nth,
-            received_ms,
-            input: Input::Leave,
-        });
-        shared.push(&mut batch);
-    }
-    drop(shared.take_outbox(conn));
+    batch.extend(reader.leave(shared.ms_since_start()));
+    shared.push(&mut batch);
+    drop(shared.take_outbox(reader.conn));
 }
