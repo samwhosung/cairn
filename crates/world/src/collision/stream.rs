@@ -46,7 +46,7 @@ impl CollisionResidency {
 }
 
 enum TileState {
-    Loading(Handle<TileCollision>),
+    Unspawned(Handle<TileCollision>),
     Built(Handle<TileCollision>),
     Failed,
 }
@@ -55,6 +55,13 @@ pub(super) struct Tile {
     state: TileState,
     pub(super) entities: Vec<Entity>,
     placements: Vec<u32>,
+    requested: u64,
+}
+
+impl Tile {
+    fn in_flight(&self, tiles: &Assets<TileCollision>) -> bool {
+        matches!(&self.state, TileState::Unspawned(handle) if tiles.get(handle).is_none())
+    }
 }
 
 enum PlacementModel {
@@ -83,6 +90,7 @@ pub(crate) struct CollisionStreamer {
     pub(super) placements: BTreeMap<u32, Placement>,
     pub(super) welds: HullWelds,
     wanted: Vec<(u32, u32)>,
+    requests: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -139,36 +147,59 @@ pub(super) fn stream_collision(
         .filter(|&(x, y)| index.has_tile(x, y))
         .collect();
     for &(tx, ty) in &streamer.wanted {
-        streamer.tiles.entry((tx, ty)).or_insert_with(|| Tile {
-            state: TileState::Loading(server.load(format!(
-                "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
-            ))),
-            entities: Vec::new(),
-            placements: Vec::new(),
+        let requests = &mut streamer.requests;
+        streamer.tiles.entry((tx, ty)).or_insert_with(|| {
+            *requests += 1;
+            Tile {
+                state: TileState::Unspawned(server.load(format!(
+                    "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
+                ))),
+                entities: Vec::new(),
+                placements: Vec::new(),
+                requested: *requests,
+            }
         });
     }
 
-    let keys: Vec<(u32, u32)> = streamer.tiles.keys().copied().collect();
-    for key in keys {
+    for tile in streamer.tiles.values_mut() {
+        if let TileState::Unspawned(handle) = &tile.state
+            && tiles.get(handle).is_none()
+            && let LoadState::Failed(e) = server.load_state(handle)
+        {
+            warn!("a tile's collision failed to load: {e}");
+            tile.state = TileState::Failed;
+        }
+    }
+    let every_request_arrived = !streamer.tiles.values().any(|t| t.in_flight(&tiles));
+    let mut batch: Vec<(u64, (u32, u32))> = Vec::new();
+    if every_request_arrived {
+        batch.extend(
+            streamer
+                .tiles
+                .iter()
+                .filter(|(_, t)| matches!(t.state, TileState::Unspawned(_)))
+                .map(|(&key, t)| (t.requested, key)),
+        );
+    }
+    batch.sort_unstable();
+    for (_, key) in batch {
         let Some(tile) = streamer.tiles.get_mut(&key) else {
             continue;
         };
-        let TileState::Loading(handle) = &tile.state else {
+        let TileState::Unspawned(handle) = &tile.state else {
             continue;
         };
         let handle = handle.clone();
-        if let Some(tc) = tiles.get(&handle) {
-            tile.entities = spawn_tile(&mut commands, tc);
-            tile.state = TileState::Built(handle.clone());
-            for d in &tc.doodads {
-                register_doodad(streamer, &server, d, key);
-            }
-            for w in &tc.wmos {
-                register_wmo(streamer, &server, w, key);
-            }
-        } else if let LoadState::Failed(e) = server.load_state(&handle) {
-            warn!("a tile's collision failed to load: {e}");
-            tile.state = TileState::Failed;
+        let Some(tc) = tiles.get(&handle) else {
+            continue;
+        };
+        tile.entities = spawn_tile(&mut commands, tc);
+        tile.state = TileState::Built(handle);
+        for d in &tc.doodads {
+            register_doodad(streamer, &server, d, key);
+        }
+        for w in &tc.wmos {
+            register_wmo(streamer, &server, w, key);
         }
     }
 }
@@ -429,7 +460,7 @@ pub(super) fn publish_residency(
             streamer
                 .tiles
                 .get(key)
-                .is_none_or(|t| matches!(t.state, TileState::Loading(_)))
+                .is_none_or(|t| matches!(t.state, TileState::Unspawned(_)))
         })
         .count();
     let loading_hulls: usize = streamer
