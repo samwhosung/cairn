@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use game::{
-    Bytes, Delivery, Engine, Game, Hosted, Id, Kind, Kinds, Letter, Out, Saves, Spot, Turn, World,
+    Bytes, Delivery, Engine, Game, Hosted, Id, Kind, Kinds, Letter, Out, Spot, Turn, World,
 };
 
 struct Embers;
@@ -34,6 +34,19 @@ game::knobs! {
     }
 }
 
+game::saved! {
+    struct Kept {
+        kindled: u32,
+        thanked: Option<u32>,
+    }
+}
+
+game::saved! {
+    struct Lit {
+        owner: u32,
+    }
+}
+
 impl Game for Embers {
     const NAME: &'static str = "embers";
     const KNOBS: &'static str = "sparks = 3\nlife = 4\n";
@@ -46,7 +59,7 @@ impl Game for Embers {
         kinds.add::<Spark>();
     }
 
-    fn join(_: Id, _: &World<'_, Self>) -> Ember {
+    fn join(_: Id, _: Option<Kept>, _: &World<'_, Self>) -> Ember {
         Ember {
             heat: 0,
             pending: 0,
@@ -62,14 +75,17 @@ impl Game for Embers {
 
 impl Kind<Embers> for Ember {
     type Sent = u32;
-    type Saved = (u32, Option<Id>);
+    type Saved = Kept;
 
     fn sent(&self) -> u32 {
         self.heat
     }
 
-    fn saved(&self) -> (u32, Option<Id>) {
-        (self.kindled, self.thanked)
+    fn saved(&self) -> Kept {
+        Kept {
+            kindled: self.kindled,
+            thanked: self.thanked.map(|id| id.n),
+        }
     }
 
     fn step(id: Id, me: &mut Self, w: &World<'_, Embers>, out: &mut Out<Embers>) {
@@ -113,14 +129,16 @@ impl Kind<Embers> for Ember {
 
 impl Kind<Embers> for Spark {
     type Sent = u32;
-    type Saved = Id;
+    type Saved = Lit;
 
     fn sent(&self) -> u32 {
         self.left
     }
 
-    fn saved(&self) -> Id {
-        self.owner
+    fn saved(&self) -> Lit {
+        Lit {
+            owner: self.owner.n,
+        }
     }
 
     fn step(id: Id, me: &mut Self, w: &World<'_, Embers>, out: &mut Out<Embers>) {
@@ -179,6 +197,7 @@ fn run(threads: usize, delivery: Delivery, ticks: u32, mut each: impl FnMut(&Eng
         let turn = Turn {
             tick,
             joined: if tick == 0 { &joined } else { &[] },
+            restored: &[],
             bodies: &bodies,
             actions: &actions,
             cpu_ns: || 0,
@@ -267,24 +286,24 @@ fn a_game_loads_on_its_own_knobs_and_an_overlay_names_its_faults() {
 
 #[test]
 fn the_record_carries_every_change_of_what_is_sent_and_saved() {
-    let mut saves = Saves::default();
+    let mut saves: BTreeMap<Id, Vec<u8>> = BTreeMap::new();
     let mut shown: BTreeMap<Id, Vec<u8>> = BTreeMap::new();
     let mut ticks = 0;
     run(4, Delivery::Canonical, 60, |e| {
         let record = e.record();
-        saves.take(record);
+        for (id, saved) in &record.saved {
+            match saved {
+                Some(bytes) => saves.insert(*id, bytes.clone()),
+                None => saves.remove(id),
+            };
+        }
         for (id, bytes) in &record.shown {
             shown.insert(*id, bytes.clone());
         }
         for id in &record.despawned {
             shown.remove(id);
         }
-        assert_eq!(
-            saves.first_difference(&e.saved()),
-            None,
-            "tick {}",
-            record.tick
-        );
+        assert_eq!(saves, e.saved(), "tick {}", record.tick);
         let w = e.world();
         let players = w.table::<Ember>().expect("players").iter();
         let sparks = w.table::<Spark>().expect("sparks").iter();
@@ -296,8 +315,5 @@ fn the_record_carries_every_change_of_what_is_sent_and_saved() {
         ticks += 1;
     });
     assert_eq!(ticks, 60);
-    assert!(
-        saves.rows().len() > PLAYERS as usize,
-        "sparks are saved too"
-    );
+    assert!(saves.len() > PLAYERS as usize, "sparks are saved too");
 }

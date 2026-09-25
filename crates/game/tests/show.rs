@@ -38,7 +38,7 @@ impl Game for Mime {
         kinds.add::<Ghost>();
     }
 
-    fn join(_: Id, _: &World<'_, Self>) -> Player {
+    fn join(_: Id, _: Option<()>, _: &World<'_, Self>) -> Player {
         Player
     }
 
@@ -97,6 +97,7 @@ fn tick(e: &mut Engine<Mime>, tick: u32, actions: &[(u32, u32)]) -> Shows {
     e.tick(&Turn {
         tick,
         joined: if tick == 0 { &joined } else { &[] },
+        restored: &[],
         bodies: &bodies,
         actions,
         cpu_ns: || 0,

@@ -9,7 +9,7 @@ use crate::record::Record;
 use crate::show::{BodyShow, Poses, Shows};
 use crate::space::Space;
 use crate::table::{Pair, Rows};
-use crate::{Anim, Game, Id, Kind, Kinds, Letter, Spot, Table, Tick, World, canon};
+use crate::{Anim, Bytes, Game, Id, Kind, Kinds, Letter, Schema, Spot, Table, Tick, World, canon};
 
 pub(crate) const NEVER: Tick = Tick::MAX;
 const ROUNDS: u8 = 2;
@@ -55,6 +55,7 @@ pub struct Engine<G: Game> {
     delivery: Delivery,
     tick: Tick,
     kinds: Vec<TypeId>,
+    schemas: Vec<Option<Schema>>,
     prevs: Vec<Box<dyn Any + Send + Sync>>,
     lives: Vec<Box<dyn Rows<G>>>,
     next_n: Vec<u32>,
@@ -106,9 +107,11 @@ impl<G: Game> Engine<G> {
             u16::try_from(declared.tables.len()).is_ok(),
             "too many kinds"
         );
-        let (mut kinds, mut prevs, mut lives) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut kinds, mut schemas) = (Vec::new(), Vec::new());
+        let (mut prevs, mut lives) = (Vec::new(), Vec::new());
         for pair in declared.tables {
             kinds.push(pair.kind);
+            schemas.push(pair.schema);
             prevs.push(pair.prev);
             lives.push(pair.live);
         }
@@ -120,6 +123,7 @@ impl<G: Game> Engine<G> {
             tick: 0,
             next_n: vec![0; kinds.len()],
             kinds,
+            schemas,
             prevs,
             lives,
             space: Space::default(),
@@ -150,7 +154,7 @@ impl<G: Game> Engine<G> {
         self.world().table()
     }
 
-    fn join(&mut self, n: u32, spawn: Spot) {
+    fn join(&mut self, n: u32, spawn: Spot, saved: Option<&[u8]>) {
         assert_eq!(
             n, self.next_n[0],
             "players join in the order of their bodies"
@@ -158,7 +162,11 @@ impl<G: Game> Engine<G> {
         self.space.join(n, spawn);
         self.poses.join(n);
         let id = Id::player(n);
-        let row = G::join(id, &self.world());
+        let saved = saved.map(|bytes| {
+            Bytes::from_bytes(bytes)
+                .unwrap_or_else(|| panic!("{} was handed saved fields not its own", G::NAME))
+        });
+        let row = G::join(id, saved, &self.world());
         self.next_n[0] = n + 1;
         let encoded = self.lives[0].push(self.prevs[0].as_mut(), n, Box::new(row), self.tick);
         self.record.came.push(id);
@@ -222,6 +230,15 @@ impl<G: Game> Engine<G> {
     }
 }
 
+/// Each kind's saved table as `G` declares its kinds, players first.
+pub(crate) fn schemas<G: Game>() -> Vec<Option<Schema>> {
+    let mut declared = Kinds {
+        tables: vec![Pair::of::<G::Player>()],
+    };
+    G::kinds(&mut declared);
+    declared.tables.iter().map(|t| t.schema).collect()
+}
+
 fn reverse_each_run<T: PartialOrd, L>(to: &[T], letters: &mut [L]) {
     debug_assert!(to.is_sorted());
     let mut i = 0;
@@ -245,7 +262,8 @@ impl<G: Game> Hosted for Engine<G> {
         clocks[0].time(|| {
             self.space.update(turn.bodies);
             for &(n, spawn) in turn.joined {
-                self.join(n, spawn);
+                let saved = turn.restored.binary_search_by_key(&n, |r| r.0);
+                self.join(n, spawn, saved.ok().map(|i| &turn.restored[i].1[..]));
             }
         });
         let mut got = Gathered::<G> {
@@ -338,6 +356,10 @@ impl<G: Game> Hosted for Engine<G> {
 
     fn held(&self, n: u32) -> Option<Anim> {
         self.poses.held(n)
+    }
+
+    fn schemas(&self) -> &[Option<Schema>] {
+        &self.schemas
     }
 
     fn shown(&self, n: u32) -> Option<&[u8]> {

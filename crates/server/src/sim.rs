@@ -181,6 +181,7 @@ impl Sim {
             game.tick(&Turn {
                 tick: world.tick(),
                 joined: &joined,
+                restored: &[],
                 bodies,
                 actions: &actions,
                 cpu_ns: thread_cpu_ns,

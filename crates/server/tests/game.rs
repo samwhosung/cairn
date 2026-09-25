@@ -28,6 +28,12 @@ game::knobs! {
     }
 }
 
+game::saved! {
+    struct Calls {
+        calls: u32,
+    }
+}
+
 impl Game for Tag {
     const NAME: &'static str = "tag";
     const KNOBS: &'static str = "unused = 0\n";
@@ -35,8 +41,10 @@ impl Game for Tag {
     type Msg = Called;
     type Player = Runner;
 
-    fn join(_: Id, _: &World<'_, Self>) -> Runner {
-        Runner { calls: 0 }
+    fn join(_: Id, saved: Option<Calls>, _: &World<'_, Self>) -> Runner {
+        Runner {
+            calls: saved.map_or(0, |s| s.calls),
+        }
     }
 
     fn action(number: u32) -> Option<Called> {
@@ -50,14 +58,14 @@ impl Game for Tag {
 
 impl Kind<Tag> for Runner {
     type Sent = u32;
-    type Saved = u32;
+    type Saved = Calls;
 
     fn sent(&self) -> u32 {
         self.calls
     }
 
-    fn saved(&self) -> u32 {
-        self.calls
+    fn saved(&self) -> Calls {
+        Calls { calls: self.calls }
     }
 
     fn apply(

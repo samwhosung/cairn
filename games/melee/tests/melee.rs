@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 use std::ops::Range;
 
-use game::{BodyOrder, Delivery, Engine, Hosted, Id, Knobs as _, Shows, Spot, Turn, anim};
-use melee::{Fighter, Knobs, Life, Melee, SWING};
+use game::{BodyOrder, Bytes, Delivery, Engine, Hosted, Id, Knobs as _, Shows, Spot, Turn, anim};
+use melee::{Fighter, Knobs, Life, Melee, SWING, Score};
 
 const QUICK: &str = "swing_ms = 50\ndamage_min = 30\ndamage_max = 30\nrespawn_s = 1\n";
 
@@ -32,6 +32,7 @@ fn fight(e: &mut Engine<Melee>, bodies: &[Spot], ticks: Range<u32>) -> Vec<(u32,
         e.tick(&Turn {
             tick,
             joined: if tick == 0 { &joined[..] } else { &[] },
+            restored: &[],
             bodies: &present,
             actions: &[(0, SWING)],
             cpu_ns: || 0,
@@ -137,6 +138,34 @@ fn permadeath_leaves_the_dead_down_and_a_dangerous_world_hits_twice_as_hard() {
     let mut e = engine(&[QUICK, include_str!("../knobs/dangerous.knobs")]);
     fight(&mut e, &bodies, 0..1);
     assert_eq!(fighter(&e, 1).health, 40);
+}
+
+#[test]
+fn a_fighter_that_comes_back_keeps_its_kills_and_deaths_and_rises_whole() {
+    let mut e = engine(&[]);
+    let score = Score {
+        kills: 4,
+        deaths: 9,
+    };
+    let spot = at(0.0, 0.0, 0.0);
+    e.tick(&Turn {
+        tick: 0,
+        joined: &[(0, spot), (1, spot)],
+        restored: &[(1, score.to_bytes())],
+        bodies: &[Some(spot), Some(spot)],
+        actions: &[],
+        cpu_ns: || 0,
+    });
+    let (fresh, back) = (fighter(&e, 0), fighter(&e, 1));
+    assert_eq!((fresh.kills, fresh.deaths), (0, 0));
+    assert_eq!((back.kills, back.deaths, back.health), (4, 9, 100));
+    let saved: Vec<_> = e
+        .record()
+        .saved
+        .iter()
+        .map(|(id, s)| (id.n, s.clone()))
+        .collect();
+    assert_eq!(saved[1], (1, Some(score.to_bytes())));
 }
 
 #[test]

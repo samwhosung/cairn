@@ -20,6 +20,12 @@ game::knobs! {
     }
 }
 
+game::saved! {
+    pub struct Kills {
+        pub kills: u32,
+    }
+}
+
 impl Game for Tally {
     const NAME: &'static str = "tally";
     const KNOBS: &'static str = "unused = 0\n";
@@ -27,7 +33,7 @@ impl Game for Tally {
     type Msg = Won;
     type Player = Fighter;
 
-    fn join(_: Id, _: &World<'_, Self>) -> Fighter {
+    fn join(_: Id, _: Option<Kills>, _: &World<'_, Self>) -> Fighter {
         Fighter { kills: 0 }
     }
 
@@ -38,12 +44,12 @@ impl Game for Tally {
 
 impl Kind<Tally> for Fighter {
     type Sent = ();
-    type Saved = u32;
+    type Saved = Kills;
 
     fn sent(&self) {}
 
-    fn saved(&self) -> u32 {
-        self.kills
+    fn saved(&self) -> Kills {
+        Kills { kills: self.kills }
     }
 
     fn apply(_: Id, me: &mut Self, mail: &[Letter<Won>], w: &World<'_, Tally>, _: &mut Out<Tally>) {

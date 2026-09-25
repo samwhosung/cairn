@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use crate::engine::{Clock, NEVER};
 use crate::out::{Fate, Out, STEP};
 use crate::record::Record;
-use crate::{Bytes, Game, Id, Kind, Letter, Tick, World, canon};
+use crate::{Bytes, Game, Id, Kind, Letter, Schema, Tick, World, canon};
 
 const ROWS_PER_TASK: usize = 256;
 const TOUCHED: u8 = 1;
@@ -50,6 +50,7 @@ struct Live<K> {
 
 pub(crate) struct Pair<G: Game> {
     pub kind: TypeId,
+    pub schema: Option<Schema>,
     pub prev: Box<dyn Any + Send + Sync>,
     pub live: Box<dyn Rows<G>>,
 }
@@ -58,6 +59,7 @@ impl<G: Game> Pair<G> {
     pub fn of<K: Kind<G>>() -> Self {
         Self {
             kind: TypeId::of::<K>(),
+            schema: Schema::of::<K::Saved>(),
             prev: Box::new(Table::<K> {
                 ns: Vec::new(),
                 rows: Vec::new(),

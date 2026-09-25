@@ -21,6 +21,14 @@ game::knobs! {
 
 pub struct Melee;
 
+game::saved! {
+    /// What a fighter keeps from one visit to the next.
+    pub struct Score {
+        pub kills: u32,
+        pub deaths: u32,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Msg {
     Swing,
@@ -53,12 +61,13 @@ impl Game for Melee {
     type Msg = Msg;
     type Player = Fighter;
 
-    fn join(_: Id, w: &World<'_, Self>) -> Fighter {
+    fn join(_: Id, saved: Option<Score>, w: &World<'_, Self>) -> Fighter {
+        let score = saved.unwrap_or_default();
         Fighter {
             health: w.knobs().health,
             life: Life::Alive,
-            kills: 0,
-            deaths: 0,
+            kills: score.kills,
+            deaths: score.deaths,
             swing_pending: false,
             ready_at: 0,
         }
@@ -71,14 +80,17 @@ impl Game for Melee {
 
 impl Kind<Melee> for Fighter {
     type Sent = (u32, bool);
-    type Saved = (u32, u32);
+    type Saved = Score;
 
     fn sent(&self) -> (u32, bool) {
         (self.health, self.life != Life::Alive)
     }
 
-    fn saved(&self) -> (u32, u32) {
-        (self.kills, self.deaths)
+    fn saved(&self) -> Score {
+        Score {
+            kills: self.kills,
+            deaths: self.deaths,
+        }
     }
 
     fn step(id: Id, me: &mut Self, w: &World<'_, Melee>, out: &mut Out<Melee>) {

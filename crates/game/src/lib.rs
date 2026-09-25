@@ -6,6 +6,7 @@
 
 mod bytes;
 mod canon;
+mod columns;
 mod dice;
 mod engine;
 mod hosted;
@@ -21,6 +22,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 pub use bytes::Bytes;
+pub use columns::{Column, Columns, Field, Scalar, Schema, Sql, Value};
 pub use engine::Engine;
 pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Stages, Took, Turn, load};
 pub use knobs::{Knob, Knobs, KnobsFile, Line};
@@ -72,17 +74,21 @@ pub trait Game: Sized + Send + Sync + 'static {
         let _ = kinds;
     }
 
-    fn join(id: Id, w: &World<'_, Self>) -> Self::Player;
+    /// The row a player's body gets as it joins, from what it saved when it comes back.
+    fn join(id: Id, saved: Option<Saved<Self>>, w: &World<'_, Self>) -> Self::Player;
 
     /// The letter a player's action becomes, sent to its own row before the row steps.
     fn action(number: u32) -> Option<Self::Msg>;
 }
 
+/// What a game's players save.
+pub type Saved<G> = <<G as Game>::Player as Kind<G>>::Saved;
+
 /// A kind of row. Every field is part of the world, and the world's hash reads them all.
 pub trait Kind<G: Game>: Clone + PartialEq + Hash + Debug + Send + Sync + 'static {
     /// What observers of a row are sent.
     type Sent: Bytes + PartialEq;
-    type Saved: Bytes + PartialEq;
+    type Saved: Columns;
 
     fn sent(&self) -> Self::Sent;
 

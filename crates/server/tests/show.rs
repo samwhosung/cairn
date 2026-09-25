@@ -28,7 +28,7 @@ impl Game for Mime {
     type Msg = u32;
     type Player = Player;
 
-    fn join(_: Id, _: &World<'_, Self>) -> Player {
+    fn join(_: Id, _: Option<()>, _: &World<'_, Self>) -> Player {
         Player
     }
 
