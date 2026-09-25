@@ -9,6 +9,7 @@ mod rules;
 mod serve;
 mod sim;
 mod stats;
+mod stepper;
 mod world;
 
 use std::fs::File;
@@ -23,12 +24,12 @@ pub use protocol::Movement;
 pub use replicate::{Tier, View};
 pub use rules::{Rules, Why, ground_between};
 pub use serve::{Config, Window};
-pub use stats::{PHASES, Summary, load_average, process_cpu_ns, thread_cpu_ns};
-pub use world::{InputOrder, Refusal, Spawn};
+pub use stats::{PHASES, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns};
+pub use stepper::{Link, Stepper};
+pub use world::{Input, InputOrder, Refusal, Spawn, Stamped};
 
 use crate::log::LogReader;
-use crate::net::{Outbox, Shared};
-use crate::sim::{Batches, Sim};
+use crate::net::Shared;
 
 /// A server running on its own threads.
 pub struct Running {
@@ -121,57 +122,47 @@ pub enum Replicate<'a> {
 /// recorded one.
 pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     let mut log = LogReader::open(path)?;
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(how.threads)
-        .build()
-        .map_err(io::Error::other)?;
-    let rules = Rules {
-        check: log.header.check,
-        ..Rules::default()
+    let cfg = Config {
+        tick_threads: how.threads,
+        tick_ms: log.header.tick_ms,
+        spawns: log.header.spawns.clone(),
+        rules: Rules {
+            check: log.header.check,
+            ..Rules::default()
+        },
+        ..Config::default()
     };
-    let mut sim = Sim::new(
-        log.header.spawns.clone(),
-        rules,
-        View::default(),
-        0,
-        log.header.tick_ms,
-    );
+    let mut stepper = Stepper::new(&cfg, how.order)?;
     if how.keep_refusals {
-        sim.keep_refusals();
+        stepper.keep_refusals();
     }
-    let clients = Shared::new();
     let mut dump = match how.replicate {
-        Replicate::Dumping(path) => {
-            let (outbox, rx) = Outbox::channel();
-            let on_written = outbox.on_written();
-            clients.hold_outbox(0, outbox);
-            Some((BufWriter::new(File::create(path)?), rx, on_written))
+        Replicate::Dumping(path) => Some((BufWriter::new(File::create(path)?), stepper.connect(0))),
+        Replicate::Yes => None,
+        Replicate::No => {
+            stepper.without_batches();
+            None
         }
-        Replicate::No | Replicate::Yes => None,
-    };
-    let batches = match how.replicate {
-        Replicate::No => Batches::Skip,
-        Replicate::Yes | Replicate::Dumping(_) => Batches::Send(&clients),
     };
     let (mut out, mut ticks) = (Replayed::default(), Vec::new());
     let cpu = process_cpu_ns();
     while let Some(logged) = log.next_tick()? {
-        let st = sim.tick(&pool, &logged.inputs, how.order, batches);
+        let st = stepper.tick(&logged.inputs);
         if (st.tick != logged.tick || st.hash != logged.hash) && out.first_mismatch.is_none() {
             out.first_mismatch = Some(logged.tick);
         }
         out.ticks += 1;
         out.hash = st.hash;
-        out.refusals.append(&mut sim.take_refusals());
+        out.refusals.append(&mut stepper.take_refusals());
         ticks.push(st);
-        if let Some((file, rx, on_written)) = &mut dump {
-            while let Ok(frame) = rx.try_recv() {
+        if let Some((file, link)) = &mut dump {
+            while let Some(frame) = link.next_frame() {
                 file.write_all(&frame)?;
-                on_written(frame.len());
+                link.taken_in(frame.len());
             }
         }
     }
-    if let Some((mut file, ..)) = dump {
+    if let Some((mut file, _)) = dump {
         file.flush()?;
     }
     let secs = f64::from(out.ticks) * f64::from(log.header.tick_ms) / 1000.0;

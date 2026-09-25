@@ -47,8 +47,7 @@ impl Outbox {
         async move { hung_up.notified().await }
     }
 
-    #[cfg(test)]
-    pub fn behind_by(&self) -> impl Fn(u32) + use<> {
+    pub fn behind_by(&self) -> impl Fn(u32) + Send + Sync + use<> {
         let behind = self.behind.clone();
         move |ticks| behind.store(ticks, Ordering::Relaxed)
     }
@@ -71,7 +70,7 @@ impl Outbox {
         self.queued_bytes.load(Ordering::Relaxed)
     }
 
-    pub fn on_written(&self) -> impl Fn(usize) + Send + use<> {
+    pub fn on_written(&self) -> impl Fn(usize) + Send + Sync + use<> {
         let queued = self.queued_bytes.clone();
         move |n| {
             queued.fetch_sub(n, Ordering::Relaxed);
