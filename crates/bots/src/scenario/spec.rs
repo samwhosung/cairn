@@ -90,6 +90,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
     };
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
+    let (mut view_at, mut rules_at) = (None, None);
     for s in &text.settings {
         let fault = |what: String| Bad::at(&s.at, what);
         match s.key.as_str() {
@@ -99,6 +100,18 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
                 None => set(&mut spec, s).map_err(fault)?,
             },
         }
+        match s.key.as_str() {
+            "view.radius" | "view.grey" => view_at = Some(&s.at),
+            key if key.starts_with("rules.") => rules_at = Some(&s.at),
+            _ => {}
+        }
+    }
+    if let Err(e) = spec.view.check(&spec.rules) {
+        let at = view_at.or(rules_at).cloned();
+        return Err(Bad {
+            at,
+            what: e.to_string(),
+        });
     }
     for s in disk {
         let Region::Disk { centre, radius } = &mut spec.place.region else {

@@ -31,6 +31,14 @@ pub struct Config {
     pub window: Option<Window>,
 }
 
+impl Config {
+    pub(crate) fn check(&self) -> io::Result<()> {
+        self.view
+            .check(&self.rules)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {

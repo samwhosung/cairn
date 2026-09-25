@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 
 pub use net::InProcess;
 pub use protocol::Movement;
-pub use replicate::{Tier, View};
+pub use replicate::{PastReach, Tier, View};
 pub use rules::{Rules, Why, ground_between};
 pub use serve::{Config, Window};
 pub use stats::{PHASES, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns};
@@ -40,8 +40,10 @@ pub struct Running {
     runtime: tokio::runtime::Runtime,
 }
 
-/// Binds `cfg.addr`, if it names one, and starts ticking.
+/// Binds `cfg.addr`, if it names one, and starts ticking; refuses a view past what a batch's
+/// positions reach ([`View::check`]).
 pub fn start(cfg: Config) -> io::Result<Running> {
+    cfg.check()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.io_threads.max(1))
         .thread_name("conn")

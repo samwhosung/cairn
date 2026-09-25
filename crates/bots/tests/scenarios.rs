@@ -118,6 +118,33 @@ fn a_false_expectation_fails_the_run_and_is_named() {
 }
 
 #[test]
+fn a_view_past_what_the_wire_reaches_is_refused_at_its_line_and_one_within_it_runs() {
+    for (base, radius, view, reach) in [
+        ("flat.scenario", (250, 240), "251.0", "242.0"),
+        ("flat-run14.scenario", (230, 226), "231.0", "228.0"),
+    ] {
+        let (past, within) = radius;
+        let past = scratch(
+            "past.scenario",
+            &over(base, &format!("seconds = 5\nview.radius = {past}\n")),
+        );
+        let out = run(&past, &[]);
+        assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+        let named = format!(
+            "{}:3: a view of {view} yd, its radius and grey, goes past the {reach} yd",
+            past.display()
+        );
+        assert!(said(&out).starts_with(&named), "{}", said(&out));
+        let within = scratch(
+            "within.scenario",
+            &over(base, &format!("seconds = 5\nview.radius = {within}\n")),
+        );
+        let out = run(&within, &[]);
+        assert_eq!(out.status.code(), Some(0), "{base}: {}", said(&out));
+    }
+}
+
+#[test]
 fn an_unknown_key_is_refused_at_its_line_and_a_known_one_is_taken() {
     let unknown = scratch(
         "unknown.scenario",

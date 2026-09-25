@@ -1,3 +1,5 @@
+use std::fmt;
+
 use protocol::{
     SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_move,
     write_state, write_turn, write_vanish,
@@ -97,7 +99,38 @@ impl Default for View {
     }
 }
 
+/// A view that reaches further than a batch's positions read right, so it would hide players in
+/// range, in yards across: the view's radius and grey, and the reach.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PastReach {
+    pub view_yd: f32,
+    pub reach_yd: f32,
+}
+
+impl fmt::Display for PastReach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a view of {:.1} yd, its radius and grey, goes past the {:.1} yd a batch's positions \
+             reach with these movement rules",
+            self.view_yd, self.reach_yd
+        )
+    }
+}
+
+impl std::error::Error for PastReach {}
+
 impl View {
+    /// Refuses a view whose radius and grey go past what a batch's positions reach under `rules`.
+    pub fn check(&self, rules: &Rules) -> Result<(), PastReach> {
+        let (view_yd, reach_yd) = (self.radius + self.grey, Reach::of(rules).across);
+        if view_yd <= reach_yd {
+            Ok(())
+        } else {
+            Err(PastReach { view_yd, reach_yd })
+        }
+    }
+
     fn tier(&self, d2: f32) -> usize {
         self.tiers
             .iter()

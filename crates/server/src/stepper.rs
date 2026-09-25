@@ -46,6 +46,7 @@ impl Link {
 
 impl Stepper {
     pub fn new(cfg: &Config, order: InputOrder) -> io::Result<Self> {
+        cfg.check()?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(cfg.tick_threads)
             .thread_name(|i| format!("tick-{i}"))
