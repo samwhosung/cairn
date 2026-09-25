@@ -21,6 +21,9 @@ pub struct Rules {
     pub rise: f32,
     /// The fastest fall, yards per second.
     pub fall: f32,
+    /// Ground a fall may cover beyond its speed for each yard it drops: against a face too steep to
+    /// stand on it slides down at the full rate of the fall, so across at up to cot 50°.
+    pub slide: f32,
     /// How far a claim may lead the client's pinned clock without spending budget, ms.
     pub clock_slack_ms: u32,
     /// How far in all the pin may follow claims that lead it by more than the slack, ms.
@@ -45,6 +48,7 @@ impl Default for Rules {
             climb: 1.2,
             rise: 2.7,
             fall: 60.148,
+            slide: 0.839_1,
             clock_slack_ms: 1000,
             clock_budget_ms: 10_000,
             bound: 17_066.666,
@@ -188,11 +192,18 @@ impl Rules {
     }
 
     /// How far over the ground a mover may go from `last` to `m`, yards. The flags may have
-    /// changed anywhere between the two, so the faster of their speeds holds.
+    /// changed anywhere between the two, so the faster of their speeds holds; a claim that ends a
+    /// fall says how long it lasted.
     pub fn ground_allowed(&self, last: &Movement, m: &Movement) -> f32 {
         let dt = m.time.saturating_sub(last.time) as f32 / 1000.0;
         let speed = self.speed(last.flags).max(self.speed(m.flags));
-        speed * dt * (1.0 + self.tolerance) + self.slack
+        let fell = (last.flags | m.flags) & flags::FALLING != 0 || m.fall_time > 0;
+        let slid = if fell {
+            (last.pos[2] - m.pos[2]).max(0.0) * self.slide
+        } else {
+            0.0
+        };
+        speed * dt * (1.0 + self.tolerance) + self.slack + slid
     }
 
     fn well_formed(&self, m: &Movement) -> bool {
@@ -259,6 +270,41 @@ mod tests {
         let standing = last_at([0.0, 0.0, 0.0], 1000, 0);
         let started_late = claim(1200, flags::FORWARD, [1.4, 0.0, 0.0]);
         assert_eq!(rules.judge(&standing, &started_late, 1200), Verdict::Accept);
+    }
+
+    #[test]
+    fn a_fall_down_a_steep_face_slides_across_but_a_walk_downhill_does_not() {
+        let rules = Rules::default();
+        let body = last_at(
+            [-9084.98, 89.80, 109.80],
+            1033,
+            flags::FALLING | flags::FALLING_FAR,
+        );
+        let landed = Claim {
+            ack: 0,
+            movement: Movement {
+                fall_time: 1100,
+                ..claim(1516, 0, [-9087.70, 83.08, 98.60]).movement
+            },
+        };
+        assert_eq!(rules.judge(&body, &landed, 1516), Verdict::Accept);
+        let body = last_at([0.0, 0.0, 10.0], 1000, flags::FORWARD);
+        let downhill = claim(1500, flags::FORWARD, [7.24, 0.0, -1.2]);
+        assert_eq!(
+            rules.judge(&body, &downhill, 1500),
+            Verdict::Refuse(Why::Speed)
+        );
+        let fell_on_the_flat = Claim {
+            ack: 0,
+            movement: Movement {
+                fall_time: 400,
+                ..claim(1500, flags::FORWARD, [7.24, 0.0, 10.0]).movement
+            },
+        };
+        assert_eq!(
+            rules.judge(&body, &fell_on_the_flat, 1500),
+            Verdict::Refuse(Why::Speed)
+        );
     }
 
     #[test]

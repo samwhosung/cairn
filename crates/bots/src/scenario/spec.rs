@@ -230,6 +230,7 @@ pub fn rules_knob<'a>(r: &'a mut Rules, name: &str) -> Option<Knob<'a>> {
         "climb" => Knob::F32(&mut r.climb),
         "rise" => Knob::F32(&mut r.rise),
         "fall" => Knob::F32(&mut r.fall),
+        "slide" => Knob::F32(&mut r.slide),
         "clock_slack_ms" => Knob::U32(&mut r.clock_slack_ms),
         "clock_budget_ms" => Knob::U32(&mut r.clock_budget_ms),
         "bound" => Knob::F32(&mut r.bound),
