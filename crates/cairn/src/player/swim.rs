@@ -221,22 +221,7 @@ pub fn drive_step(
 }
 
 pub fn translate_amounts(axes: &MoveAxes) -> (f32, f32) {
-    let mut side = 0.0_f32;
-    if axes.strafe_right {
-        side += 1.0;
-    }
-    if axes.strafe_left {
-        side -= 1.0;
-    }
-    if axes.mouselook {
-        if axes.turn_right {
-            side += 1.0;
-        }
-        if axes.turn_left {
-            side -= 1.0;
-        }
-    }
-    (axes.fwd.signum() as f32, side)
+    (axes.fwd.signum() as f32, axes.side as f32)
 }
 
 #[cfg(test)]

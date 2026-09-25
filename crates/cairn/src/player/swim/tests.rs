@@ -152,3 +152,23 @@ fn the_rest_line_redirects_the_stroke_level_at_full_speed() {
     let eased = pitch2.expect("the cap bit");
     assert!(eased > 0.0 && eased < steep.y.atan2(steep.x));
 }
+
+#[test]
+fn a_swimmer_strokes_along_the_netted_axes_so_a_rooted_one_holds_still() {
+    let steering = MoveAxes {
+        fwd: 1,
+        side: -1,
+        mouselook: true,
+        translating: true,
+        turn_left: true,
+        ..MoveAxes::default()
+    };
+    assert_eq!(translate_amounts(&steering), (1.0, -1.0));
+    let rooted = MoveAxes {
+        fwd: 0,
+        side: 0,
+        translating: false,
+        ..steering
+    };
+    assert_eq!(translate_amounts(&rooted), (0.0, 0.0), "A still held");
+}

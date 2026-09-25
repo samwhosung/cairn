@@ -116,8 +116,6 @@ pub struct MoveAxes {
     pub turning: bool,
     /// Off the net axes: W+S moves nothing.
     pub translating: bool,
-    pub strafe_left: bool,
-    pub strafe_right: bool,
     pub turn_left: bool,
     pub turn_right: bool,
 }
@@ -167,8 +165,6 @@ pub fn move_axes(
         mouselook,
         turning: !mouselook && (turn_left || turn_right),
         translating: fwd != 0 || side != 0,
-        strafe_left,
-        strafe_right,
         turn_left,
         turn_right,
     }
