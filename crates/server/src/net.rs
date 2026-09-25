@@ -236,8 +236,6 @@ impl InProcess {
     }
 }
 
-/// The server's end of an [`InProcess`] connection: what its client sent, and where the server's
-/// frames go.
 pub struct ServerEnd {
     pub from_client: mpsc::UnboundedReceiver<Vec<u8>>,
     pub to_client: std_mpsc::Sender<(Vec<u8>, Instant)>,
@@ -271,11 +269,13 @@ pub fn connect_host(shared: &Arc<Shared>, runtime: &Handle) -> InProcess {
 #[derive(Clone, Copy)]
 pub enum Standing {
     Guest,
+    /// May teleport.
     Host,
 }
 
-/// A connection's bytes read as the server reads them: a hello, then claims, teleports and actions
-/// in the order sent, and reports of the latest tick seen as how far behind the client is.
+/// Bytes that break the protocol, for which the connection is closed.
+pub struct Broken;
+
 pub struct Reader {
     pub conn: u32,
     standing: Standing,
@@ -296,7 +296,7 @@ impl Reader {
     }
 
     /// Reads `bytes`, received at `received_ms` when the latest tick was `latest_tick`, into
-    /// `inputs`; false once they break the protocol, when the connection closes.
+    /// `inputs`.
     pub fn read(
         &mut self,
         bytes: &[u8],
@@ -304,11 +304,11 @@ impl Reader {
         latest_tick: u32,
         behind_by: impl Fn(u32),
         inputs: &mut Vec<Stamped>,
-    ) -> bool {
+    ) -> Result<(), Broken> {
         self.frames.extend(bytes);
         loop {
             let input = match self.frames.next_frame().map(|f| f.map(ClientMessage::read)) {
-                Ok(None) => return true,
+                Ok(None) => return Ok(()),
                 Ok(Some(Ok(ClientMessage::Hello(h)))) if !self.joined && h.version == VERSION => {
                     self.joined = true;
                     match self.standing {
@@ -323,7 +323,7 @@ impl Reader {
                     behind_by(latest_tick.saturating_sub(tick));
                     continue;
                 }
-                _ => return false,
+                _ => return Err(Broken),
             };
             inputs.push(Stamped {
                 conn: self.conn,
@@ -430,9 +430,9 @@ async fn read(
             shared.latest_tick.load(Ordering::Relaxed),
         );
         let behind_by = |ticks| behind.store(ticks, Ordering::Relaxed);
-        let open = reader.read(bytes, received_ms, latest, behind_by, &mut batch);
+        let read = reader.read(bytes, received_ms, latest, behind_by, &mut batch);
         shared.push(&mut batch);
-        if !open {
+        if read.is_err() {
             break;
         }
     }

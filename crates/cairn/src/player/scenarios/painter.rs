@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::{PrimaryWindow, WindowResolution};
+use server::Standing;
 use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
@@ -22,7 +23,7 @@ use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
-use super::clock::{Served, Stepping};
+use super::clock::{Frames, SharedClock};
 use super::walker::{Through, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
@@ -44,7 +45,7 @@ pub(super) struct Painter {
     out: PathBuf,
     pace: Pace,
     judge_on_drop: bool,
-    stepping: Option<Stepping>,
+    frames: Frames,
     beside: Vec<Box<dyn FnMut()>>,
 }
 
@@ -86,9 +87,9 @@ impl Painter {
         Self::welcomed(through, feet, heading_deg, look)
     }
 
-    /// A painter joining the server on `clock` as a guest, as [`Painter::joined`] does one's.
+    /// [`Painter::joined`], but as a guest of the server on `clock`.
     pub(super) fn on_clock(
-        clock: &Served,
+        clock: &SharedClock,
         feet: [f32; 3],
         heading_deg: f32,
         look: CharacterLook,
@@ -97,14 +98,14 @@ impl Painter {
             clock: clock.clone(),
             name: "Painter".into(),
             look: look.clone(),
-            host: false,
+            standing: Standing::Guest,
         };
         Self::welcomed(through, feet, heading_deg, look)
     }
 
     /// A painter hosting the server on `clock`, which judges it once it is dropped.
     pub(super) fn hosting(
-        clock: &Served,
+        clock: &SharedClock,
         feet: [f32; 3],
         heading_deg: f32,
         look: CharacterLook,
@@ -113,7 +114,7 @@ impl Painter {
             clock: clock.clone(),
             name: "Host".into(),
             look: look.clone(),
-            host: true,
+            standing: Standing::Host,
         };
         Self::welcomed(through, feet, heading_deg, look)
     }
@@ -156,12 +157,12 @@ impl Painter {
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
         let judge_on_drop = through.as_ref().is_some_and(Through::hosted);
-        let (net, stepping) = match through {
+        let (net, frames) = match through {
             Some(through) => {
-                let (net, stepping) = through.join(map.id, pose, &look, STEP);
-                (Some(net), stepping)
+                let (net, frames) = through.join(map.id, pose, &look, STEP);
+                (Some(net), frames)
             }
-            None => (None, None),
+            None => (None, Frames::OnTheWall),
         };
         let mut app = App::new();
         world::register_source(&mut app, &install);
@@ -206,7 +207,7 @@ impl Painter {
             out: PathBuf::from(out),
             pace: Pace::default(),
             judge_on_drop,
-            stepping,
+            frames,
             beside: Vec::new(),
         };
         painter.hold();
@@ -221,7 +222,7 @@ impl Painter {
         if joins {
             painter.await_welcome();
         }
-        if !over_loopback && painter.stepping.is_none() {
+        if !over_loopback && painter.frames.clock().is_none() {
             painter.pace.start();
         }
         Some(painter)
@@ -267,9 +268,7 @@ impl Painter {
         {
             assert!(Instant::now() < deadline, "no welcome from the server");
             self.frame();
-            if self.stepping.is_none() {
-                std::thread::sleep(STEP);
-            }
+            self.frames.wait(STEP);
         }
     }
 
@@ -279,30 +278,15 @@ impl Painter {
         self.beside.push(Box::new(window));
     }
 
-    /// A frame a step on from the last, on the test's clock or the wall's.
     fn frame(&mut self) {
-        match &mut self.stepping {
-            Some(stepping) => stepping.frame(&mut self.app),
-            None => self.app.update(),
-        }
+        self.frames.frame(&mut self.app);
         for window in &mut self.beside {
             window();
         }
     }
 
-    /// A frame that moves a test's clock nothing on.
     pub(super) fn hold(&mut self) {
-        match &mut self.stepping {
-            Some(stepping) => stepping.hold(&mut self.app),
-            None => self.app.update(),
-        }
-    }
-
-    /// Waits out a step of the wall clock after a frame on it; nothing on a test's.
-    fn pause_after_frame(&self) {
-        if self.stepping.is_none() {
-            std::thread::sleep(STEP);
-        }
+        self.frames.hold(&mut self.app);
     }
 
     pub(super) fn clock(&mut self) -> Mut<'_, Time<Virtual>> {
@@ -315,7 +299,7 @@ impl Painter {
         while self.app.world().resource::<Player>().settling {
             assert!(Instant::now() < deadline, "the collision never settled");
             self.hold();
-            self.pause_after_frame();
+            self.frames.wait(STEP);
         }
         let from = wow_to_bevy([xy[0], xy[1], 500.0]);
         let ground = self
@@ -343,7 +327,7 @@ impl Painter {
         while !self.arrived() {
             assert!(Instant::now() < deadline, "the world never arrived");
             self.hold();
-            self.pause_after_frame();
+            self.frames.wait(STEP);
         }
     }
 
@@ -435,7 +419,7 @@ impl Painter {
     pub(super) fn shoot(&mut self, name: &str) {
         self.clock().pause();
         for _ in 0..FRAMES_TO_REACH_THE_IMAGE {
-            if self.stepping.is_some() {
+            if self.frames.clock().is_some() {
                 self.hold();
             } else {
                 self.run(1);
@@ -465,8 +449,7 @@ impl Painter {
 impl Drop for Painter {
     fn drop(&mut self) {
         if self.judge_on_drop {
-            let clock = self.stepping.as_ref().map(Stepping::clock);
-            alone::assert_honest(&mut self.app, clock, "painter");
+            alone::assert_honest(&mut self.app, self.frames.clock(), "painter");
         }
     }
 }

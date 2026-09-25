@@ -23,7 +23,7 @@ use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
 pub use limits::{Limits, Why, ground_between};
-pub use net::InProcess;
+pub use net::{InProcess, Standing};
 pub use protocol::Movement;
 pub use replicate::{PastReach, Tier, View};
 pub use save::{

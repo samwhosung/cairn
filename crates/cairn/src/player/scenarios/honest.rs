@@ -2,7 +2,7 @@ use bevy::input::keyboard::KeyCode;
 use server::{Config, Spawn, Why};
 use world::unit::CharacterLook;
 
-use super::clock::{self, Served};
+use super::clock::{self, SharedClock};
 use super::walker::Walker;
 use super::{
     ABBEY_STAIRS, CANAL_RAMP, DOWN_THE_RAMP, HILLSIDE, INN_WALL_START, MEADOW, SHORE, walk_path,
@@ -31,9 +31,9 @@ pub fn config(stands: &[Stand]) -> Config {
     }
 }
 
-/// A server whose players join beside `stands` in turn, on a clock their windows step `hz` times
-/// a second.
-pub fn serve(stands: &[Stand], hz: f32) -> Served {
+/// A server whose players join at `stands` in turn, on a clock their windows step `hz` times a
+/// second.
+pub fn serve(stands: &[Stand], hz: f32) -> SharedClock {
     clock::serve(&config(stands), clock::step_at(hz))
 }
 

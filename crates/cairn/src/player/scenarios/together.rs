@@ -13,7 +13,7 @@ use world::coords::bevy_to_wow;
 use world::rig::ModelAnimations;
 use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
-use super::clock::Served;
+use super::clock::SharedClock;
 use super::honest::{Stand, serve};
 use super::painter::{Painter, frame_costs, rig_census};
 use super::pair::Act;
@@ -40,8 +40,6 @@ const RUN_AND_JUMP: [(f32, Act); 4] = [
     (1.3, Act::Release(KeyCode::KeyW)),
 ];
 
-/// The other player's client, on the painter's clock: once told to go, it runs and jumps as its
-/// own game clock says.
 struct Runner {
     w: Walker,
     go: Option<Duration>,
@@ -49,7 +47,7 @@ struct Runner {
 }
 
 impl Runner {
-    fn joined(clock: &Served, look: CharacterLook) -> Self {
+    fn joined(clock: &SharedClock, look: CharacterLook) -> Self {
         let mut w = Walker::welcomed(clock, "Runner", look).expect("the install");
         ready(&mut [&mut w]);
         Self {
@@ -60,17 +58,17 @@ impl Runner {
     }
 
     fn go(&mut self) {
-        self.go = Some(self.clock());
+        self.go = Some(self.game_time());
     }
 
-    fn clock(&self) -> Duration {
+    fn game_time(&self) -> Duration {
         self.w.app.world().resource::<Time<Virtual>>().elapsed()
     }
 
     fn frame(&mut self) {
         if let Some(go) = self.go {
             while let Some(&(at, act)) = RUN_AND_JUMP.get(self.next)
-                && self.clock().saturating_sub(go).as_secs_f32() >= at
+                && self.game_time().saturating_sub(go).as_secs_f32() >= at
             {
                 match act {
                     Act::Press(key) => self.w.press(key),

@@ -1,5 +1,5 @@
-//! A walker's own server, as a bare window runs one: joining it, on a test's clock or holding the
-//! walker's frames to the wall clock, and what it made of the walk.
+//! A walker's own server, configured as a bare window's: the pace that holds a walker's frames to
+//! the wall clock, and what the server made of the walk.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -7,9 +7,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::App;
 use protocol::Why;
 use server::Summary;
-use world::unit::CharacterLook;
 
-use super::clock::Served;
+use super::clock::SharedClock;
 use crate::net::{self, Net};
 use crate::view::Pose;
 
@@ -18,12 +17,6 @@ pub fn own_config(map: u32, pose: Pose, record: Option<PathBuf>) -> server::Conf
         record,
         ..net::own_server(None, map, pose.target.to_array(), pose.heading)
     }
-}
-
-/// The server a bare window runs, on the wall clock.
-pub fn own_server(map: u32, pose: Pose, look: &CharacterLook) -> Net {
-    let hello = net::hello("Walker".into(), look);
-    Net::host(own_config(map, pose, None), hello).expect("the walker's own server")
 }
 
 /// Holds frames that each step the game clock by `step` to no faster than the wall clock, as a
@@ -73,8 +66,9 @@ impl Judged {
 }
 
 /// Stops the server `app` hosts, on `clock` or on the wall clock, once the claims sent have reached
-/// a tick, and says what it made of them; `None` if the app has no server of its own left.
-pub fn judge(app: &mut App, clock: Option<&Served>) -> Option<Judged> {
+/// a tick, and says what it made of them; `None` if the app has no connection or, on the wall
+/// clock, no server of its own left.
+pub fn judge(app: &mut App, clock: Option<&SharedClock>) -> Option<Judged> {
     let mut net = app.world_mut().get_resource_mut::<Net>()?;
     let summary = if let Some(clock) = clock {
         clock.borrow_mut().stop()
@@ -98,7 +92,7 @@ pub fn judge(app: &mut App, clock: Option<&Served>) -> Option<Judged> {
     Some(judged)
 }
 
-pub fn assert_honest(app: &mut App, clock: Option<&Served>, who: &str) {
+pub fn assert_honest(app: &mut App, clock: Option<&SharedClock>, who: &str) {
     if std::thread::panicking() {
         return;
     }

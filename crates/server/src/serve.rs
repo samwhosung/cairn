@@ -19,7 +19,7 @@ const MAX_UNRELEASED_MS: u32 = 1000;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Where players connect over TCP; with none, only the host joins, from the same process.
+    /// Where players connect over TCP; with none, players join only from the same process.
     pub addr: Option<SocketAddr>,
     pub tick_threads: usize,
     pub io_threads: usize,

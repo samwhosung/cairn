@@ -1,7 +1,6 @@
-//! Pictures of the walker from its own follow camera: the window's plugins drawn headless into an
-//! image, the body walked by scripted keys at a fixed step, and a PNG taken with the clocks held,
-//! or the cost of its frames timed. They need a GPU as well as the install, so they run only when
-//! asked for, writing into the directory `CAIRN_PICTURES` names.
+//! Pictures of the walker from its own follow camera, and the cost of its frames. They need a GPU
+//! as well as the install, so they run only when asked for, writing into the directory
+//! `CAIRN_PICTURES` names.
 
 use bevy::input::ButtonState;
 use bevy::prelude::*;

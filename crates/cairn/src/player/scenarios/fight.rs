@@ -12,7 +12,7 @@ use server::Spawn;
 use world::rig::ModelAnimations;
 use world::unit::{CharacterLook, UnitShow};
 
-use super::clock::{self, Served};
+use super::clock::{self, SharedClock};
 use super::painter::Painter;
 use super::pictures::{EAST, GOLDSHIRE};
 use super::together::arrive;
@@ -32,14 +32,13 @@ const READY_UNARMED: u16 = 25;
 const NORTH: f32 = 0.0;
 const WEST: f32 = 90.0;
 
-/// The other fighter's client, on the painter's clock: it swings once when told to.
 struct Fighter {
     w: Walker,
     swing: bool,
 }
 
 impl Fighter {
-    fn joined(clock: &Served, look: CharacterLook) -> Self {
+    fn joined(clock: &SharedClock, look: CharacterLook) -> Self {
         let mut w = Walker::welcomed(clock, "Fighter", look).expect("the install");
         w.aim(WEST);
         ready(&mut [&mut w]);

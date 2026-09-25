@@ -6,7 +6,7 @@ use bevy::input::keyboard::KeyCode;
 use world::unit::CharacterLook;
 
 use super::MEADOW;
-use super::clock::{self, Served};
+use super::clock::{self, SharedClock};
 use super::honest::{self, Stand};
 use super::walker::{Walker, ready};
 use crate::net::{Faults, OtherPlayer, RemoteMotion};
@@ -15,8 +15,8 @@ use crate::player::state::{GRAVITY, RUN_SPEED};
 pub const HZ: f32 = 60.0;
 const TICK_MS: u16 = 50;
 /// A claim waits at most a tick for the server, whose batch at that tick carries it to a watcher
-/// this near, and the watcher's frame at the tick takes it in: frames at `HZ` fall on the ticks,
-/// and moves that arrive a tick apart replay as they arrive.
+/// in the near tier, and the watcher's frame at the tick takes it in: frames at `HZ` fall on the
+/// ticks, and moves that arrive a tick apart replay as they arrive.
 const HEARD_LATE_SECS: f32 = TICK_MS as f32 / 1000.0;
 const HEARTBEAT_SECS: f32 = protocol::HEARTBEAT_MS as f32 / 1000.0;
 const REVERSAL: f32 = 2.0 * RUN_SPEED;
@@ -257,7 +257,7 @@ pub struct Walked {
     pub server: server::Summary,
 }
 
-fn serve(stands: &[Stand]) -> Served {
+fn serve(stands: &[Stand]) -> SharedClock {
     let cfg = server::Config {
         tick_ms: TICK_MS,
         ..honest::config(stands)

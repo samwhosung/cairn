@@ -5,7 +5,7 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
     Welcome, Why,
 };
-use server::{Config, InProcess, InputOrder, Spawn, Stepper};
+use server::{Config, InProcess, InputOrder, Spawn, Standing, Stepper};
 
 fn send(client: &InProcess, message: &ClientMessage) {
     let mut bytes = Vec::new();
@@ -21,10 +21,9 @@ fn hello(name: &str) -> ClientMessage {
     })
 }
 
-/// What the server has handed a client since the last look, and when each piece was handed over.
 #[derive(Default)]
 struct Heard {
-    at: Vec<Instant>,
+    handed_at: Vec<Instant>,
     welcome: Option<Welcome>,
     granted: bool,
     refused: Option<Why>,
@@ -34,7 +33,7 @@ fn heard(client: &InProcess) -> Heard {
     let mut heard = Heard::default();
     let mut frames = Frames::default();
     while let Ok((bytes, at)) = client.try_recv() {
-        heard.at.push(at);
+        heard.handed_at.push(at);
         frames.extend(&bytes);
         while let Some(frame) = frames.next_frame().expect("whole frames") {
             let batch = match ServerMessage::read(frame).expect("a message") {
@@ -71,29 +70,30 @@ fn a_connection_from_inside_is_read_and_answered_when_its_caller_says_as_a_hosts
     let mut stepper =
         Stepper::new(&cfg, InputOrder::Canonical, Delivery::Canonical).expect("a stepper");
     let (host, guest) = (
-        stepper.connect_in_process(true),
-        stepper.connect_in_process(false),
+        stepper.connect_in_process(Standing::Host),
+        stepper.connect_in_process(Standing::Guest),
     );
     send(&host, &hello("Host"));
     send(&guest, &hello("Guest"));
     let epoch = Instant::now();
     stepper.tick(&[]);
     stepper.hand_over(epoch);
-    assert!(heard(&host).at.is_empty(), "a hello not yet received");
+    assert!(
+        heard(&host).handed_at.is_empty(),
+        "a hello not yet received"
+    );
 
     stepper.receive(50);
     stepper.tick(&[]);
-    assert!(heard(&host).at.is_empty(), "a welcome not yet handed over");
+    assert!(
+        heard(&host).handed_at.is_empty(),
+        "a welcome not yet handed over"
+    );
     let handed = epoch + Duration::from_millis(100);
     stepper.hand_over(handed);
     let (to_host, to_guest) = (heard(&host), heard(&guest));
-    assert!(
-        to_host
-            .at
-            .iter()
-            .chain(&to_guest.at)
-            .all(|at| *at == handed)
-    );
+    let handed_at = to_host.handed_at.iter().chain(&to_guest.handed_at);
+    assert!(handed_at.copied().all(|at| at == handed));
     let host_id = to_host.welcome.expect("the host's welcome").id;
     let guest_id = to_guest.welcome.expect("the guest's welcome").id;
 

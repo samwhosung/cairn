@@ -25,13 +25,11 @@ pub struct Stepper {
     order: InputOrder,
     clients: Shared,
     batches: bool,
-    inside: Vec<Inside>,
+    in_process: Vec<InProcessConnection>,
     log: Option<LogWriter>,
 }
 
-/// A connection from inside the process whose bytes are read, and whose frames are handed over,
-/// when the stepper's caller says.
-struct Inside {
+struct InProcessConnection {
     reader: Reader,
     end: ServerEnd,
     link: Link,
@@ -114,7 +112,7 @@ impl Stepper {
             order,
             clients: Shared::new(),
             batches: true,
-            inside: Vec::new(),
+            in_process: Vec::new(),
             log: None,
         })
     }
@@ -259,19 +257,14 @@ impl Stepper {
         link
     }
 
-    /// Opens a connection from inside the process, the host's or a guest's, numbered after every
-    /// other such: its bytes are read by [`Stepper::receive`] as a socket's would be, and the
-    /// server's frames reach it by [`Stepper::hand_over`].
-    pub fn connect_in_process(&mut self, host: bool) -> InProcess {
+    /// Opens a connection from inside the process, numbered after every other such: its bytes are
+    /// read by [`Stepper::receive`] as a socket's would be, and the server's frames reach it by
+    /// [`Stepper::hand_over`].
+    pub fn connect_in_process(&mut self, standing: Standing) -> InProcess {
         let conn = self.clients.next_conn();
-        let standing = if host {
-            Standing::Host
-        } else {
-            Standing::Guest
-        };
         let (client, end) = InProcess::open();
         let link = self.connect(conn);
-        self.inside.push(Inside {
+        self.in_process.push(InProcessConnection {
             reader: Reader::new(conn, standing),
             end,
             link,
@@ -280,10 +273,11 @@ impl Stepper {
     }
 
     /// Reads what each connection from inside the process has sent since the last call, as
-    /// received at `received_ms`, for the next tick; one whose client has hung up leaves at it.
+    /// received at `received_ms`, for the next tick; one that has hung up or broken the protocol
+    /// leaves at it.
     pub fn receive(&mut self, received_ms: u32) {
         let (latest, mut inputs) = (self.next_tick(), Vec::new());
-        self.inside.retain_mut(|c| {
+        self.in_process.retain_mut(|c| {
             loop {
                 match c.end.from_client.try_recv() {
                     Ok(bytes) => {
@@ -291,9 +285,10 @@ impl Stepper {
                             .bytes_in
                             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                         let behind_by = |ticks| c.link.behind_by(ticks);
-                        if c.reader
-                            .read(&bytes, received_ms, latest, behind_by, &mut inputs)
-                        {
+                        let read =
+                            c.reader
+                                .read(&bytes, received_ms, latest, behind_by, &mut inputs);
+                        if read.is_ok() {
                             continue;
                         }
                     }
@@ -316,7 +311,7 @@ impl Stepper {
     /// Hands each connection from inside the process what the server has sent it since the last
     /// call, as written at `at`, and closes those the server has let go.
     pub fn hand_over(&mut self, at: Instant) {
-        self.inside.retain_mut(|c| {
+        self.in_process.retain_mut(|c| {
             while let Some(frame) = c.link.next_frame() {
                 c.link.taken_in(frame.len());
                 if c.end.to_client.send((frame, at)).is_err() {

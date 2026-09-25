@@ -4,23 +4,20 @@ use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Record, ServerMessage, VERSION,
     flags,
 };
-use server::{Config, InProcess, Limits, Spawn};
+use server::{Config, InProcess, Limits, Spawn, Standing};
 use world::unit::CharacterLook;
 
 use super::MEADOW;
-use super::clock::{self, Served};
+use super::clock::{self, SharedClock};
 use super::pair::{BOUND_ACROSS, HZ, copy_of};
 use super::walker::Walker;
 use crate::player::state::RUN_SPEED;
 
 const LIE: f32 = 3.0;
-const HEARTBEAT_MS: u32 = 500;
 
-/// A client of the server on a test's clock that claims to run `LIE` times as fast as it may, on
-/// that clock.
 struct Liar {
     server: InProcess,
-    clock: Served,
+    clock: SharedClock,
     frames: Frames,
     id: Option<u32>,
     ack: u32,
@@ -31,8 +28,8 @@ struct Liar {
 }
 
 impl Liar {
-    fn connect(clock: &Served) -> Self {
-        let server = clock.borrow_mut().connect(false);
+    fn connect(clock: &SharedClock) -> Self {
+        let server = clock.borrow_mut().connect(Standing::Guest);
         let mut hello = Vec::new();
         ClientMessage::Hello(Hello {
             version: VERSION,
@@ -94,7 +91,7 @@ impl Liar {
         if t < self.next_ms {
             return;
         }
-        self.next_ms = t + HEARTBEAT_MS;
+        self.next_ms = t + protocol::HEARTBEAT_MS;
         let [x, y, z] = self.anchor_pos;
         let run = LIE * RUN_SPEED * t.saturating_sub(self.anchor_ms) as f32 / 1000.0;
         let mut bytes = Vec::new();
