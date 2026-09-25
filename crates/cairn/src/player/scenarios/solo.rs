@@ -138,6 +138,7 @@ fn a_solo_walk_with_a_landing_replays_to_the_same_world_at_every_tick() {
         order: InputOrder::Canonical,
         keep_refusals: true,
         replicate: Replicate::No,
+        actions: true,
         keeping_at: None,
     };
     let replayed = server::replay(&log, &how).expect("a replay");

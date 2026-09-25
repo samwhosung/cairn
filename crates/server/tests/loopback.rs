@@ -393,6 +393,7 @@ fn a_recorded_run_replays_with_every_batch_and_dumps_the_first_clients_frames() 
         order: InputOrder::Canonical,
         keep_refusals: false,
         replicate: Replicate::Dumping(&dump),
+        actions: true,
         keeping_at: None,
     };
     let r = server::replay(&log, &how).expect("a replay");
@@ -543,6 +544,7 @@ fn a_host_in_the_servers_own_process_teleports_and_a_guest_is_refused_live_and_i
         order: InputOrder::Canonical,
         keep_refusals: true,
         replicate: Replicate::No,
+        actions: true,
         keeping_at: None,
     };
     let r = server::replay(&log, &how).expect("a replay");

@@ -41,12 +41,14 @@ usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unche
        server header
          print the header of the summary row's table.
        server replay FILE [--threads N] [--racy] [--refusals] [--replicate] [--dump OUT]
-         replay a recorded run, with the players it began with, and compare the world after
-         every tick; --racy applies each entity's inputs in the order worker threads hand
-         them over; --refusals prints every refused claim and what it was judged against;
-         --replicate also builds every client's batch as if all kept up and prints the
-         summary row; --dump writes the first connection's frames to OUT, and implies
-         --replicate.
+                          [--without-actions]
+         replay a recorded run, with its game and the players it began with, and compare
+         the world after every tick; --racy applies each entity's inputs in the order
+         worker threads hand them over; --refusals prints every refused claim and what it
+         was judged against; --replicate also builds every client's batch as if all kept up
+         and prints the summary row; --dump writes the first connection's frames to OUT,
+         and implies --replicate; --without-actions, a control, keeps the players' actions
+         from the game.
 
 FILE of spawns: one `x y z facing` per line, WoW world coordinates and radians.";
 
@@ -216,7 +218,7 @@ fn read(args: &[String]) -> Result<(), String> {
 
 fn replay(args: &[String]) -> Result<(), String> {
     let (path, rest) = args.split_first().ok_or("replay needs a FILE")?;
-    let f = flags(rest, &["racy", "refusals", "replicate"])?;
+    let f = flags(rest, &["racy", "refusals", "replicate", "without-actions"])?;
     let dump = f.get("dump").map(PathBuf::from);
     let how = Replay {
         threads: num(&f, "threads", 1)?,
@@ -231,6 +233,7 @@ fn replay(args: &[String]) -> Result<(), String> {
             None if f.contains_key("replicate") => Replicate::Yes,
             None => Replicate::No,
         },
+        actions: !f.contains_key("without-actions"),
         keeping_at: None,
     };
     let r = server::replay(Path::new(path), &how).map_err(|e| format!("{path}: {e}"))?;

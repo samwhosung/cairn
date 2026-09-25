@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+use game::{KnobsFile, Line};
 use protocol::ClientMessage;
 
 use crate::save::{Place, Player};
@@ -22,8 +23,18 @@ pub struct Header {
     pub check: bool,
     pub map: u32,
     pub spawns: Vec<Spawn>,
+    pub game: Option<Logged>,
     /// The players the world knew as the run began.
     pub players: Vec<Player>,
+}
+
+/// The game a run played, as it was loaded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Logged {
+    pub name: String,
+    pub seed: u64,
+    pub knobs: KnobsFile,
+    pub overlay: Vec<Line>,
 }
 
 pub struct LogWriter {
@@ -45,6 +56,14 @@ impl LogWriter {
             for v in [s.pos[0], s.pos[1], s.pos[2], s.facing] {
                 b.extend_from_slice(&v.to_le_bytes());
             }
+        }
+        b.push(u8::from(header.game.is_some()));
+        if let Some(g) = &header.game {
+            put_text(&mut b, &g.name);
+            b.extend_from_slice(&g.seed.to_le_bytes());
+            put_text(&mut b, &g.knobs.name);
+            put_lines(&mut b, &g.knobs.lines);
+            put_lines(&mut b, &g.overlay);
         }
         b.extend_from_slice(&(header.players.len() as u32).to_le_bytes());
         for p in &header.players {
@@ -138,6 +157,17 @@ impl LogReader {
                 facing,
             });
         }
+        let game = read_some(&mut input, |r| {
+            Ok(Logged {
+                name: read_text(r)?,
+                seed: read_u64(r)?,
+                knobs: KnobsFile {
+                    name: read_text(r)?,
+                    lines: read_lines(r)?,
+                },
+                overlay: read_lines(r)?,
+            })
+        })?;
         let n = read_u32(&mut input)?;
         let mut players = Vec::new();
         for _ in 0..n {
@@ -166,6 +196,7 @@ impl LogReader {
                 check,
                 map,
                 spawns,
+                game,
                 players,
             },
         })
@@ -240,6 +271,15 @@ fn put_text(b: &mut Vec<u8>, text: &str) {
     put_bytes(b, text.as_bytes());
 }
 
+fn put_lines(b: &mut Vec<u8>, lines: &[Line]) {
+    b.extend_from_slice(&(lines.len() as u32).to_le_bytes());
+    for l in lines {
+        for text in [&l.key, &l.value, &l.at] {
+            put_text(b, text);
+        }
+    }
+}
+
 fn read_bytes(r: &mut impl Read) -> io::Result<Vec<u8>> {
     let len = read_u32(r)? as usize;
     if len > protocol::MAX_FRAME {
@@ -252,6 +292,16 @@ fn read_bytes(r: &mut impl Read) -> io::Result<Vec<u8>> {
 
 fn read_text(r: &mut impl Read) -> io::Result<String> {
     String::from_utf8(read_bytes(r)?).map_err(|_| bad("logged text is not UTF-8"))
+}
+
+fn read_lines(r: &mut impl Read) -> io::Result<Vec<Line>> {
+    let n = read_u32(r)?;
+    let mut lines = Vec::new();
+    for _ in 0..n {
+        let (key, value, at) = (read_text(r)?, read_text(r)?, read_text(r)?);
+        lines.push(Line { key, value, at });
+    }
+    Ok(lines)
 }
 
 fn read_some<R: Read, T>(
@@ -267,6 +317,12 @@ fn read_some<R: Read, T>(
 
 fn read_spot(r: &mut impl Read) -> io::Result<[f32; 4]> {
     Ok([read_f32(r)?, read_f32(r)?, read_f32(r)?, read_f32(r)?])
+}
+
+fn read_u64(r: &mut impl Read) -> io::Result<u64> {
+    let mut b = [0; 8];
+    r.read_exact(&mut b)?;
+    Ok(u64::from_le_bytes(b))
 }
 
 fn read_u8(r: &mut impl Read) -> io::Result<u8> {

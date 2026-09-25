@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use game::{Delivery, Loaded};
 
 use crate::limits::Limits;
-use crate::log::{Header, LogWriter};
+use crate::log::{Header, LogWriter, Logged};
 use crate::net::Shared;
 use crate::replicate::View;
 use crate::save::{Opened, Roster, Saving, Writer};
@@ -239,6 +239,12 @@ fn log(path: &std::path::Path, cfg: &Config, sim: &Sim) -> io::Result<LogWriter>
         check: cfg.limits.check,
         map: cfg.map,
         spawns: sim.world().spawns().to_vec(),
+        game: cfg.game.as_ref().map(|g| Logged {
+            name: g.name().to_owned(),
+            seed: g.seed(),
+            knobs: g.knobs().clone(),
+            overlay: g.overlay().to_vec(),
+        }),
         players: sim.roster().players().cloned().collect(),
     };
     LogWriter::create(path, &header)

@@ -46,18 +46,9 @@ pub struct Running {
 }
 
 /// Opens the world's file, binds `cfg.addr`, if it names one, and starts ticking; refuses a view
-/// past what a batch's positions reach ([`View::check`]), a file the world cannot start from, and
-/// a game's run to be recorded.
+/// past what a batch's positions reach ([`View::check`]), and a file the world cannot start from.
 pub fn start(cfg: Config) -> io::Result<Running> {
     cfg.check()?;
-    if cfg.record.is_some()
-        && let Some(game) = &cfg.game
-    {
-        return Err(io::Error::other(format!(
-            "a run of {} cannot be recorded yet: its replay would not know the game",
-            game.name()
-        )));
-    }
     let opened = cfg.open_world()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.io_threads.max(1))
@@ -147,6 +138,9 @@ pub struct Replay<'a> {
     pub order: InputOrder,
     pub keep_refusals: bool,
     pub replicate: Replicate<'a>,
+    /// Whether the players' actions reach the game: without them, a control that the world
+    /// depends on them.
+    pub actions: bool,
     /// The tick after which to take every player's saved state.
     pub keeping_at: Option<u32>,
 }
@@ -161,10 +155,16 @@ pub enum Replicate<'a> {
     Dumping(&'a Path),
 }
 
-/// Replays the inputs recorded at `path`, with the players the run started with, and compares the
-/// world hash after every tick with the recorded one.
+/// Replays the inputs recorded at `path`, with the game and the players the run started with,
+/// and compares the world hash after every tick with the recorded one.
 pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     let mut log = LogReader::open(path)?;
+    let game = match &log.header.game {
+        Some(g) => Some(
+            catalog::load(&g.name, Some(&g.knobs), &g.overlay, g.seed).map_err(io::Error::other)?,
+        ),
+        None => None,
+    };
     let cfg = Config {
         tick_threads: how.threads,
         tick_ms: log.header.tick_ms,
@@ -174,6 +174,7 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
             check: log.header.check,
             ..Limits::default()
         },
+        game,
         ..Config::default()
     };
     let players = std::mem::take(&mut log.header.players);
@@ -191,7 +192,12 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
     };
     let (mut out, mut ticks) = (Replayed::default(), Vec::new());
     let cpu = process_cpu_ns();
-    while let Some(logged) = log.next_tick()? {
+    while let Some(mut logged) = log.next_tick()? {
+        if !how.actions {
+            logged
+                .inputs
+                .retain(|s| !matches!(s.input, world::Input::Action(_)));
+        }
         let st = stepper.tick(&logged.inputs);
         if st.saved_rows > 0 {
             out.saving.push(st.tick);
