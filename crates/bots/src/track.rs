@@ -1,5 +1,6 @@
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use libm::{cosf, sinf};
 use protocol::flags;
 use server::Spawn;
 
@@ -53,23 +54,21 @@ impl Leg {
         let (f, [x, y]) = (self.facing, self.from);
         let (xy, facing) = match self.motion {
             Motion::Stand => (self.from, f),
-            Motion::MouseLook { amplitude, hz } => {
-                (self.from, f + amplitude * (TAU * hz * dt).sin())
-            }
+            Motion::MouseLook { amplitude, hz } => (self.from, f + amplitude * sinf(TAU * hz * dt)),
             Motion::KeyTurn { left_rad_per_s } => (self.from, f + left_rad_per_s * dt),
             Motion::Run { speed, .. } => {
                 let d = speed * dt;
-                ([x + d * f.cos(), y + d * f.sin()], f)
+                ([x + d * cosf(f), y + d * sinf(f)], f)
             }
             Motion::Arc {
                 speed,
                 left_rad_per_s: rate,
             } => {
                 let (r, side) = (speed / rate.abs(), rate.signum() * FRAC_PI_2);
-                let centre = [x + r * (f + side).cos(), y + r * (f + side).sin()];
+                let centre = [x + r * cosf(f + side), y + r * sinf(f + side)];
                 let a = f - side + rate * dt;
                 (
-                    [centre[0] + r * a.cos(), centre[1] + r * a.sin()],
+                    [centre[0] + r * cosf(a), centre[1] + r * sinf(a)],
                     f + rate * dt,
                 )
             }

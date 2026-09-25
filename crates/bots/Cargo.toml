@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 dbc = { path = "../dbc" }
+libm = "0.2"
 mpq = { path = "../mpq" }
 protocol = { path = "../protocol" }
 server = { path = "../server" }

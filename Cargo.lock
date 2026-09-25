@@ -1383,6 +1383,7 @@ name = "bots"
 version = "0.0.0"
 dependencies = [
  "dbc",
+ "libm",
  "mpq",
  "protocol",
  "server",
@@ -4085,6 +4086,7 @@ dependencies = [
 name = "server"
 version = "0.0.0"
 dependencies = [
+ "libm",
  "protocol",
  "rayon",
  "rustix 1.1.5",

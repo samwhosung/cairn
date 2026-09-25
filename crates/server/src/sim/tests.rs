@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use libm::{cosf, sinf};
 use protocol::{Appearance, Claim, Hello, Movement, Record, ServerMessage, flags};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -64,7 +65,7 @@ fn crowd_inputs(players: u32, ticks: u32) -> Vec<Vec<Stamped>> {
                 let time = t * 50 + k * 15;
                 let d = time as f32 / 1000.0 * 6.5;
                 let angle = p as f32 * 0.3;
-                let mut pos = [p as f32 * 3.0 + d * angle.cos(), d * angle.sin(), 0.0];
+                let mut pos = [p as f32 * 3.0 + d * cosf(angle), d * sinf(angle), 0.0];
                 if liar && t == 40 && k == 0 {
                     pos[1] += 80.0;
                 }

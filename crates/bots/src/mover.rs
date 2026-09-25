@@ -1,5 +1,6 @@
 use std::f32::consts::TAU;
 
+use libm::{cosf, sinf};
 use protocol::{Cadence, Jump, Movement, flags};
 
 use crate::ground::Ground;
@@ -95,8 +96,8 @@ impl Mover {
                 movement.pos[2] = z;
                 movement.jump = Jump {
                     z_speed: -JUMP_SPEED,
-                    cos: air.facing.cos(),
-                    sin: air.facing.sin(),
+                    cos: cosf(air.facing),
+                    sin: sinf(air.facing),
                     xy_speed: air.xy_speed,
                 };
             }
