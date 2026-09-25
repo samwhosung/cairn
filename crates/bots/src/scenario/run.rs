@@ -1,10 +1,12 @@
 use std::time::Instant;
 
+use game::Delivery;
 use protocol::{Appearance, ClientMessage, Hello, Pos, VERSION};
 use rayon::prelude::*;
 use server::{Config, Input, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
 
 use super::client::{Accepted, Brief, Client, Delivered, Seen, Taken, Tally, World};
+use super::played::Played;
 use super::spec::{Group, Script, Spec};
 use crate::ground::Ground;
 use crate::lie::{Lie, same_bits};
@@ -36,6 +38,7 @@ pub struct Outcome {
     pub ticks: Vec<TickStats>,
     pub tick_ms: u16,
     pub wall_s: f64,
+    pub game: Option<Played>,
 }
 
 impl Outcome {
@@ -60,6 +63,7 @@ impl Outcome {
             ticks: Vec::new(),
             tick_ms: spec.tick_ms,
             wall_s: 0.0,
+            game: spec.game.as_ref().map(Played::zeroed),
         }
     }
 }
@@ -78,11 +82,18 @@ pub fn liar_of(spec: &Spec, groups: &[usize]) -> Vec<Option<usize>> {
         .collect()
 }
 
+/// Where the scenario's server applies inputs and letters out of order, as a control.
+#[derive(Clone, Copy, Debug)]
+pub struct Orders {
+    pub inputs: InputOrder,
+    pub letters: Delivery,
+}
+
 pub fn run(
     spec: &Spec,
     ground: &Ground,
     threads: usize,
-    order: InputOrder,
+    orders: Orders,
 ) -> Result<Outcome, String> {
     let briefs = roster(spec, ground)?;
     let groups: Vec<usize> = briefs.iter().map(|b| b.group).collect();
@@ -94,21 +105,14 @@ pub fn run(
         limits: spec.limits,
         view: spec.view,
         tick_ms: spec.tick_ms,
+        game: spec.game.clone(),
         ..Config::default()
     };
-    let mut stepper = Stepper::new(&cfg, order, game::Delivery::Canonical)
-        .map_err(|e| format!("a server: {e}"))?;
+    let mut stepper =
+        Stepper::new(&cfg, orders.inputs, orders.letters).map_err(|e| format!("a server: {e}"))?;
+    let mut played = spec.game.as_ref().map(Played::zeroed);
     stepper.keep_refusals();
-    let mut clients: Vec<Client> = briefs
-        .into_iter()
-        .enumerate()
-        .map(|(i, brief)| {
-            let conn = i as u32;
-            let hello = hello(&spec.groups[brief.group].name, i);
-            let lag = (spec.delay_ms, spec.jitter_ms);
-            Client::new(conn, brief, stepper.connect(conn), lag, hello, liars)
-        })
-        .collect();
+    let mut clients = connect(spec, briefs, &stepper, liars);
     let mut accounts = vec![Account::default(); clients.len()];
     let mut accepted = vec![Taken::default(); liars];
     let tick_ms = u32::from(cfg.tick_ms);
@@ -143,7 +147,8 @@ pub fn run(
                 });
             }
         }
-        stats.push(stepper.tick(&inputs));
+        let stepped = stepper.tick(&inputs);
+        stats.push(stepped);
         let refusals = stepper.take_refusals();
         settle(
             &mut accounts,
@@ -154,9 +159,19 @@ pub fn run(
             &liar_of,
             &mut accepted,
         )?;
+        for id in stepper.placed() {
+            let acc = &mut accounts[id as usize];
+            acc.awaited_ack = acc.awaited_ack.wrapping_add(1);
+        }
         stepper
             .pool()
             .install(|| clients.par_iter_mut().for_each(|c| c.receive(now)));
+        if let Some(p) = &mut played {
+            p.check(next, stepped.hash, &stepper, &clients);
+        }
+    }
+    if let Some(p) = &mut played {
+        p.finish(&stepper);
     }
     let wall_s = began.elapsed().as_secs_f64();
     for c in &clients {
@@ -175,7 +190,19 @@ pub fn run(
         ticks: stats,
         tick_ms: cfg.tick_ms,
         wall_s,
+        game: played,
     })
+}
+
+fn connect(spec: &Spec, briefs: Vec<Brief>, stepper: &Stepper, liars: usize) -> Vec<Client> {
+    let lag = (spec.delay_ms, spec.jitter_ms);
+    (0..)
+        .zip(briefs)
+        .map(|(conn, brief)| {
+            let hello = hello(&spec.groups[brief.group].name, conn as usize);
+            Client::new(conn, brief, stepper.connect(conn), lag, hello, liars)
+        })
+        .collect()
 }
 
 fn hello(group: &str, i: usize) -> Vec<u8> {
@@ -280,7 +307,7 @@ fn roster(spec: &Spec, ground: &Ground) -> Result<Vec<Brief>, String> {
                 (spawn, spec.seed ^ ((gi as u64) << 32) ^ i as u64)
             };
             let spawn = match g.script {
-                Script::Wander => spawn,
+                Script::Wander | Script::Fight => spawn,
                 Script::Line | Script::Stand => Spawn {
                     facing: g.facing_deg.to_radians(),
                     ..spawn
@@ -325,5 +352,8 @@ fn brief(g: &Group, group: usize, spawn: Spawn, seed: u64, run_ms: u32) -> Brief
         clock_at_start_ms: g.clock_at_start_ms,
         seed,
         route_until_ms,
+        action: g.action,
+        heeds_roots: g.heeds_roots,
+        drop_shown: g.drop_shown,
     }
 }

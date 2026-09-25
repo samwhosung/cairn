@@ -2,13 +2,16 @@ use std::fmt::{self, Write};
 
 use server::{Summary, Why};
 
+use super::client::Tally;
 use super::file::{Bad, Expect};
+use super::played::Played;
 use super::run::{Account, Outcome, liar_of};
 use super::spec::Spec;
 
 #[derive(Clone, Debug)]
 pub enum Json {
     Count(u64),
+    Whole(i64),
     Number(f64),
     Text(String),
     Yes(bool),
@@ -39,12 +42,17 @@ impl Json {
         for key in path {
             v = v.get(key)?;
         }
-        matches!(v, Self::Count(_) | Self::Number(_) | Self::NoNumber).then_some(v)
+        matches!(
+            v,
+            Self::Count(_) | Self::Whole(_) | Self::Number(_) | Self::NoNumber
+        )
+        .then_some(v)
     }
 
     fn number(&self) -> Option<f64> {
         match *self {
             Self::Count(n) => Some(n as f64),
+            Self::Whole(n) => Some(n as f64),
             Self::Number(n) => Some(n),
             _ => None,
         }
@@ -55,6 +63,7 @@ impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Count(n) => write!(f, "{n}"),
+            Self::Whole(n) => write!(f, "{n}"),
             Self::Number(n) => write!(f, "{n:.3}"),
             Self::Text(s) => write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
             Self::Yes(b) => write!(f, "{b}"),
@@ -121,6 +130,15 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Json {
         if g.lie.is_some() {
             fields.extend(lies(o, &bots, &accounts, &liar_of, gi, spec));
         }
+        if o.game.is_some() {
+            let count =
+                |f: fn(&Tally) -> u64| Json::Count(bots.iter().map(|&b| f(&o.tallies[b])).sum());
+            fields.extend([
+                ("actions", count(|t| t.actions)),
+                ("roots", count(|t| t.roots)),
+                ("placements", count(|t| t.placements)),
+            ]);
+        }
         groups.push((g.name.clone(), Json::object(fields)));
     }
     let all: Vec<&Account> = o.accounts.iter().collect();
@@ -131,7 +149,7 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Json {
         }
     }
     let game_s = o.ticks.len() as f64 * f64::from(o.tick_ms) / 1000.0;
-    Json::object(vec![
+    let mut top = vec![
         ("scenario", Json::Text(spec.name.clone())),
         ("ticks", Json::Count(o.ticks.len() as u64)),
         ("game_s", Json::Number(game_s)),
@@ -161,6 +179,28 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Json {
             "hash",
             Json::Text(format!("{:016x}", o.ticks.last().map_or(0, |t| t.hash))),
         ),
+    ];
+    if let Some(game) = &o.game {
+        top.push(("game", played(game)));
+    }
+    Json::object(top)
+}
+
+fn played(g: &Played) -> Json {
+    let counted = g
+        .counts
+        .iter()
+        .map(|&(what, n)| (what.to_string(), Json::Whole(n)))
+        .collect();
+    let first = |what: &Option<String>| what.clone().map_or(Json::NoNumber, Json::Text);
+    Json::object(vec![
+        ("name", Json::Text(g.name.to_string())),
+        ("counted", Json::Object(counted)),
+        ("hash_chain", Json::Text(format!("{:016x}", g.hash_chain))),
+        ("saved_mismatches", Json::Count(g.saved_mismatches)),
+        ("first_saved_mismatch", first(&g.first_saved_mismatch)),
+        ("shown_mismatches", Json::Count(g.shown_mismatches)),
+        ("first_shown_mismatch", first(&g.first_shown_mismatch)),
     ])
 }
 
@@ -335,13 +375,25 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::scenario::file::Text;
+    use crate::scenario::file::{At, Setting, Text};
     use crate::scenario::spec::{RESERVED_GROUP_NAMES, spec};
 
     #[test]
     fn a_group_may_take_no_name_the_top_of_the_verdict_has() {
-        let empty = spec(Text::default(), Path::new("empty.scenario")).expect("a spec");
-        let Json::Object(top) = measured(&empty, &Outcome::zeroed(&empty)) else {
+        let game = Setting {
+            key: "game".into(),
+            value: "melee".into(),
+            at: At {
+                file: "played.scenario".into(),
+                line: 1,
+            },
+        };
+        let text = Text {
+            settings: vec![game],
+            expects: Vec::new(),
+        };
+        let played = spec(text, Path::new("played.scenario")).expect("a spec");
+        let Json::Object(top) = measured(&played, &Outcome::zeroed(&played)) else {
             panic!("the verdict is an object");
         };
         let keys: Vec<&str> = top.iter().map(|(k, _)| k.as_str()).collect();

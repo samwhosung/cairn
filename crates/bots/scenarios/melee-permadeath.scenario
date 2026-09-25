@@ -1,0 +1,7 @@
+# The dead stay dead: none rises, and more are down at the end than melee's 51.
+base = melee.scenario
+game.overlay = ../../../games/melee/knobs/permadeath.knobs
+
+expect fighters.placements == 0
+expect game.counted.respawns == 0
+expect game.counted.down > 51

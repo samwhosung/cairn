@@ -164,3 +164,70 @@ fn an_unknown_key_is_refused_at_its_line_and_a_known_one_is_taken() {
     let out = run(&known, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", said(&out));
 }
+
+fn melee_on(name: &str, lines: &str) -> PathBuf {
+    scratch(
+        name,
+        &over("melee.scenario", &format!("place = flat\n{lines}")),
+    )
+}
+
+fn hashes(file: &Path, args: &[&str], out: &str) -> Vec<String> {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scenarios");
+    let at = dir.join(out);
+    let path = at.to_str().expect("a path");
+    let ran = run(file, &[args, &["--hashes", path]].concat());
+    assert!(ran.status.code().is_some_and(|c| c < 2), "{}", said(&ran));
+    let text = std::fs::read_to_string(&at).expect("the hashes");
+    text.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn a_game_is_one_world_on_one_four_and_fourteen_threads_and_parts_from_it_in_reverse() {
+    let file = melee_on("melee-threads.scenario", "seconds = 20\n");
+    let one = machine_independent(&run(&file, &["--threads", "1"]));
+    assert!(one.contains("\"game\":{\"name\":\"melee\""), "{one}");
+    for threads in ["4", "14"] {
+        let many = machine_independent(&run(&file, &["--threads", threads]));
+        assert_eq!(one, many, "{threads} threads");
+    }
+    let canonical = hashes(&file, &["--threads", "4"], "canonical.hashes");
+    let reversed = hashes(&file, &["--threads", "14", "--reversed"], "reversed.hashes");
+    let parted = canonical.iter().zip(&reversed).position(|(a, b)| a != b);
+    assert_eq!(
+        parted,
+        Some(82),
+        "where two blows first land on one bot and kill it"
+    );
+    let again = hashes(&file, &["--threads", "4", "--reversed"], "again.hashes");
+    assert_eq!(reversed, again, "a fixed wrong order");
+}
+
+#[test]
+fn a_bot_that_drops_one_state_it_was_sent_is_caught() {
+    let whole = machine_independent(&run(
+        &melee_on("melee-whole.scenario", "seconds = 5\n"),
+        &[],
+    ));
+    assert!(whole.contains("\"shown_mismatches\":0"), "{whole}");
+    let dropping = melee_on(
+        "melee-drop.scenario",
+        "seconds = 5\nbots.fighters.drop_shown = 1\n",
+    );
+    let out = run(&dropping, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        said(&out).contains("expected game.shown_mismatches == 0"),
+        "{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn an_unknown_knob_is_refused_at_its_line() {
+    let file = melee_on("melee-knob.scenario", "knobs.speed = 3\n");
+    let out = run(&file, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let fault = format!("{}:3: `speed` is not a knob of this game", file.display());
+    assert_eq!(said(&out).trim(), fault);
+}

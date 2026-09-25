@@ -1382,6 +1382,7 @@ dependencies = [
 name = "bots"
 version = "0.0.0"
 dependencies = [
+ "catalog",
  "dbc",
  "game",
  "libm",

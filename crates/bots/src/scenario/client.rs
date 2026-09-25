@@ -5,6 +5,8 @@ use protocol::{
 };
 use server::{Input, Link, Spawn, Stamped};
 
+use super::fight::{Aim, Fighter, Sight};
+use super::shown::Shown;
 use super::spec::Script;
 use crate::ground::Ground;
 use crate::lie::Lie;
@@ -27,6 +29,9 @@ pub struct Brief {
     pub clock_at_start_ms: u32,
     pub seed: u64,
     pub route_until_ms: u32,
+    pub action: u32,
+    pub heeds_roots: bool,
+    pub drop_shown: Option<u64>,
 }
 
 pub struct Outgoing {
@@ -105,6 +110,9 @@ pub struct Tally {
     pub decode_errors: u64,
     pub welcomed_as: Option<u32>,
     pub seen: Vec<Seen>,
+    pub roots: u64,
+    pub placements: u64,
+    pub actions: u64,
 }
 
 struct Body {
@@ -156,6 +164,9 @@ pub struct Client {
     server_places: VecDeque<ServerPlace>,
     here: [f32; 3],
     claims: Vec<Movement>,
+    sight: Option<Sight>,
+    fighter: Fighter,
+    pub shown: Shown,
     pub tally: Tally,
 }
 
@@ -174,6 +185,8 @@ impl Client {
         let phase_ms = rng.range(0.0, period) as u32;
         let here = brief.spawn.pos;
         let watches = liars > 0 && brief.lies.is_empty();
+        let sight = (brief.script == Script::Fight).then(Sight::default);
+        let shown = Shown::dropping(brief.drop_shown);
         let (delay_ms, jitter_ms) = lag;
         Self {
             conn,
@@ -203,6 +216,9 @@ impl Client {
             server_places: VecDeque::new(),
             here,
             claims: Vec::new(),
+            sight,
+            fighter: Fighter::default(),
+            shown,
             tally: Tally {
                 seen: vec![Seen::default(); liars],
                 ..Tally::default()
@@ -285,9 +301,11 @@ impl Client {
         }
     }
 
-    /// Takes in what the server sent it at `now`, to arrive after the network's lag.
+    /// Takes in what the server sent it at `now`, to arrive after the network's lag, and models
+    /// the game's state it was sent at once.
     pub fn receive(&mut self, now: u32) {
         while let Some(frame) = self.link.next_frame() {
+            self.shown.take(&frame);
             let arrives = self.net.back(now);
             self.inbound.push_back((arrives, frame));
         }
@@ -306,46 +324,119 @@ impl Client {
             }
         };
         self.seen_tick = batch.tick;
-        let watch = self.watches;
         for record in batch {
+            let Ok(record) = record else {
+                self.tally.decode_errors += 1;
+                break;
+            };
             match record {
-                Ok(Record::Correct { seq, .. }) => {
+                Record::Correct { seq, .. } => {
                     if let Some(b) = &mut self.body {
                         b.mover.correct(seq);
                     }
                     self.tally.corrections += 1;
                 }
-                Ok(_) if !watch => break,
-                Ok(Record::Appear {
-                    slot, id, state, ..
-                }) => match world.liar_of.get(id as usize).copied().flatten() {
-                    Some(liar) => {
-                        self.watching.insert(slot, liar);
-                        self.saw(liar, state.pos, world);
+                Record::Place {
+                    seq,
+                    rooted,
+                    movement,
+                } => self.placed(seq, rooted, &movement, t, world),
+                record => {
+                    if let Some(sight) = &mut self.sight {
+                        sight.see(&record, self.here);
                     }
-                    None => {
-                        self.watching.remove(&slot);
+                    if self.watches {
+                        self.watch(&record, world);
+                    } else if self.sight.is_none() {
+                        break;
                     }
-                },
-                Ok(Record::Move { slot, pos, .. }) => self.saw_slot(slot, pos, world),
-                Ok(Record::State { slot, state }) => self.saw_slot(slot, state.pos, world),
-                Ok(Record::Vanish { slot }) => {
-                    self.watching.remove(&slot);
-                }
-                Ok(
-                    Record::Turn { .. }
-                    | Record::Granted { .. }
-                    | Record::Place { .. }
-                    | Record::Game { .. },
-                ) => {}
-                Err(_) => {
-                    self.tally.decode_errors += 1;
-                    break;
                 }
             }
         }
-        if watch {
+        if self.watches {
             self.tally_shown_liars(world);
+        }
+    }
+
+    fn watch(&mut self, record: &Record<'_>, world: &World<'_>) {
+        match *record {
+            Record::Appear {
+                slot, id, state, ..
+            } => match world.liar_of.get(id as usize).copied().flatten() {
+                Some(liar) => {
+                    self.watching.insert(slot, liar);
+                    self.saw(liar, state.pos, world);
+                }
+                None => {
+                    self.watching.remove(&slot);
+                }
+            },
+            Record::Move { slot, pos, .. } => self.saw_slot(slot, pos, world),
+            Record::State { slot, state } => self.saw_slot(slot, state.pos, world),
+            Record::Vanish { slot } => {
+                self.watching.remove(&slot);
+            }
+            _ => {}
+        }
+    }
+
+    /// Takes a placement: a rooted body stands where it is put unless it does not heed roots, and
+    /// a freed one goes on with its script from where it is put.
+    fn placed(&mut self, seq: u32, rooted: bool, movement: &Movement, t: u32, world: &World<'_>) {
+        if rooted {
+            self.tally.roots += 1;
+        } else {
+            self.tally.placements += 1;
+        }
+        let at = Spawn {
+            pos: movement.pos,
+            facing: movement.facing,
+        };
+        let clock = self.clock(t);
+        let track = if rooted {
+            self.stand(&at, clock)
+        } else {
+            self.plan(&at, clock, world)
+        };
+        let heeds = self.brief.heeds_roots;
+        let Some(body) = &mut self.body else {
+            return;
+        };
+        body.mover.correct(seq);
+        if rooted && !heeds {
+            return;
+        }
+        body.mover.rooted = rooted;
+        body.mover.land(movement.pos[2]);
+        body.track = track;
+        self.here = movement.pos;
+    }
+
+    fn stand(&self, at: &Spawn, start: u32) -> Track {
+        let stand = Pace {
+            stop_yd: Some(0.0),
+            ..self.brief.pace
+        };
+        Track::line(at, &stand, start, self.brief.route_until_ms.max(start))
+    }
+
+    /// The route its script takes it on from `at`, starting at `start` on its clock.
+    fn plan(&self, at: &Spawn, start: u32, world: &World<'_>) -> Track {
+        let b = &self.brief;
+        let until = b.route_until_ms.max(start);
+        match b.script {
+            Script::Wander => {
+                let walk = Walk {
+                    start_ms: start,
+                    until_ms: until,
+                    seed: b.seed,
+                    run_speed: b.pace.speed,
+                    long_runs: false,
+                };
+                plan(world.place, world.ground, at, &walk)
+            }
+            Script::Line => Track::line(at, &b.pace, start, until),
+            Script::Stand | Script::Fight => self.stand(at, start),
         }
     }
 
@@ -419,28 +510,8 @@ impl Client {
             facing: w.spawn.facing,
         };
         let start = self.clock(t) + START_AFTER_WELCOME_MS;
+        let track = self.plan(&spawn, start, world);
         let b = &self.brief;
-        let until = b.route_until_ms.max(start);
-        let track = match b.script {
-            Script::Wander => {
-                let walk = Walk {
-                    start_ms: start,
-                    until_ms: until,
-                    seed: b.seed,
-                    run_speed: b.pace.speed,
-                    long_runs: false,
-                };
-                plan(world.place, world.ground, &spawn, &walk)
-            }
-            Script::Line => Track::line(&spawn, &b.pace, start, until),
-            Script::Stand => {
-                let stand = Pace {
-                    stop_yd: Some(0.0),
-                    ..b.pace
-                };
-                Track::line(&spawn, &stand, start, until)
-            }
-        };
         let mover = Mover::new(spawn.pos, spawn.facing, b.lies.clone(), b.claims);
         self.body = Some(Body { track, mover });
         self.here = spawn.pos;
@@ -454,6 +525,39 @@ impl Client {
         let Some(body) = &mut self.body else {
             return;
         };
+        if let Some(sight) = &self.sight
+            && !body.mover.rooted
+        {
+            let spot = body.track.pose(clock).spot;
+            let (aim, swing) = self.fighter.frame(t, spot.xy, sight);
+            if let Some(aim) = aim {
+                let (facing, run_yd) = match aim {
+                    Aim::Toward { facing, run_yd } => (facing, run_yd),
+                    Aim::Still => (spot.facing, 0.0),
+                };
+                let from = Spawn {
+                    pos: [spot.xy[0], spot.xy[1], self.here[2]],
+                    facing,
+                };
+                let pace = Pace {
+                    stop_yd: Some(run_yd),
+                    jump_every_ms: None,
+                    ..self.brief.pace
+                };
+                let until = self.brief.route_until_ms.max(clock);
+                body.track = Track::line(&from, &pace, clock, until);
+            }
+            if swing {
+                let mut bytes = Vec::new();
+                ClientMessage::Action(self.brief.action).write(&mut bytes);
+                self.outbound.push_back(Outgoing {
+                    arrives_ms: self.net.out(t),
+                    bytes,
+                    made_in: None,
+                });
+                self.tally.actions += 1;
+            }
+        }
         self.claims.clear();
         let f = body
             .mover

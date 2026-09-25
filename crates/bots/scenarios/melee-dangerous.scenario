@@ -1,0 +1,5 @@
+# Every hit does twice the damage: more die than melee's 270.
+base = melee.scenario
+game.overlay = ../../../games/melee/knobs/dangerous.knobs
+
+expect game.counted.deaths > 270

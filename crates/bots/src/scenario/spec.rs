@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use game::{Line, Loaded};
 use protocol::flags;
 use server::{Limits, View};
 
@@ -22,6 +23,7 @@ pub struct Spec {
     pub jitter_ms: u32,
     pub groups: Vec<Group>,
     pub expects: Vec<Expect>,
+    pub game: Option<Loaded>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +31,8 @@ pub enum Script {
     Wander,
     Line,
     Stand,
+    /// Runs at the nearest body that is not rooted and swings at it with the group's action.
+    Fight,
 }
 
 #[derive(Clone, Debug)]
@@ -48,10 +52,17 @@ pub struct Group {
     pub clock_at_start_ms: u32,
     pub lie: Option<Lie>,
     pub control_of: Option<usize>,
+    /// The action a fighter swings with.
+    pub action: u32,
+    /// Whether a rooted body stands; one that does not walks on, and is corrected.
+    pub heeds_roots: bool,
+    /// The one game state this bot's model of what it was sent leaves out, counting from 1: a
+    /// control for the check of that model.
+    pub drop_shown: Option<u64>,
 }
 
 /// The top of the verdict an expectation can read, so no group may take one of these names.
-pub const RESERVED_GROUP_NAMES: [&str; 11] = [
+pub const RESERVED_GROUP_NAMES: [&str; 12] = [
     "scenario",
     "ticks",
     "game_s",
@@ -63,6 +74,7 @@ pub const RESERVED_GROUP_NAMES: [&str; 11] = [
     "decode_errors",
     "groups",
     "hash",
+    "game",
 ];
 const DEFAULT_SECONDS: f32 = 60.0;
 const DEFAULT_DELAY_MS: u32 = 20;
@@ -87,14 +99,18 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         jitter_ms: DEFAULT_JITTER_MS,
         groups: Vec::new(),
         expects: text.expects,
+        game: None,
     };
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
     let (mut view_at, mut limits_at) = (None, None);
+    let mut game = Chosen::default();
     for s in &text.settings {
         let fault = |what: String| Bad::at(&s.at, what);
         match s.key.as_str() {
             "place.centre" | "place.radius" => disk.push(s),
+            "game" | "game.knobs" | "game.overlay" => game.settings.push(s),
+            key if key.starts_with("knobs.") => game.settings.push(s),
             key => match key.strip_prefix("bots.") {
                 Some(rest) => group_key(&mut drafts, rest, s).map_err(fault)?,
                 None => set(&mut spec, s).map_err(fault)?,
@@ -113,6 +129,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
             what: e.to_string(),
         });
     }
+    spec.game = game.load(spec.seed)?;
     for s in disk {
         let Region::Disk { centre, radius } = &mut spec.place.region else {
             let what = format!("{} is a zone, not a disk to move or size", spec.place.name);
@@ -150,12 +167,17 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
             ..d.group
         });
     }
-    let liars: Vec<usize> = (0..spec.groups.len())
-        .filter(|&i| spec.groups[i].lie.is_some())
+    add_honest_twins(&mut spec.groups)?;
+    Ok(spec)
+}
+
+fn add_honest_twins(groups: &mut Vec<Group>) -> Result<(), Bad> {
+    let liars: Vec<usize> = (0..groups.len())
+        .filter(|&i| groups[i].lie.is_some())
         .collect();
     for i in liars {
-        let name = format!("{}-control", spec.groups[i].name);
-        if spec.groups.iter().any(|g| g.name == name) {
+        let name = format!("{}-control", groups[i].name);
+        if groups.iter().any(|g| g.name == name) {
             let what = format!("bots.{name} is the name of the liar's honest twin");
             return Err(Bad { at: None, what });
         }
@@ -163,11 +185,11 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
             name,
             lie: None,
             control_of: Some(i),
-            ..spec.groups[i].clone()
+            ..groups[i].clone()
         };
-        spec.groups.push(twin);
+        groups.push(twin);
     }
-    Ok(spec)
+    Ok(())
 }
 
 struct Draft {
@@ -175,6 +197,54 @@ struct Draft {
     at: At,
     count: Option<usize>,
     speed: Option<f32>,
+}
+
+/// The game a scenario names, its knobs file and overlay, and the knobs it sets itself.
+#[derive(Default)]
+struct Chosen<'a> {
+    settings: Vec<&'a Setting>,
+}
+
+impl Chosen<'_> {
+    fn load(&self, seed: u64) -> Result<Option<Loaded>, Bad> {
+        let file = |s: &Setting| {
+            let path: PathBuf = s.at.file.parent().unwrap_or(Path::new(".")).join(&s.value);
+            catalog::read(&path).map(|lines| (lines, path.display().to_string()))
+        };
+        let (mut name, mut base, mut over, mut own) = (None, None, Vec::new(), Vec::new());
+        for &s in &self.settings {
+            match s.key.as_str() {
+                "game" => name = Some(s),
+                "game.knobs" => base = Some(file(s).map_err(|e| Bad::at(&s.at, e))?),
+                "game.overlay" => over = file(s).map_err(|e| Bad::at(&s.at, e))?.0,
+                key => own.push(Line {
+                    key: key.trim_start_matches("knobs.").to_owned(),
+                    value: s.value.clone(),
+                    at: s.at.to_string(),
+                }),
+            }
+        }
+        let Some(name) = name else {
+            return match self.settings.first() {
+                Some(s) => Err(Bad::at(
+                    &s.at,
+                    format!("`{}` is for a game: name one with `game`", s.key),
+                )),
+                None => Ok(None),
+            };
+        };
+        if !catalog::GAMES.contains(&name.value.as_str()) {
+            let what = format!("no game `{}`: {}", name.value, catalog::GAMES.join(", "));
+            return Err(Bad::at(&name.at, what));
+        }
+        over.extend(own);
+        let base = base
+            .as_ref()
+            .map(|(lines, file)| (&lines[..], file.as_str()));
+        catalog::load(&name.value, base, &over, seed)
+            .map(Some)
+            .map_err(|what| Bad { at: None, what })
+    }
 }
 
 fn bad_place(name: &str) -> Bad {
@@ -311,7 +381,8 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
                 "wander" => Script::Wander,
                 "line" => Script::Line,
                 "stand" => Script::Stand,
-                _ => return Err(format!("no script `{v}`: wander, line or stand")),
+                "fight" => Script::Fight,
+                _ => return Err(format!("no script `{v}`: wander, line, stand or fight")),
             };
         }
         "gait" => {
@@ -342,6 +413,9 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
             };
         }
         "clock_at_start_ms" => g.clock_at_start_ms = whole(v)?,
+        "action" => g.action = whole(v)?,
+        "heeds_roots" => g.heeds_roots = yes(v)?,
+        "drop_shown" => g.drop_shown = Some(whole(v)?),
         field => match field.strip_prefix("lie.") {
             Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), &s.key, key, v)?,
             None => return Err(unknown(&s.key)),
@@ -367,6 +441,9 @@ fn group(name: &str) -> Group {
         clock_at_start_ms: 0,
         lie: None,
         control_of: None,
+        action: 1,
+        heeds_roots: true,
+        drop_shown: None,
     }
 }
 

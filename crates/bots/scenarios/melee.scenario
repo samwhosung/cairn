@@ -1,0 +1,22 @@
+# Melee: each bot runs at the nearest body that is not rooted and swings at it. The dead are
+# rooted where they fall and rise at their spawn, and an honest client is never fought for it;
+# a client that walks on while rooted is.
+place = goldshire
+seconds = 60
+game = melee
+
+bots.fighters.count = 100
+bots.fighters.script = fight
+
+bots.stubborn.count = 10
+bots.stubborn.script = fight
+bots.stubborn.heeds_roots = no
+
+expect fighters.corrections == 0
+expect fighters.roots > 0
+expect fighters.placements > 0
+expect stubborn.corrections > 0
+expect game.counted.kills > 0
+expect game.counted.respawns > 0
+expect game.saved_mismatches == 0
+expect game.shown_mismatches == 0

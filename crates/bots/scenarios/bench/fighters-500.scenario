@@ -1,0 +1,5 @@
+# 500 fighters in Goldshire and no game: they run at each other and swing at nothing.
+place = goldshire
+seconds = 120
+bots.fighters.count = 500
+bots.fighters.script = fight
