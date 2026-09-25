@@ -1,4 +1,4 @@
-//! Playing with others through a server.
+//! Playing through a server: the window's own, alone or hosting others, or another's.
 
 mod claims;
 mod link;
@@ -18,7 +18,7 @@ use world::CurrentMap;
 use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::{CharacterLook, UnitSystems};
 
-use crate::args::Join;
+use crate::args::{Join, Joining};
 use crate::player::{CameraRig, Player};
 use claims::Claims;
 use link::{Arrival, Link};
@@ -32,7 +32,7 @@ const SPAWN_SPACING_YD: f32 = 2.5;
 const SPAWNS: usize = 16;
 const SEEN_EVERY: Duration = Duration::from_millis(500);
 
-/// Present while the window plays with others; removed when its server goes.
+/// Present while the window plays through a server; removed when that server goes.
 #[derive(Resource)]
 pub struct Net {
     link: Link,
@@ -47,9 +47,26 @@ pub struct Net {
 impl Net {
     /// Returns at once; the welcome, or why the connection failed, arrives in later frames.
     pub fn connect(addr: SocketAddr, hello: Hello) -> Self {
+        Self::over(Link::open(addr, hello), None)
+    }
+
+    /// Serves `cfg` in-process and joins it as its host, with no socket between them.
+    pub fn host(cfg: server::Config, hello: Hello) -> Result<Self, String> {
+        let port = cfg.addr.map(|a| a.port());
+        let hosted = server::start(cfg).map_err(|e| match port {
+            Some(port) => format!("--host {port}: {e}"),
+            None => format!("the window's own server did not start: {e}"),
+        })?;
+        Ok(Self::over(
+            Link::here(hosted.host_joins(), hello),
+            Some(hosted),
+        ))
+    }
+
+    fn over(link: Link, hosted: Option<server::Running>) -> Self {
         Self {
-            link: Link::open(addr, hello),
-            hosted: None,
+            link,
+            hosted,
             welcomed: None,
             claims: None,
             others: Others::default(),
@@ -58,31 +75,20 @@ impl Net {
         }
     }
 
-    /// Serves `map` in-process on 127.0.0.1:`port` and joins it; players stand beside `start` (WoW
-    /// coordinates), facing `heading`.
-    pub fn host(
-        port: u16,
-        map: u32,
-        start: [f32; 3],
-        heading: f32,
-        hello: Hello,
-    ) -> Result<Self, String> {
-        let hosted = server::start(server::Config {
-            addr: Some(SocketAddr::from(([127, 0, 0, 1], port))),
-            tick_threads: 1,
-            io_threads: 1,
-            map,
-            spawns: beside(start, heading),
-            ..server::Config::default()
-        })
-        .map_err(|e| format!("--host {port}: {e}"))?;
-        let mut net = Self::connect(SocketAddr::from(([127, 0, 0, 1], port)), hello);
-        net.hosted = Some(hosted);
-        Ok(net)
-    }
-
     pub fn hosted_addr(&self) -> Option<SocketAddr> {
         self.hosted.as_ref().and_then(server::Running::addr)
+    }
+
+    /// Stops the server this window runs and returns what it measured.
+    #[cfg(test)]
+    pub fn stop_hosted(&mut self) -> Option<std::io::Result<server::Summary>> {
+        self.hosted.take().map(server::Running::stop)
+    }
+
+    /// Why the server last put the player back.
+    #[cfg(test)]
+    pub fn told(&self) -> Option<protocol::Why> {
+        self.claims.as_ref().and_then(|c| c.told)
     }
 
     #[cfg(test)]
@@ -103,12 +109,6 @@ impl Net {
     #[cfg(test)]
     pub fn teleports_sent(&self) -> u32 {
         self.claims.as_ref().map_or(0, |c| c.teleports)
-    }
-
-    /// Why the server last put the player back.
-    #[cfg(test)]
-    pub fn told(&self) -> Option<protocol::Why> {
-        self.claims.as_ref().and_then(|c| c.told)
     }
 
     #[cfg(test)]
@@ -144,17 +144,39 @@ pub fn hello(name: String, look: &CharacterLook) -> Hello {
     }
 }
 
+/// The server a window runs for itself on `map`: players stand beside `start` (WoW coordinates),
+/// facing `heading`; with a port, others join there.
+pub fn own_server(port: Option<u16>, map: u32, start: [f32; 3], heading: f32) -> server::Config {
+    server::Config {
+        addr: port.map(|port| SocketAddr::from(([127, 0, 0, 1], port))),
+        tick_threads: 1,
+        io_threads: 1,
+        map,
+        spawns: beside(start, heading),
+        ..server::Config::default()
+    }
+}
+
+/// Joins as `joining` says. A window alone whose server fails to start walks on without one.
 pub fn join(
     app: &mut App,
-    join: Join,
-    hello: Hello,
+    joining: &Joining,
+    look: &CharacterLook,
     map: u32,
     start: [f32; 3],
     heading: f32,
 ) -> Result<(), String> {
-    let net = match join {
+    let hello = hello(joining.name.clone(), look);
+    let net = match joining.how {
         Join::Connect(addr) => Net::connect(addr, hello),
-        Join::Host(port) => Net::host(port, map, start, heading, hello)?,
+        Join::Host(port) => Net::host(own_server(Some(port), map, start, heading), hello)?,
+        Join::Alone => match Net::host(own_server(None, map, start, heading), hello) {
+            Ok(net) => net,
+            Err(e) => {
+                warn!("{e}; playing on alone");
+                return Ok(());
+            }
+        },
     };
     app.insert_resource(net).add_plugins(NetPlugin);
     Ok(())

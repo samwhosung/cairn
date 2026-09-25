@@ -64,25 +64,17 @@ fn main() -> AppExit {
                 return AppExit::error();
             }
         };
-        if let Err(e) =
-            check_look_offered(&tables, args.look).and_then(|()| join(&mut app, &args, map.id))
-        {
+        if let Err(e) = check_look_offered(&tables, args.look) {
             eprintln!("cairn: {e}");
             return AppExit::from_code(2);
         }
         app.insert_resource(tables);
     }
-    client::assemble(&mut app, args, &install, map, std::convert::identity);
+    if let Err(e) = client::assemble(&mut app, args, &install, map, std::convert::identity) {
+        eprintln!("cairn: {e}");
+        return AppExit::from_code(2);
+    }
     app.run()
-}
-
-fn join(app: &mut App, args: &args::Args, map: u32) -> Result<(), String> {
-    let Some(joining) = &args.join else {
-        return Ok(());
-    };
-    let hello = net::hello(joining.name.clone(), &client::character_look(args.look));
-    let start = args.pose.target.to_array();
-    net::join(app, joining.how, hello, map, start, args.pose.heading)
 }
 
 fn check_look_offered(tables: &CharacterTables, look: args::Look) -> Result<(), String> {

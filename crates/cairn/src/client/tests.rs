@@ -1,4 +1,6 @@
+use std::net::TcpListener;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bevy::app::PluginGroupBuilder;
 use bevy::ecs::schedule::ScheduleLabel;
@@ -6,11 +8,14 @@ use bevy::prelude::*;
 use bevy::render::ExtractSchedule;
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::winit::WinitPlugin;
+use world::coords::wow_to_bevy;
 use world::unit::UnitSystems;
 use world::{CurrentMap, Install, WorldSystems};
 
 use super::assemble;
 use crate::args;
+use crate::net::{self, Net};
+use crate::player::state::Player;
 
 const FIRST_FRAMES: usize = 3;
 
@@ -23,6 +28,10 @@ fn without_a_window(plugins: PluginGroupBuilder) -> PluginGroupBuilder {
 }
 
 fn client(argv: &str) -> App {
+    assembled(argv).expect("the client assembles")
+}
+
+fn assembled(argv: &str) -> Result<App, String> {
     let args = args::parse(argv.split_whitespace().map(str::to_owned)).expect("the arguments");
     let install = Install(Arc::new(mpq::Chain::default()));
     let map = CurrentMap {
@@ -30,8 +39,8 @@ fn client(argv: &str) -> App {
         directory: "Azeroth".into(),
     };
     let mut app = App::new();
-    assemble(&mut app, args, &install, map, without_a_window);
-    app
+    assemble(&mut app, args, &install, map, without_a_window)?;
+    Ok(app)
 }
 
 fn schedule_build_failures(app: &mut App) -> Vec<String> {
@@ -88,5 +97,133 @@ fn an_ordering_cycle_stops_the_client() {
             .iter()
             .any(|f| f.starts_with("Update") && f.contains("cycle")),
         "{failures:#?}"
+    );
+}
+
+const WELCOME_WITHIN: Duration = Duration::from_secs(10);
+
+/// A client as `App::run` would start it.
+fn running(argv: &str) -> Result<App, String> {
+    let mut app = assembled(argv)?;
+    app.finish();
+    app.cleanup();
+    Ok(app)
+}
+
+fn frames_until(app: &mut App, done: impl Fn(&mut App) -> bool) -> bool {
+    let deadline = Instant::now() + WELCOME_WITHIN;
+    while Instant::now() < deadline {
+        app.update();
+        if done(app) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
+fn welcomed(app: &mut App) -> bool {
+    app.world()
+        .get_resource::<Net>()
+        .and_then(Net::welcome)
+        .is_some()
+}
+
+/// Welcomed where its camera looks, it runs and claims, and its server judges the claims: the
+/// claims it accepted, or why not.
+fn plays_through_its_server(app: &mut App) -> Result<f64, String> {
+    if app.world().get_resource::<Net>().is_none() {
+        return Err("no server".into());
+    }
+    if !frames_until(app, welcomed) {
+        return Err("no welcome".into());
+    }
+    let pose = args::parse(Vec::new()).expect("a bare command").pose;
+    let player = app.world().resource::<Player>();
+    let placed = (player.pos, player.face_yaw);
+    if placed != (wow_to_bevy(pose.target.to_array()), pose.heading) {
+        return Err(format!("placed at {placed:?}, not where the camera looks"));
+    }
+    app.world_mut().resource_mut::<Player>().settling = false;
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyW);
+    frames_until(app, |app| {
+        app.world()
+            .get_resource::<Net>()
+            .is_some_and(|n| n.claims_sent() >= 3)
+    });
+    let mut net = app.world_mut().resource_mut::<Net>();
+    let (claims, corrections) = (net.claims_sent(), net.corrections());
+    std::thread::sleep(Duration::from_millis(100));
+    let summary = net.stop_hosted().ok_or("not its own server")?;
+    let summary = summary.map_err(|e| e.to_string())?;
+    if claims < 3 || corrections > 0 || summary.refused.iter().any(|&n| n > 0) {
+        return Err(format!(
+            "{claims} claims, {corrections} corrections, refused {:?}",
+            summary.refused
+        ));
+    }
+    Ok(summary.claims_per_client)
+}
+
+#[test]
+fn a_bare_window_plays_through_a_server_of_its_own_and_a_shot_has_none() {
+    let mut window = running("--mute").expect("a window");
+    let played = plays_through_its_server(&mut window);
+    let mut shot = running("shot --out a.png").expect("a shot");
+    let control = plays_through_its_server(&mut shot);
+    eprintln!("the window: {played:?}; the shot: {control:?}");
+    assert!(played.is_ok_and(|claims_a_second| claims_a_second > 0.0));
+    assert_eq!(control, Err("no server".into()));
+}
+
+#[test]
+fn two_windows_alone_never_collide_and_two_hosts_on_one_port_do() {
+    let mut alone = ["--mute", "--mute"].map(|argv| running(argv).expect("a window"));
+    for app in &mut alone {
+        assert!(
+            frames_until(app, welcomed),
+            "a window alone was not welcomed"
+        );
+    }
+    let port = TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("a free port")
+        .port();
+    let first = running(&format!("--mute --host {port}"));
+    let second = running(&format!("--mute --host {port}"));
+    eprintln!("the second host on {port}: {:?}", second.as_ref().err());
+    assert!(first.is_ok() && second.is_err());
+}
+
+#[test]
+fn a_window_whose_server_fails_says_so_and_plays_on_alone() {
+    let mut window = running("--mute").expect("a window");
+    let mut failing = net::own_server(None, 0, [0.0; 3], 0.0);
+    failing.record = Some(
+        std::env::temp_dir()
+            .join("no-such-dir-for-a-log")
+            .join("inputs.log"),
+    );
+    let hello = net::hello(
+        "Walker".into(),
+        &super::character_look(args::Look::default()),
+    );
+    let net = Net::host(failing, hello).expect("the server starts, and fails in its tick");
+    window.insert_resource(net);
+    let alone = frames_until(&mut window, |app| {
+        app.world().get_resource::<Net>().is_none()
+    });
+    assert!(alone, "the window still waits on a server that failed");
+    assert_eq!(window.should_exit(), None, "the window stopped");
+    let mut control = running("--mute").expect("a window");
+    assert!(frames_until(&mut control, welcomed));
+    for _ in 0..20 {
+        control.update();
+    }
+    assert!(
+        control.world().get_resource::<Net>().is_some(),
+        "a window whose server runs lost it"
     );
 }

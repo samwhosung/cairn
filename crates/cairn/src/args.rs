@@ -16,10 +16,11 @@ pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
              [--connect HOST:PORT | --host [PORT]] [--name NAME]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
-         --mute keeps the window silent. --connect joins a running server, which places the
-         player; --host serves the world from this window on 127.0.0.1:PORT (7777 by default)
-         and joins it, and each player who connects there appears beside the host. NAME is
-         who the others see, the race's name by default
+         --mute keeps the window silent. The window serves its world to itself, and no one
+         else can join it. --connect joins a running server, which places the player; --host
+         also serves the world on 127.0.0.1:PORT (7777 by default), and each player who
+         connects there appears beside the host. NAME is who the others see, the race's name
+         by default
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
@@ -50,7 +51,8 @@ leaves the water, the wheel zooms to first person. A held left button turns the 
 a held right button steers, both run. Num Lock runs on its own, keypad / walks.
 Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, a held
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
-where the camera is; Ctrl+Shift+F again walks on from where the body stood.";
+where the camera is if the server lets the player teleport, as the window's own server
+does; Ctrl+Shift+F again walks on from where the body stood.";
 
 const FLAGS: [&str; 22] = [
     "age",
@@ -100,6 +102,7 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
+    /// How the window joins a server; a shot joins none.
     pub join: Option<Joining>,
 }
 
@@ -111,6 +114,7 @@ pub struct Joining {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Join {
+    Alone,
     Connect(SocketAddr),
     Host(u16),
 }
@@ -267,10 +271,14 @@ fn join(
     shot: bool,
 ) -> Result<Option<Joining>, String> {
     let connect = given.remove("connect");
-    if shot && (connect.is_some() || host.is_some()) {
-        return Err("--connect and --host are for the window".into());
+    if shot {
+        return if connect.is_some() || host.is_some() {
+            Err("--connect and --host are for the window".into())
+        } else {
+            Ok(None)
+        };
     }
-    let join = match (connect, host) {
+    let how = match (connect, host) {
         (Some(_), Some(_)) => {
             return Err("--connect and --host are two ways to join; give one".into());
         }
@@ -280,18 +288,17 @@ fn join(
             .ok()
             .and_then(|mut found| found.next())
             .map(Join::Connect)
-            .ok_or_else(|| format!("--connect wants HOST:PORT, not {addr}"))
-            .map(Some)?,
-        (None, host) => host.map(Join::Host),
+            .ok_or_else(|| format!("--connect wants HOST:PORT, not {addr}"))?,
+        (None, Some(port)) => Join::Host(port),
+        (None, None) => Join::Alone,
     };
-    match (given.remove("name"), join) {
-        (Some(_), None) => Err("--name is for joining: --connect or --host".into()),
-        (Some(name), Some(_)) if name.trim().is_empty() => Err("--name wants a name".into()),
-        (name, Some(how)) => Ok(Some(Joining {
+    match (given.remove("name"), how) {
+        (Some(_), Join::Alone) => Err("--name is for joining: --connect or --host".into()),
+        (Some(name), _) if name.trim().is_empty() => Err("--name wants a name".into()),
+        (name, how) => Ok(Some(Joining {
             how,
             name: name.map_or_else(|| look.race_title(), |n| n.trim().to_owned()),
         })),
-        (None, None) => Ok(None),
     }
 }
 
@@ -555,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn a_window_joins_by_address_or_hosts_on_a_port_as_its_race_unless_named() {
+    fn a_window_joins_alone_by_address_or_hosting_on_a_port_as_its_race_unless_named() {
         let joining = |line: &str| parsed(line).expect("parses").join;
         let as_ = |how, name: &str| {
             Some(Joining {
@@ -563,7 +570,8 @@ mod tests {
                 name: name.into(),
             })
         };
-        assert_eq!(joining(""), None);
+        assert_eq!(joining(""), as_(Join::Alone, "Human"));
+        assert_eq!(joining("shot --out a.png"), None);
         let addr = SocketAddr::from(([127, 0, 0, 1], 7000));
         assert_eq!(
             joining("--connect 127.0.0.1:7000 --race orc"),

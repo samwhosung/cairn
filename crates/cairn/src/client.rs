@@ -4,18 +4,21 @@ use world::unit::{BodySkin, CharacterLook};
 use world::{CurrentMap, Install};
 
 use crate::args::{self, Args, Mode};
-use crate::{fixture, player, shot};
+use crate::{fixture, net, player, shot};
 
+/// A window joins its server here; only a server it was told to host on a port and could not is
+/// an error.
 pub fn assemble(
     app: &mut App,
     args: Args,
     install: &Install,
     map: CurrentMap,
     default_plugins: impl FnOnce(PluginGroupBuilder) -> PluginGroupBuilder,
-) {
+) -> Result<(), String> {
     world::register_source(app, install);
     match args.mode {
         Mode::Window => {
+            let look = character_look(args.look);
             let mut rng = world::rig::AnimRng::default();
             rng.seed_for_session(false);
             app.insert_resource(rng).add_plugins((
@@ -35,10 +38,14 @@ pub fn assemble(
                     } else {
                         player::Mode::Walk
                     },
-                    look: character_look(args.look),
+                    look: look.clone(),
                 },
                 sound_plugin(args.mute),
             ));
+            if let Some(joining) = &args.join {
+                let start = args.pose.target.to_array();
+                net::join(app, joining, &look, map.id, start, args.pose.heading)?;
+            }
         }
         Mode::Shot(out) => {
             app.add_plugins((
@@ -65,6 +72,7 @@ pub fn assemble(
         .insert_resource(args.time)
         .insert_resource(world::FullScreenGlow(args.glow))
         .add_plugins((world::LoadersPlugin, world::WorldPlugin));
+    Ok(())
 }
 
 fn sound_plugin(mute: bool) -> sound::SoundPlugin {

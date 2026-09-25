@@ -1,14 +1,15 @@
-//! The connection to a server on threads of its own: a frame hands it what to send and takes what
-//! has arrived, and never waits on the socket.
+//! The connection to a server, over a socket on threads of its own or inside the server's own
+//! process: a frame hands it what to send and takes what has arrived, and never waits on either.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use protocol::{ClientMessage, Frames, Hello};
+use server::InProcess;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUF: usize = 64 << 10;
@@ -18,10 +19,21 @@ pub enum Arrival {
     Gone { reason: String },
 }
 
-pub struct Link {
-    out: Sender<Vec<u8>>,
-    arrivals: Mutex<Receiver<Arrival>>,
-    stream: Arc<Mutex<Option<TcpStream>>>,
+pub struct Link(Way);
+
+enum Way {
+    Socket {
+        out: Sender<Vec<u8>>,
+        arrivals: Mutex<Receiver<Arrival>>,
+        stream: Arc<Mutex<Option<TcpStream>>>,
+    },
+    Here(Mutex<Here>),
+}
+
+struct Here {
+    server: InProcess,
+    frames: Frames,
+    gone: bool,
 }
 
 impl Link {
@@ -40,33 +52,91 @@ impl Link {
             let reason = format!("no thread for the connection: {e}");
             let _ = gone.send(Arrival::Gone { reason });
         }
-        Self {
+        Self(Way::Socket {
             out,
             arrivals: Mutex::new(arrivals),
             stream,
-        }
+        })
+    }
+
+    /// Joins over `server`'s channels, `hello` first.
+    pub fn here(server: InProcess, hello: Hello) -> Self {
+        let link = Self(Way::Here(Mutex::new(Here {
+            server,
+            frames: Frames::default(),
+            gone: false,
+        })));
+        link.send(&ClientMessage::Hello(hello));
+        link
     }
 
     pub fn send(&self, message: &ClientMessage) {
         let mut bytes = Vec::new();
         message.write(&mut bytes);
-        let _ = self.out.send(bytes);
+        match &self.0 {
+            Way::Socket { out, .. } => {
+                let _ = out.send(bytes);
+            }
+            Way::Here(here) => {
+                let _ = lock(here).server.send(bytes);
+            }
+        }
     }
 
     /// Everything that has arrived since the last call, in order.
     pub fn arrivals(&self) -> Vec<Arrival> {
-        self.arrivals
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .try_iter()
-            .collect()
+        match &self.0 {
+            Way::Socket { arrivals, .. } => lock(arrivals).try_iter().collect(),
+            Way::Here(here) => lock(here).arrivals(),
+        }
     }
+}
+
+impl Here {
+    fn arrivals(&mut self) -> Vec<Arrival> {
+        let mut got = Vec::new();
+        while !self.gone {
+            let (bytes, arrived) = match self.server.try_recv() {
+                Ok(written) => written,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.gone = true;
+                    let reason = "the server in this window stopped".into();
+                    got.push(Arrival::Gone { reason });
+                    break;
+                }
+            };
+            self.frames.extend(&bytes);
+            loop {
+                match self.frames.next_frame() {
+                    Ok(Some(frame)) => got.push(Arrival::Frame {
+                        bytes: frame.to_vec(),
+                        arrived,
+                    }),
+                    Ok(None) => break,
+                    Err(e) => {
+                        self.gone = true;
+                        let reason = format!("the server in this window sent a broken frame: {e}");
+                        got.push(Arrival::Gone { reason });
+                        break;
+                    }
+                }
+            }
+        }
+        got
+    }
+}
+
+fn lock<T>(held: &Mutex<T>) -> MutexGuard<'_, T> {
+    held.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Drop for Link {
     fn drop(&mut self) {
-        let held = self.stream.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(stream) = held.as_ref() {
+        let Way::Socket { stream, .. } = &self.0 else {
+            return;
+        };
+        if let Some(stream) = lock(stream).as_ref() {
             let _ = stream.shutdown(Shutdown::Both);
         }
     }
@@ -88,7 +158,7 @@ fn run(
         Ok(w) => w,
         Err(e) => return format!("the connection to {addr}: {e}"),
     };
-    *held.lock().unwrap_or_else(PoisonError::into_inner) = stream.try_clone().ok();
+    *lock(held) = stream.try_clone().ok();
     let mut first = Vec::new();
     ClientMessage::Hello(hello.clone()).write(&mut first);
     let spawned = thread::Builder::new()
@@ -130,4 +200,53 @@ fn write(mut stream: TcpStream, first: Vec<u8>, to_send: &Receiver<Vec<u8>>) {
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+#[cfg(test)]
+mod tests {
+    use protocol::{Appearance, VERSION};
+
+    use super::*;
+
+    #[test]
+    fn a_frame_from_the_servers_own_process_bears_the_time_it_was_written() {
+        let running = server::start(server::Config {
+            addr: None,
+            tick_threads: 1,
+            io_threads: 1,
+            ..server::Config::default()
+        })
+        .expect("a server");
+        let hello = Hello {
+            version: VERSION,
+            name: "Host".into(),
+            appearance: Appearance::default(),
+        };
+        let link = Link::here(running.host_joins(), hello);
+        thread::sleep(Duration::from_millis(600));
+        let read = Instant::now();
+        let stamps: Vec<Instant> = link
+            .arrivals()
+            .into_iter()
+            .map(|a| match a {
+                Arrival::Frame { arrived, .. } => arrived,
+                Arrival::Gone { reason } => panic!("{reason}"),
+            })
+            .collect();
+        let (first, last) = (stamps[0], stamps[stamps.len() - 1]);
+        eprintln!(
+            "{} frames over {:?}, the first {:?} before they were read",
+            stamps.len(),
+            last - first,
+            read - first
+        );
+        assert!(stamps.len() >= 8, "{} frames", stamps.len());
+        assert!(
+            last - first >= Duration::from_millis(350),
+            "{:?}",
+            last - first
+        );
+        drop(link);
+        running.stop().expect("the server stops");
+    }
 }
