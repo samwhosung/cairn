@@ -294,6 +294,7 @@ mod tests {
             anim_id,
             seq_index: 0,
             node: AnimationNodeIndex::new(0),
+            upper_node: None,
             looping: true,
             duration: 1.0,
             move_speed,

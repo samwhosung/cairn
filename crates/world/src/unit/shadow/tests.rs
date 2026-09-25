@@ -44,6 +44,7 @@ fn clip(anim_id: u16, bounds_min: Vec3, bounds_max: Vec3) -> AnimClip {
         anim_id,
         seq_index: 0,
         node: AnimationNodeIndex::new(0),
+        upper_node: None,
         looping: true,
         duration: 1.0,
         move_speed: 0.0,

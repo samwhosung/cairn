@@ -405,6 +405,7 @@ mod tests {
             anim_id,
             seq_index,
             node: AnimationNodeIndex::new(node),
+            upper_node: None,
             looping: true,
             duration: 1.0,
             move_speed: 0.0,

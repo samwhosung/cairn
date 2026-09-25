@@ -75,6 +75,7 @@ fn body(app: &mut App, rows: &[Row]) -> Entity {
             anim_id: r.0,
             seq_index: i,
             node,
+            upper_node: None,
             looping: r.2,
             duration: r.1,
             move_speed: r.3,

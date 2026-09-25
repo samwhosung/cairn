@@ -210,8 +210,11 @@ fn animations(
 ) -> Option<ModelAnimations> {
     let mut graph = AnimationGraph::new();
     let root = graph.root;
+    let lower_body = lower_body_masks(skeleton);
     let mut pose = PoseSource {
-        bone_masks: vec![0; skeleton.joints.len()],
+        bone_masks: lower_body
+            .clone()
+            .unwrap_or_else(|| vec![0; skeleton.joints.len()]),
         ..PoseSource::default()
     };
     let playable_animation_lookup = parse_m2_playable_animation_lookup(bytes).unwrap_or_default();
@@ -228,13 +231,19 @@ fn animations(
         let pose_idx = pose.clips.len() as u32;
         pose.clips.push(pose_clip);
         let clip = ctx.add_labeled_asset(format!("clip{i}"), clip);
-        let node = graph.add_clip(clip, 1.0, root);
+        let node = graph.add_clip(clip.clone(), 1.0, root);
         pose.set_node(node, pose_idx, 0);
+        let upper_node = lower_body.is_some().then(|| {
+            let upper = graph.add_clip_with_mask(clip, LOWER_BODY, 1.0, root);
+            pose.set_node(upper, pose_idx, LOWER_BODY);
+            upper
+        });
         let (lo, hi) = (wow_to_bevy(anim.bounds_min), wow_to_bevy(anim.bounds_max));
         clips.push(AnimClip {
             anim_id: anim.anim_id,
             seq_index: anim.seq_index,
             node,
+            upper_node,
             looping: anim.looping,
             duration: anim.duration,
             move_speed: anim.move_speed,
@@ -280,4 +289,68 @@ fn animations(
         moving_idle,
         pose: Arc::new(pose),
     })
+}
+
+/// The mask group of the bones a one-shot on the upper body leaves to the gait.
+const LOWER_BODY: u64 = 1;
+
+/// Each bone's mask groups: [`LOWER_BODY`] for every bone outside the subtree of the lower spine,
+/// or of the head on a model with no spine. `None` for a model with neither, which has no upper
+/// body to play apart. A bone whose parent does not precede it is a root, as the pose composes it.
+fn lower_body_masks(skeleton: &ModelSkeleton) -> Option<Vec<u64>> {
+    let top = usize::from(skeleton.spine_bone.or(skeleton.head_bone)?);
+    let mut upper = vec![false; skeleton.joints.len()];
+    for (i, joint) in skeleton.joints.iter().enumerate() {
+        let parent = usize::try_from(joint.parent).ok().filter(|&p| p < i);
+        upper[i] = i == top || parent.is_some_and(|p| upper[p]);
+    }
+    Some(
+        upper
+            .into_iter()
+            .map(|up| if up { 0 } else { LOWER_BODY })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rig::ModelJoint;
+
+    fn skeleton(parents: &[i16], spine_bone: Option<u16>, head_bone: Option<u16>) -> ModelSkeleton {
+        ModelSkeleton {
+            joints: parents
+                .iter()
+                .map(|&parent| ModelJoint {
+                    parent,
+                    local_translation: Vec3::ZERO,
+                    billboard: None,
+                    parent_arm: None,
+                })
+                .collect(),
+            spine_bone,
+            head_bone,
+        }
+    }
+
+    #[test]
+    fn the_legs_and_the_pelvis_are_the_lower_body_and_the_spine_up_is_not() {
+        const L: u64 = LOWER_BODY;
+        // 0 pelvis, 1 and 2 thighs, 3 a shin, 4 the lower spine, 5 the chest, 6 an arm, 7 the head.
+        let body = skeleton(&[-1, 0, 0, 1, 0, 4, 5, 5], Some(4), Some(7));
+        assert_eq!(lower_body_masks(&body), Some(vec![L, L, L, L, 0, 0, 0, 0]));
+        let headed = skeleton(&[-1, 0, 0, 1, 0, 4, 5, 5], None, Some(7));
+        assert_eq!(
+            lower_body_masks(&headed),
+            Some(vec![L, L, L, L, L, L, L, 0]),
+            "the head's subtree when there is no spine"
+        );
+        assert_eq!(lower_body_masks(&skeleton(&[-1, 0], None, None)), None);
+        let looped = skeleton(&[-1, 2, 1], Some(0), None);
+        assert_eq!(
+            lower_body_masks(&looped),
+            Some(vec![0, L, L]),
+            "a parent that follows its bone makes the bone a root, so a loop ends"
+        );
+    }
 }
