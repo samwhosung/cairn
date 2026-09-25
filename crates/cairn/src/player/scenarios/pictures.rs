@@ -233,16 +233,13 @@ impl Painter {
         self.app.world_mut().resource_mut::<Time<Virtual>>()
     }
 
-    /// Bevy steps the real clock by the step too, and the other players' moves replay on that
-    /// clock: each frame shows one step of them, however long the frame takes.
-    pub(super) fn on_its_own_clock(&mut self) {
+    /// Bevy steps the real clock by the step too, and the other players' moves replay on it.
+    pub(super) fn keep_time_by_its_frames(&mut self) {
         self.app
             .insert_resource(TimeUpdateStrategy::ManualDuration(STEP));
         self.pace.start();
     }
 
-    /// Relayed moves are stamped by the wall clock, which a painter on its own falls behind by
-    /// whatever its frames take beyond a step.
     pub(super) fn level_with_the_wall(&mut self) {
         self.app
             .world_mut()

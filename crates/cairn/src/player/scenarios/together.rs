@@ -231,7 +231,7 @@ fn two_players_see_each_other_run_and_jump_in_goldshire_by_day_and_at_night() {
             wait(&mut p, 0.0);
         }
         p.clock().unpause();
-        p.on_its_own_clock();
+        p.keep_time_by_its_frames();
         if scene.night {
             p.set_time(0, 30);
         }

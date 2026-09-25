@@ -177,8 +177,7 @@ fn commits(root: &Path, range: &str) -> Result<()> {
     bail!("{}", bad.join("\n"))
 }
 
-/// The tests that start the whole app on the GPU and save what it draws.
-const PICTURES: [&str; 2] = ["scenarios::pictures::", "scenarios::together::two_players"];
+const PICTURE_TESTS: [&str; 2] = ["scenarios::pictures::", "scenarios::together::two_players"];
 
 fn pictures(root: &Path, dir: &Path) -> Result<()> {
     if std::env::var_os("WOW_DATA").is_none() {
@@ -188,7 +187,7 @@ fn pictures(root: &Path, dir: &Path) -> Result<()> {
     let dir = std::path::absolute(dir).context("resolving the shots' directory")?;
     let out = Command::new("cargo")
         .args(["test", "-p", "cairn", "--locked", "--", "--ignored"])
-        .args(PICTURES)
+        .args(PICTURE_TESTS)
         .args(["--skip", "the_frame_cost"])
         .env("CAIRN_PICTURES", &dir)
         .current_dir(root)
@@ -199,7 +198,7 @@ fn pictures(root: &Path, dir: &Path) -> Result<()> {
     if !out.status.success() {
         bail!("{}", String::from_utf8_lossy(&out.stderr));
     }
-    for filter in PICTURES {
+    for filter in PICTURE_TESTS {
         if !text
             .lines()
             .any(|l| l.contains(filter) && l.ends_with(" ok"))
