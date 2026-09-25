@@ -10,6 +10,9 @@ at run time.
   character. It decides only how a body moves. Combat, death, experience, loot, quests, the
   economy, and what lives in the world and what it does, belong to the games built on cairn, never
   to the engine. Of anything new, ask: does it show, or does it decide?
+- A game is a crate in `games/`, written on the `game` crate alone, that rolls only through its
+  `World`; the server, the client and the bots find it by name in `catalog`, and nothing else names
+  it.
 - No game data is stored in this repo: no game file, and nothing computed from one, such as a
   palette or a baked table. What the tools need, they compute from the player's install. A
   constant the game's own code uses, such as a speed or a noise table, is code.
