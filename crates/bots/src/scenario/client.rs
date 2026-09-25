@@ -5,9 +5,9 @@ use protocol::{
 };
 use server::{Input, Link, Spawn, Stamped};
 
-use super::fight::{Aim, Fighter, Sight};
 use super::shown::{Drops, Shown};
 use super::spec::Script;
+use crate::fight::{Fighter, Sight, Swing};
 use crate::ground::Ground;
 use crate::lie::Lie;
 use crate::mover::{Claims, Frame, Mover};
@@ -521,29 +521,13 @@ impl Client {
         let Some(body) = &mut self.body else {
             return;
         };
-        if let Some(sight) = &self.sight
-            && !body.mover.rooted
-        {
-            let spot = body.track.pose(clock).spot;
-            let choice = self.fighter.frame(t, spot.xy, sight);
-            if let Some(aim) = choice.aim {
-                let (facing, run_yd) = match aim {
-                    Aim::Toward { facing, run_yd } => (facing, run_yd),
-                    Aim::Still => (spot.facing, 0.0),
-                };
-                let from = Spawn {
-                    pos: [spot.xy[0], spot.xy[1], self.here[2]],
-                    facing,
-                };
-                let pace = Pace {
-                    stop_yd: Some(run_yd),
-                    jump_every_ms: None,
-                    ..self.brief.pace
-                };
-                let until = self.brief.route_until_ms.max(clock);
-                body.track = Track::line(&from, &pace, clock, until);
-            }
-            if choice.swing {
+        if let Some(sight) = &self.sight {
+            let (pace, until) = (&self.brief.pace, self.brief.route_until_ms);
+            let rooted = body.mover.rooted;
+            let steered = self
+                .fighter
+                .steer(clock, rooted, &mut body.track, pace, until, sight);
+            if let Some(Swing) = steered {
                 let mut bytes = Vec::new();
                 ClientMessage::Action(self.brief.swing_action).write(&mut bytes);
                 self.outbound.push_back(Outgoing {

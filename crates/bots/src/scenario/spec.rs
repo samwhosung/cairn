@@ -467,7 +467,7 @@ fn group(name: &str) -> Group {
         clock_at_start_ms: 0,
         lie: None,
         control_of: None,
-        swing_action: 1,
+        swing_action: crate::fight::SWING,
         heeds_roots: true,
         drops: Drops::default(),
     }

@@ -3,7 +3,11 @@ use std::f32::consts::TAU;
 
 use libm::{atan2f, sqrtf};
 use protocol::{Record, flags};
+use server::Spawn;
 
+use crate::track::{Pace, Track};
+
+pub const SWING: u32 = 1;
 const CLOSE_YD: f32 = 2.0;
 const SWING_WITHIN_YD: f32 = 4.0;
 const SWING_EVERY_MS: u32 = 500;
@@ -66,16 +70,18 @@ impl Sight {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Aim {
+enum Aim {
     Toward { facing: f32, run_yd: f32 },
     Still,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Choice {
-    pub aim: Option<Aim>,
-    pub swing: bool,
+struct Choice {
+    aim: Option<Aim>,
+    swing: bool,
 }
+
+pub struct Swing;
 
 #[derive(Default)]
 pub struct Fighter {
@@ -84,7 +90,40 @@ pub struct Fighter {
 }
 
 impl Fighter {
-    pub fn frame(&mut self, t: u32, me: [f32; 2], sight: &Sight) -> Choice {
+    pub fn steer(
+        &mut self,
+        t: u32,
+        rooted: bool,
+        track: &mut Track,
+        pace: &Pace,
+        until_ms: u32,
+        sight: &Sight,
+    ) -> Option<Swing> {
+        if rooted {
+            return None;
+        }
+        let spot = track.pose(t).spot;
+        let choice = self.frame(t, spot.xy, sight);
+        if let Some(aim) = choice.aim {
+            let (facing, run_yd) = match aim {
+                Aim::Toward { facing, run_yd } => (facing, run_yd),
+                Aim::Still => (spot.facing, 0.0),
+            };
+            let from = Spawn {
+                pos: [spot.xy[0], spot.xy[1], 0.0],
+                facing,
+            };
+            let pace = Pace {
+                stop_yd: Some(run_yd),
+                jump_every_ms: None,
+                ..*pace
+            };
+            *track = Track::line(&from, &pace, t, until_ms.max(t));
+        }
+        choice.swing.then_some(Swing)
+    }
+
+    fn frame(&mut self, t: u32, me: [f32; 2], sight: &Sight) -> Choice {
         let target = sight.nearest_free(me);
         let aim = (t >= self.aim_at).then(|| {
             self.aim_at = t + AIM_EVERY_MS;

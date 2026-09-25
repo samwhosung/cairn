@@ -2,6 +2,7 @@
 
 mod bot;
 mod check;
+mod fight;
 mod ground;
 mod lie;
 mod mover;
