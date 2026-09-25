@@ -73,6 +73,7 @@ fn fighter(server: SocketAddr, look: CharacterLook) -> Fighter {
 struct Plays {
     show: UnitShow,
     clip: Option<u16>,
+    above_the_spine: Option<u16>,
     played_out: bool,
 }
 
@@ -87,9 +88,14 @@ fn plays<F: bevy::ecs::query::QueryFilter>(p: &mut Painter) -> Option<Plays> {
     let (show, tr, anims, player) = q.iter(world).next()?;
     let node = tr.get_main_animation();
     let clip = node.and_then(|n| anims.clips.iter().find(|c| c.node == n));
+    let above_the_spine = anims
+        .clips
+        .iter()
+        .find(|c| c.upper_node.is_some_and(|n| player.animation(n).is_some()));
     Some(Plays {
         show: *show,
         clip: clip.map(|c| c.anim_id),
+        above_the_spine: above_the_spine.map(|c| c.anim_id),
         played_out: node
             .and_then(|n| player.animation(n))
             .is_some_and(bevy::animation::ActiveAnimation::is_finished),
@@ -163,7 +169,7 @@ impl Fight {
 
 fn plays_clip(who: Option<Plays>, clip: u16) -> (bool, String) {
     (
-        who.is_some_and(|w| w.clip == Some(clip)),
+        who.is_some_and(|w| w.clip == Some(clip) || w.above_the_spine == Some(clip)),
         format!("{who:?}"),
     )
 }

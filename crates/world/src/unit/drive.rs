@@ -8,10 +8,13 @@ use bevy::prelude::*;
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
     Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, UnitShow, current_bracket, gait_candidates,
-    jump_land_pick, legs_take_up_locomotion, move_flags, moves_up_when_the_legs_move,
+    is_wound, jump_land_pick, legs_take_up_locomotion, move_flags, moves_up_when_the_legs_move,
     playback_rate, plays_on_upper_body, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
+use wound::Wound;
+
+mod wound;
 
 const MIN_JUMP_LAUNCH_SPEED: f32 = 0.5;
 const UPPER_BODY_OVER_GAIT: f32 = 8.0;
@@ -30,6 +33,7 @@ pub struct UnitDriver {
     upper_body_one_shot: Option<AnimationNodeIndex>,
     upper_body_fade: Option<UpperBodyFade>,
     flags_under_whole_body_one_shot: u32,
+    wound: Option<Wound>,
 }
 
 #[derive(Clone, Copy)]
@@ -643,8 +647,13 @@ pub(crate) fn drive_units(
     mut rng: ResMut<'_, AnimRng>,
     mut units: Driven<'_, '_>,
 ) {
-    for (mut drv, anims, mut player, mut tr, motion, show, transform) in &mut units {
+    for (mut drv, anims, mut player, mut tr, motion, mut show, transform) in &mut units {
         let motion = motion.copied().unwrap_or_default();
+        drv.ease_wound(&mut player);
+        let before = (drv.mode, drv.armed_gait, drv.upper_body_one_shot);
+        let told_wound = show
+            .as_mut()
+            .and_then(|s| s.play.take_if(|id| is_wound(*id)));
         let falling = motion.flags & move_flags::FALLING != 0;
         let was_falling = std::mem::replace(&mut drv.was_falling, falling);
         let prev_vertical = std::mem::replace(&mut drv.last_vertical_speed, motion.vertical_speed);
@@ -670,6 +679,13 @@ pub(crate) fn drive_units(
         drv.sync_rate(&tr, &mut player, anims, motion.speed, frame.model_scale);
         drv.release_played_out(&mut player);
         drv.advance_upper_body_fade(&mut player, time.delta_secs());
+        let upper_body_played =
+            drv.upper_body_one_shot.is_some() && drv.upper_body_one_shot != before.2;
+        let whole_body_played = (drv.mode, drv.armed_gait) != (before.0, before.1);
+        drv.evict_wound(&mut player, upper_body_played, whole_body_played);
+        if let Some(id) = told_wound {
+            drv.lay_wound(&tr, &mut player, anims, &mut rng, (id, &motion));
+        }
     }
 }
 

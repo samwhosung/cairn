@@ -8,7 +8,7 @@ use bevy::asset::{AssetPlugin, LoadState};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use super::super::motion::anim::RUN;
+use super::super::motion::anim::{COMBAT_WOUND, RUN};
 use super::super::motion::move_flags::FORWARD;
 use super::super::motion::{UnitMotion, UnitShow};
 use super::{UPPER_BODY_OVER_GAIT, UPPER_BODY_RELEASE_SECS, UnitDriver, drive_units};
@@ -377,5 +377,82 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
          at most {worst_share:.4} of the way back to the run",
         legs.len(),
         upper.len()
+    );
+}
+
+/// Benilla's wound: a share of the pose that eases out from three quarters over the clip, laid
+/// over what the body plays, weighed a frame behind the clip's time as its slot is.
+fn benillas_wound_share(frame: usize, span: f32) -> f32 {
+    let t = (1.0 - frame as f32 * STEP.as_secs_f32() / span).clamp(0.0, 1.0);
+    (3.0 - 2.0 * t) * t * t * 0.75
+}
+
+#[test]
+fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_torso() {
+    let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
+        eprintln!("skipped: WOW_DATA is not set");
+        return;
+    };
+    let mut app = app(&data);
+    let (skeleton, anims) = human(&mut app);
+    let wound = anims
+        .find_resolved(COMBAT_WOUND, &|_| None)
+        .expect("a wound");
+    let frames = frames_in(wound.duration) + 10;
+    let runs_from = frames_in(wound.duration * 0.3);
+    let running = UnitMotion {
+        speed: 7.0,
+        flags: FORWARD,
+        ..UnitMotion::default()
+    };
+    let standing = UnitMotion::default();
+    let stand_then_run = &|frame| if frame < runs_from { standing } else { running };
+    let human = (&skeleton, &anims);
+    let run = sampled(&mut app, human, stand_then_run, None, frames).locals_from_the_telling;
+    let hit = sampled(&mut app, human, stand_then_run, Some(COMBAT_WOUND), frames);
+    let hit = &hit.locals_from_the_telling;
+
+    let legs = below_the_spine(&anims);
+    for (f, (hit, run)) in hit.iter().zip(&run).enumerate() {
+        for &b in &legs {
+            assert_eq!(
+                hit[b], run[b],
+                "frame {f}: bone {b} of the legs left the run"
+            );
+        }
+    }
+
+    let src = &anims.pose;
+    let keyed = &src.clips[src.node(wound.node).expect("its node").clip as usize];
+    let dt = STEP.as_secs_f32();
+    let (mut worst_off, mut shown) = (0.0_f32, 0);
+    for f in 0..frames_in(wound.duration) - 1 {
+        let share = benillas_wound_share(f, wound.duration);
+        for bone in keyed
+            .bones
+            .iter()
+            .filter(|b| src.bone_masks[usize::from(b.bone)] == 0)
+        {
+            let Some(flinch) = bone.rotation.sample((f + 1) as f32 * dt) else {
+                continue;
+            };
+            let b = usize::from(bone.bone);
+            let expected = run[f][b].rotation.slerp(flinch, share);
+            let off = angle(hit[f][b].rotation, expected);
+            worst_off = worst_off.max(off);
+            assert!(
+                off < 2e-3,
+                "frame {f}: bone {b} stands {off} rad off benilla's wound, share {share}"
+            );
+            shown += usize::from(angle(run[f][b].rotation, hit[f][b].rotation) > VISIBLY_APART_RAD);
+        }
+    }
+    assert!(shown > 0, "the wound shows above the spine");
+    eprintln!(
+        "the {} bones below the spine are the run's bit for bit on all {frames} frames, standing \
+         and running from frame {runs_from}; above it, the wound's share of the pose is \
+         benilla's to within {worst_off:.2e} rad, {shown} bone-frames over {VISIBLY_APART_RAD} \
+         rad from the run",
+        legs.len(),
     );
 }

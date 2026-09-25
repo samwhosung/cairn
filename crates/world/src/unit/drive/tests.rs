@@ -12,8 +12,9 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use super::super::motion::anim::{
-    DEAD, DEATH, FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT, SIT_GROUND,
-    SIT_GROUND_DOWN, SIT_GROUND_UP, SPECIAL_1H, STAND, SWIM, SWIM_IDLE, WALK, WALK_BACKWARDS,
+    COMBAT_WOUND, DEAD, DEATH, FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT,
+    SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SPECIAL_1H, STAND, STAND_WOUND, SWIM, SWIM_IDLE,
+    WALK, WALK_BACKWARDS,
 };
 use super::super::motion::move_flags::{
     BACKWARD, FALLING, FALLING_FAR, FORWARD, SWIMMING, TURN_LEFT, WALK_MODE,
@@ -400,7 +401,6 @@ fn a_sit_goes_down_holds_and_stands_up_or_walks_straight_out() {
     );
 }
 
-const COMBAT_WOUND: u16 = 9;
 const ATTACK_UNARMED: u16 = 16;
 
 fn as_a_character_plays(requested: u16) -> u16 {
@@ -419,6 +419,7 @@ fn dressed_fighter(app: &mut App, spawn: fn(&mut App, &[Row]) -> Entity) -> Enti
         (SIT_GROUND, 2.0, true, 0.0, 0x7fff, (0, 0)),
         (COMBAT_WOUND, 1.0, false, 0.0, 0x7fff, (0, 0)),
         (SPECIAL_1H, 1.0, false, 0.0, 0x7fff, (0, 0)),
+        (STAND_WOUND, 1.0, false, 0.0, 0x7fff, (0, 0)),
     ]);
     let unit = spawn(app, &rows);
     let mut e = app.world_mut().entity_mut(unit);
@@ -727,36 +728,6 @@ fn a_special_attack_told_on_the_run_keeps_the_whole_body_until_the_flags_change(
 }
 
 #[test]
-fn a_wound_begun_standing_keeps_the_whole_body_on_the_run_until_a_swing_cuts_it_short() {
-    let mut app = app();
-    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
-    frames(&mut app, 2);
-    told(&mut app, unit, Some(COMBAT_WOUND), None);
-    frames(&mut app, 1);
-    let flinched = (Some(COMBAT_WOUND), Mode::ShowPlayed(COMBAT_WOUND));
-    assert_eq!(base_and_mode(&app, unit), flinched);
-    moving(&mut app, unit, FORWARD, 7.0, 0.0);
-    frames(&mut app, 20);
-    assert_eq!(
-        base_and_mode(&app, unit),
-        flinched,
-        "neither a cast nor a combat animation, so it does not move up"
-    );
-    assert_eq!(upper_body(&app, unit), None);
-    told(&mut app, unit, Some(ATTACK_UNARMED), None);
-    frames(&mut app, 1);
-    assert_eq!(
-        (playing(&app, unit).0, playing(&app, unit).2),
-        (Some(RUN), Mode::Gait),
-        "one told on the run cuts it short and the legs take the run"
-    );
-    assert_eq!(
-        upper_body(&app, unit).map(|swing| (swing.id, swing.seek)),
-        Some((ATTACK_UNARMED, 0.01))
-    );
-}
-
-#[test]
 fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
     let mut app = app();
     let unit = dressed_fighter(&mut app, body_with_upper_nodes);
@@ -774,3 +745,5 @@ fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
     );
     assert_eq!(upper_body(&app, unit), None);
 }
+
+mod wound;

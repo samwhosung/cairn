@@ -58,6 +58,11 @@ pub(crate) mod anim {
     pub const SPECIAL_UNARMED: u16 = 118;
     pub const DROWN: u16 = 131;
     pub const DROWNED: u16 = 132;
+    pub const STAND_WOUND: u16 = 8;
+    pub const COMBAT_WOUND: u16 = 9;
+    pub const COMBAT_CRITICAL: u16 = 10;
+    pub const READY_UNARMED: u16 = 25;
+    pub const READY_BOW: u16 = 29;
 }
 
 /// A unit's stand state, the client's unit field: standing, or a pose it holds in place.
@@ -68,6 +73,7 @@ impl StandState {
     pub const STAND: Self = Self(0);
     pub const SIT: Self = Self(1);
     pub const SLEEP: Self = Self(3);
+    pub const DEAD: Self = Self(7);
     pub const KNEEL: Self = Self(8);
 
     fn stand_up_id(self) -> u16 {
@@ -81,10 +87,11 @@ impl StandState {
 }
 
 use anim::{
-    DEAD, DEATH, DROWN, DROWNED, FALL, FLY, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, KNEEL_END,
-    KNEEL_LOOP, KNEEL_START, RUN, SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN,
-    SIT_GROUND_UP, SLEEP, SLEEP_DOWN, SLEEP_UP, SPECIAL_1H, SPECIAL_2H, SPECIAL_UNARMED, SPRINT,
-    STAND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
+    COMBAT_CRITICAL, COMBAT_WOUND, DEAD, DEATH, DROWN, DROWNED, FALL, FLY, JUMP, JUMP_END,
+    JUMP_LAND_RUN, JUMP_START, KNEEL_END, KNEEL_LOOP, KNEEL_START, READY_BOW, READY_UNARMED, RUN,
+    SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SLEEP, SLEEP_DOWN,
+    SLEEP_UP, SPECIAL_1H, SPECIAL_2H, SPECIAL_UNARMED, SPRINT, STAND, STAND_WOUND, SWIM,
+    SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
 };
 
 /// A unit's movement this frame, as its animation reads it. A unit without one stands.
@@ -284,6 +291,19 @@ fn takes_whole_body(id: u16) -> bool {
         id,
         DEATH | DEAD | DROWN | DROWNED | SPECIAL_1H | SPECIAL_2H | SPECIAL_UNARMED
     )
+}
+
+/// The client plays these in a slot of their own, over whatever the body plays.
+pub(crate) fn is_wound(id: u16) -> bool {
+    matches!(id, STAND_WOUND | COMBAT_WOUND | COMBAT_CRITICAL)
+}
+
+/// The client lays a wound over the whole body when the body stands in a ready stance, and a
+/// stand wound when the body is still; any other over the upper body alone.
+pub(crate) fn wound_takes_whole_body(id: u16, base: u16, flags: u32) -> bool {
+    use move_flags::{ANY_MOVE, FALLING, SWIMMING};
+    matches!(base, READY_UNARMED..=READY_BOW)
+        || (id == STAND_WOUND && flags & (ANY_MOVE | FALLING | SWIMMING) == 0)
 }
 
 pub(crate) fn moves_up_when_the_legs_move(id: u16) -> bool {
