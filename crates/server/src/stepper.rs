@@ -20,6 +20,14 @@ pub struct Stepper {
     batches: bool,
 }
 
+/// An entity in an observer's view: the slot its client knows it by, and the game's state of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InView<'a> {
+    pub slot: u16,
+    pub id: u32,
+    pub state: &'a [u8],
+}
+
 /// A client's end of its connection to a [`Stepper`]: the frames the server sent it, in order.
 pub struct Link {
     frames: UnboundedReceiver<Vec<u8>>,
@@ -87,8 +95,7 @@ impl Stepper {
         self.sim.game()
     }
 
-    /// The bodies the game placed in the tick just run, each now awaiting its client's ack.
-    pub fn placed(&self) -> Vec<u32> {
+    pub fn placed_last_tick(&self) -> Vec<u32> {
         let world = self.sim.world();
         let tick = world.tick().wrapping_sub(1);
         (0..)
@@ -98,23 +105,22 @@ impl Stepper {
             .collect()
     }
 
-    /// What observer `id` has in view, by slot: each entity, and the game's state of it.
-    pub fn in_view(&self, id: u32) -> Option<Vec<(u16, u32, &[u8])>> {
+    /// What observer `id` has in view, by slot.
+    pub fn in_view(&self, id: u32) -> Option<Vec<InView<'_>>> {
         let game = self.sim.game();
-        let mut view: Vec<(u16, u32, &[u8])> = self
+        let mut view: Vec<InView<'_>> = self
             .sim
             .in_view(id)?
             .into_iter()
-            .map(|(slot, e)| {
-                let state = game.and_then(|g| g.shown(e)).map_or(&[][..], |s| s.0);
-                (slot, e, state)
+            .map(|(slot, id)| {
+                let state = game.and_then(|g| g.shown(id)).map_or(&[][..], |s| s.0);
+                InView { slot, id, state }
             })
             .collect();
-        view.sort_unstable_by_key(|v| v.0);
+        view.sort_unstable_by_key(|v| v.slot);
         Some(view)
     }
 
-    /// Where what the record saved differs from a full scan of the game's rows.
     pub fn saves_differ(&self) -> Option<String> {
         let game = self.sim.game()?;
         self.sim.saves().first_difference(&game.saved())

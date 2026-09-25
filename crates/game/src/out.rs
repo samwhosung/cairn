@@ -8,13 +8,18 @@ pub(crate) const ACT: u8 = 0;
 pub(crate) const STEP: u8 = 1;
 pub(crate) const ROUND: u8 = 2;
 
-/// A row spawned by a rule, until the tick's end numbers it.
-pub(crate) struct Spawned {
+pub(crate) struct PendingSpawn {
     pub phase: u8,
     pub from: Id,
     pub seq: u32,
     pub kind: TypeId,
     pub row: Box<dyn Any + Send>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fate {
+    Stays,
+    Leaves,
 }
 
 /// What a rule does beyond writing its own row.
@@ -26,7 +31,7 @@ pub struct Out<G: Game> {
     gone: bool,
     order: Option<BodyOrder>,
     pub(crate) letters: Vec<(Id, Letter<G::Msg>)>,
-    pub(crate) spawns: Vec<Spawned>,
+    pub(crate) spawns: Vec<PendingSpawn>,
     pub(crate) orders: Vec<(u32, u8, BodyOrder)>,
     pub(crate) counts: Vec<(&'static str, i64)>,
 }
@@ -52,15 +57,18 @@ impl<G: Game> Out<G> {
         self.spawned = 0;
     }
 
-    /// Hands the row's next due tick to `wake`, keeping the sooner; true when the row despawned.
-    pub(crate) fn end(&mut self, wake: &mut Tick) -> bool {
-        *wake = (*wake).min(std::mem::replace(&mut self.wake, NEVER));
+    pub(crate) fn end(&mut self, due: &mut Tick) -> Fate {
+        *due = (*due).min(std::mem::replace(&mut self.wake, NEVER));
         if let Some(order) = self.order.take()
             && self.me.is_player()
         {
             self.orders.push((self.me.n, self.phase, order));
         }
-        std::mem::take(&mut self.gone)
+        if std::mem::take(&mut self.gone) {
+            Fate::Leaves
+        } else {
+            Fate::Stays
+        }
     }
 
     /// Sends `msg` to the row `to`, which applies it in this tick's next round of delivery, or in
@@ -70,10 +78,10 @@ impl<G: Game> Out<G> {
     }
 
     /// Adds `row` to its kind at the tick's end, numbered after every row there is; it steps in
-    /// the next tick. Rows spawned in one tick are numbered in the order of (who spawned them, the
-    /// order it did), whatever thread ran it.
+    /// the next tick. The rows spawned in a tick are numbered by who spawned them and then in the
+    /// order each did, whatever thread ran it.
     pub fn spawn<K: Kind<G>>(&mut self, row: K) {
-        self.spawns.push(Spawned {
+        self.spawns.push(PendingSpawn {
             phase: self.phase,
             from: self.me,
             seq: self.spawned,

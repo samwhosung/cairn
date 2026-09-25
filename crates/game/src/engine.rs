@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use crate::hosted::{BodyOrder, Delivery, Hosted, Took, Turn};
-use crate::out::{ACT, Out, ROUND, Spawned};
+use crate::hosted::{BodyOrder, Delivery, Hosted, Stages, Took, Turn};
+use crate::out::{ACT, Out, PendingSpawn, ROUND};
 use crate::record::Record;
 use crate::space::Space;
 use crate::table::{Pair, Rows};
@@ -63,13 +63,12 @@ pub struct Engine<G: Game> {
     shown: Vec<(Vec<u8>, Tick)>,
     orders: Vec<(u32, BodyOrder)>,
     counts: BTreeMap<&'static str, i64>,
-    took: [Took; 3],
+    took: Stages,
 }
 
-/// Where a tick's outs go.
 struct Gathered<G: Game> {
     mail: Vec<(Id, Letter<G::Msg>)>,
-    spawns: Vec<Spawned>,
+    spawns: Vec<PendingSpawn>,
     orders: Vec<(u32, u8, BodyOrder)>,
 }
 
@@ -125,7 +124,7 @@ impl<G: Game> Engine<G> {
             shown: Vec::new(),
             orders: Vec::new(),
             counts: G::COUNTS.iter().map(|&what| (what, 0)).collect(),
-            took: [Took::default(); 3],
+            took: Stages::default(),
         }
     }
 
@@ -155,14 +154,14 @@ impl<G: Game> Engine<G> {
         let id = Id::player(n);
         let row = G::join(id, &self.world());
         self.next_n[0] = n + 1;
-        let (sent, saved) = self.lives[0].push(self.prevs[0].as_mut(), n, Box::new(row), self.tick);
+        let encoded = self.lives[0].push(self.prevs[0].as_mut(), n, Box::new(row), self.tick);
         self.record.came.push(id);
-        self.record.shown.push((id, sent));
-        self.record.saved.push((id, Some(saved)));
+        self.record.shown.push((id, encoded.sent));
+        self.record.saved.push((id, Some(encoded.saved)));
     }
 
-    fn spawn(&mut self, mut spawns: Vec<Spawned>) {
-        spawns.sort_by_key(|s| (s.phase, s.from, s.seq));
+    fn spawn(&mut self, mut spawns: Vec<PendingSpawn>) {
+        spawns.sort_by_key(|s| (s.from, s.phase, s.seq));
         for s in spawns {
             let Some(k) = self
                 .kinds
@@ -174,12 +173,32 @@ impl<G: Game> Engine<G> {
             };
             let n = self.next_n[k];
             self.next_n[k] += 1;
-            let (sent, saved) = self.lives[k].push(self.prevs[k].as_mut(), n, s.row, self.tick + 1);
+            let encoded = self.lives[k].push(self.prevs[k].as_mut(), n, s.row, self.tick + 1);
             let id = Id { kind: k as u16, n };
             self.record.came.push(id);
-            self.record.shown.push((id, sent));
-            self.record.saved.push((id, Some(saved)));
+            self.record.shown.push((id, encoded.sent));
+            self.record.saved.push((id, Some(encoded.saved)));
         }
+    }
+
+    fn commit(&mut self, spawns: Vec<PendingSpawn>, clock: &Clock) {
+        for (k, live) in self.lives.iter_mut().enumerate() {
+            live.commit(self.prevs[k].as_mut(), k as u16, &mut self.record, clock);
+        }
+        clock.time(|| {
+            self.spawn(spawns);
+            self.record.close();
+            for (id, bytes) in &self.record.shown {
+                if !id.is_player() {
+                    continue;
+                }
+                let n = id.n as usize;
+                if self.shown.len() <= n {
+                    self.shown.resize(n + 1, (Vec::new(), 0));
+                }
+                self.shown[n] = (bytes.clone(), self.tick);
+            }
+        });
     }
 
     fn settle_orders(&mut self, mut orders: Vec<(u32, u8, BodyOrder)>) {
@@ -197,8 +216,8 @@ impl<G: Game> Engine<G> {
     }
 }
 
-/// Reverses the letters of each run of one target in `to`, which is sorted.
-fn reverse_each_run<T: PartialEq, L>(to: &[T], letters: &mut [L]) {
+fn reverse_each_run<T: PartialOrd, L>(to: &[T], letters: &mut [L]) {
+    debug_assert!(to.is_sorted());
     let mut i = 0;
     while i < to.len() {
         let end = i + to[i..].partition_point(|t| *t == to[i]);
@@ -283,35 +302,18 @@ impl<G: Game> Hosted for Engine<G> {
         }
         self.carry = std::mem::take(&mut got.mail);
         walls[2] = Instant::now();
-        for (k, live) in self.lives.iter_mut().enumerate() {
-            live.finish(
-                self.prevs[k].as_mut(),
-                k as u16,
-                &mut self.record,
-                &clocks[2],
-            );
-        }
-        clocks[2].time(|| {
-            self.spawn(std::mem::take(&mut got.spawns));
-            self.record.close();
-            for (id, bytes) in &self.record.shown {
-                if !id.is_player() {
-                    continue;
-                }
-                let n = id.n as usize;
-                if self.shown.len() <= n {
-                    self.shown.resize(n + 1, (Vec::new(), 0));
-                }
-                self.shown[n] = (bytes.clone(), self.tick);
-            }
-        });
+        self.commit(std::mem::take(&mut got.spawns), &clocks[2]);
         self.settle_orders(got.orders);
         walls[3] = Instant::now();
-        let mut stage = 0;
-        self.took = clocks.map(|c| {
-            stage += 1;
-            c.took(walls[stage].duration_since(walls[stage - 1]).as_nanos() as u64)
-        });
+        let took = |stage: usize| {
+            let wall = walls[stage + 1].duration_since(walls[stage]);
+            clocks[stage].took(wall.as_nanos() as u64)
+        };
+        self.took = Stages {
+            rules: took(0),
+            deliver: took(1),
+            record: took(2),
+        };
     }
 
     fn orders(&self) -> &[(u32, BodyOrder)] {
@@ -347,7 +349,7 @@ impl<G: Game> Hosted for Engine<G> {
         &self.counts
     }
 
-    fn took(&self) -> [Took; 3] {
+    fn took(&self) -> Stages {
         self.took
     }
 }

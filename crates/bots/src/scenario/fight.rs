@@ -16,14 +16,12 @@ struct Seen {
     rooted: bool,
 }
 
-/// The entities in a bot's view as its batches have told it by the time they reach it.
 #[derive(Default)]
 pub struct Sight {
     by_slot: HashMap<u16, Seen>,
 }
 
 impl Sight {
-    /// Takes in one record, its positions read against `here`, where the bot stands.
     pub fn see(&mut self, record: &Record<'_>, here: [f32; 3]) {
         match *record {
             Record::Appear {
@@ -54,8 +52,6 @@ impl Sight {
         }
     }
 
-    /// The nearest to `at` of the entities not rooted, and how far it stands; the lowest id of a
-    /// tie.
     fn nearest_free(&self, at: [f32; 2]) -> Option<(f32, [f32; 3])> {
         self.by_slot
             .values()
@@ -71,13 +67,16 @@ impl Sight {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Aim {
-    /// Face this way, run this far along it, then stand.
     Toward { facing: f32, run_yd: f32 },
-    /// Stand: there is no one to fight.
     Still,
 }
 
-/// When a fighter next picks its way, and when it next swings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Choice {
+    pub aim: Option<Aim>,
+    pub swing: bool,
+}
+
 #[derive(Default)]
 pub struct Fighter {
     aim_at: u32,
@@ -85,8 +84,7 @@ pub struct Fighter {
 }
 
 impl Fighter {
-    /// At `t`, standing at `me`: a new aim when one is due, and whether to swing.
-    pub fn frame(&mut self, t: u32, me: [f32; 2], sight: &Sight) -> (Option<Aim>, bool) {
+    pub fn frame(&mut self, t: u32, me: [f32; 2], sight: &Sight) -> Choice {
         let target = sight.nearest_free(me);
         let aim = (t >= self.aim_at).then(|| {
             self.aim_at = t + AIM_EVERY_MS;
@@ -99,7 +97,7 @@ impl Fighter {
         if swing {
             self.swing_at = t + SWING_EVERY_MS;
         }
-        (aim, swing)
+        Choice { aim, swing }
     }
 }
 
@@ -139,23 +137,20 @@ mod tests {
             facing: 0.0,
             run_yd: 8.0,
         };
-        assert_eq!(fighter.frame(0, [0.0, 0.0], &sight), (Some(toward), false));
-        assert_eq!(
-            fighter.frame(100, [0.0, 0.0], &sight).0,
-            None,
-            "it aims four times a second"
-        );
-        assert!(fighter.frame(300, [7.0, 0.0], &sight).1);
-        assert!(
-            !fighter.frame(400, [7.0, 0.0], &sight).1,
-            "and swings twice a second at most"
-        );
+        let first = Choice {
+            aim: Some(toward),
+            swing: false,
+        };
+        assert_eq!(fighter.frame(0, [0.0, 0.0], &sight), first);
+        let aims = fighter.frame(100, [0.0, 0.0], &sight).aim;
+        assert_eq!(aims, None, "it aims four times a second");
+        assert!(fighter.frame(300, [7.0, 0.0], &sight).swing);
+        let again = fighter.frame(400, [7.0, 0.0], &sight).swing;
+        assert!(!again, "and swings twice a second at most");
         sight.see(&Record::Vanish { slot: 0 }, [0.0; 3]);
-        let away = fighter.frame(600, [0.0, 0.0], &sight).0;
+        let away = fighter.frame(600, [0.0, 0.0], &sight).aim;
         assert!(matches!(away, Some(Aim::Toward { run_yd, .. }) if (run_yd - 10.0).abs() < 1e-4));
-        assert_eq!(
-            Fighter::default().frame(0, [0.0; 2], &Sight::default()).0,
-            Some(Aim::Still)
-        );
+        let alone = Fighter::default().frame(0, [0.0; 2], &Sight::default());
+        assert_eq!(alone.aim, Some(Aim::Still));
     }
 }

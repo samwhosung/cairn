@@ -1,6 +1,3 @@
-//! A small game played through the rule API alone: players that kindle, and sparks they spawn
-//! that warm a player each tick until they burn out.
-
 use std::collections::BTreeMap;
 
 use game::{
@@ -152,12 +149,11 @@ impl Kind<Embers> for Spark {
 const PLAYERS: u32 = 40;
 
 fn engine(delivery: Delivery) -> Engine<Embers> {
-    let lines = game::lines(Embers::KNOBS, "embers").expect("lines");
-    let knobs = <Knobs as game::Knobs>::read(&lines, "embers", &[]).expect("knobs");
+    let own = game::KnobsFile::parse(Embers::KNOBS, "embers").expect("its knobs");
+    let knobs = <Knobs as game::Knobs>::read(&own, &[]).expect("knobs");
     Engine::new(knobs, 11, 50, delivery)
 }
 
-/// Runs `ticks` ticks on `threads` threads and hands each tick's engine to `each`.
 fn run(threads: usize, delivery: Delivery, ticks: u32, mut each: impl FnMut(&Engine<Embers>)) {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
@@ -256,14 +252,14 @@ fn a_row_with_nothing_due_and_no_letter_is_not_stepped() {
 
 #[test]
 fn a_game_loads_on_its_own_knobs_and_an_overlay_names_its_faults() {
-    let over = game::lines("life = 9\n", "over.knobs").expect("lines");
-    let loaded = game::load::<Embers>(None, &over, 1).expect("loads");
+    let over = game::KnobsFile::parse("life = 9\n", "over.knobs").expect("lines");
+    let loaded = game::load::<Embers>(None, &over.lines, 1).expect("loads");
     assert_eq!(
         (loaded.name(), loaded.counts()),
         ("embers", &["ember steps"][..])
     );
-    let bad = game::lines("\nheat = 9\n", "bad.knobs").expect("lines");
-    let fault = game::load::<Embers>(None, &bad, 1).expect_err("an unknown key");
+    let bad = game::KnobsFile::parse("\nheat = 9\n", "bad.knobs").expect("lines");
+    let fault = game::load::<Embers>(None, &bad.lines, 1).expect_err("an unknown key");
     assert_eq!(fault, "bad.knobs:2: `heat` is not a knob of this game");
     let started = loaded.start(50, Delivery::Canonical);
     assert_eq!(started.name(), "embers");
@@ -280,7 +276,7 @@ fn the_record_carries_every_change_of_what_is_sent_and_saved() {
         for (id, bytes) in &record.shown {
             shown.insert(*id, bytes.clone());
         }
-        for id in &record.gone {
+        for id in &record.despawned {
             shown.remove(id);
         }
         assert_eq!(

@@ -39,7 +39,6 @@ pub struct Mover {
     lies: Vec<(Lie, Told)>,
     claims: Claims,
     pub ack: u32,
-    /// Held where it stands by the game, as its claims say.
     pub rooted: bool,
 }
 
@@ -89,7 +88,6 @@ impl Mover {
         self.cadence.report_now();
     }
 
-    /// Stands the body on footing at height `z`, where a new track begins, out of any arc.
     pub fn land(&mut self, z: f32) {
         self.air = None;
         self.jumped_leg = None;

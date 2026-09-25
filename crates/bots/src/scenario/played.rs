@@ -6,8 +6,6 @@ use super::client::Client;
 const CHAIN_START: u64 = 0xcbf2_9ce4_8422_2325;
 const CHAIN_PRIME: u64 = 0x0100_0000_01b3;
 
-/// What a game counted in a scenario, the world's hash of every tick chained, and what the
-/// checks of its record found after each tick.
 #[derive(Clone, Debug)]
 pub struct Played {
     pub name: &'static str,
@@ -32,8 +30,6 @@ impl Played {
         }
     }
 
-    /// Checks tick `tick`, just run to world hash `hash`: the saves against a full scan of the
-    /// game's rows, and each bot's model of what it was sent against what the server shows it.
     pub fn check(&mut self, tick: u32, hash: u64, stepper: &Stepper, clients: &[Client]) {
         self.hash_chain = (self.hash_chain ^ hash).wrapping_mul(CHAIN_PRIME);
         if let Some(what) = stepper.saves_differ() {

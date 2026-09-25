@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use game::{Hosted, Saves, Spot, Turn};
+use game::{Hosted, Saves, Spot, Stages, Turn};
 use protocol::{VERSION, Welcome};
 use rayon::ThreadPool;
 use rayon::prelude::*;
@@ -65,7 +65,6 @@ impl Sim {
         }
     }
 
-    /// Runs `game`'s rules in every tick from the first.
     pub fn with_game(mut self, game: Option<Box<dyn Hosted>>) -> Self {
         self.game = game;
         self
@@ -87,12 +86,10 @@ impl Sim {
         self.game.as_deref()
     }
 
-    /// What the game's record has saved, standing in for saving until it is built.
     pub fn saves(&self) -> &Saves {
         &self.saves
     }
 
-    /// What observer `id` has in view: each entity, by the slot its client knows it by.
     pub fn in_view(&self, id: u32) -> Option<Vec<(u16, u32)>> {
         self.observers
             .iter()
@@ -193,7 +190,11 @@ impl Sim {
                 world.order(game.orders());
                 saves.take(game.record());
             });
-            let [rules, deliver, record] = game.took();
+            let Stages {
+                rules,
+                deliver,
+                record,
+            } = game.took();
             st.wall_ns[RULES] = playing.saturating_sub(deliver.wall_ns + record.wall_ns);
             st.wall_ns[DELIVER] = deliver.wall_ns;
             st.wall_ns[RECORD] = record.wall_ns + lap_ns(&mut clock);

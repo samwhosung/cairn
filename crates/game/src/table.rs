@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use rayon::prelude::*;
 
 use crate::engine::{Clock, NEVER};
-use crate::out::{Out, STEP};
+use crate::out::{Fate, Out, STEP};
 use crate::record::Record;
 use crate::{Bytes, Game, Id, Kind, Letter, Tick, World, canon};
 
@@ -41,15 +41,13 @@ impl<K> Table<K> {
     }
 }
 
-/// The same rows as this tick writes them, with the tick each is next due and what befell it.
 struct Live<K> {
     ns: Vec<u32>,
     rows: Vec<K>,
-    wake: Vec<Tick>,
+    due: Vec<Tick>,
     marks: Vec<u8>,
 }
 
-/// One kind's two tables, typed only inside.
 pub(crate) struct Pair<G: Game> {
     pub kind: TypeId,
     pub prev: Box<dyn Any + Send + Sync>,
@@ -67,18 +65,21 @@ impl<G: Game> Pair<G> {
             live: Box::new(Live::<K> {
                 ns: Vec::new(),
                 rows: Vec::new(),
-                wake: Vec::new(),
+                due: Vec::new(),
                 marks: Vec::new(),
             }),
         }
     }
 }
 
-/// What the engine does to one kind's rows in a tick, whatever the kind.
+pub(crate) struct Encoded {
+    pub sent: Vec<u8>,
+    pub saved: Vec<u8>,
+}
+
 pub(crate) trait Rows<G: Game>: Send + Sync {
     fn step(&mut self, kind: u16, w: &World<'_, G>, clock: &Clock) -> Vec<Out<G>>;
 
-    /// Hands each row its letters, `targets` naming each letter's row in ascending order.
     fn apply(
         &mut self,
         kind: u16,
@@ -89,19 +90,9 @@ pub(crate) trait Rows<G: Game>: Send + Sync {
         clock: &Clock,
     ) -> Vec<Out<G>>;
 
-    /// Adds `row`, numbered past every other and due at `wake`; returns its sent and saved fields,
-    /// encoded.
-    fn push(
-        &mut self,
-        prev: &mut dyn Any,
-        n: u32,
-        row: Box<dyn Any>,
-        wake: Tick,
-    ) -> (Vec<u8>, Vec<u8>);
+    fn push(&mut self, prev: &mut dyn Any, n: u32, row: Box<dyn Any>, due: Tick) -> Encoded;
 
-    /// Records what changed in each row touched this tick, makes last tick's table agree, and
-    /// drops the rows that despawned.
-    fn finish(&mut self, prev: &mut dyn Any, kind: u16, record: &mut Record, clock: &Clock);
+    fn commit(&mut self, prev: &mut dyn Any, kind: u16, record: &mut Record, clock: &Clock);
 
     fn hash(&self, kind: u16) -> u64;
 
@@ -112,7 +103,7 @@ pub(crate) trait Rows<G: Game>: Send + Sync {
 struct Changes {
     shown: Vec<(Id, Vec<u8>)>,
     saved: Vec<(Id, Option<Vec<u8>>)>,
-    gone: Vec<Id>,
+    despawned: Vec<Id>,
 }
 
 impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
@@ -121,26 +112,26 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
         let ns = &self.ns[..];
         self.rows
             .par_chunks_mut(ROWS_PER_TASK)
-            .zip(self.wake.par_chunks_mut(ROWS_PER_TASK))
+            .zip(self.due.par_chunks_mut(ROWS_PER_TASK))
             .zip(self.marks.par_chunks_mut(ROWS_PER_TASK))
             .enumerate()
-            .map(|(c, ((rows, wake), marks))| {
+            .map(|(c, ((rows, due), marks))| {
                 let mut out = Out::new(STEP);
-                if wake.iter().all(|&t| t > now) {
+                if due.iter().all(|&t| t > now) {
                     return out;
                 }
                 let ns = &ns[c * ROWS_PER_TASK..];
                 clock.time(|| {
                     for j in 0..rows.len() {
-                        if wake[j] > now {
+                        if due[j] > now {
                             continue;
                         }
                         let id = Id { kind, n: ns[j] };
-                        wake[j] = NEVER;
+                        due[j] = NEVER;
                         marks[j] |= TOUCHED;
                         out.begin(id);
                         K::step(id, &mut rows[j], w, &mut out);
-                        if out.end(&mut wake[j]) {
+                        if out.end(&mut due[j]) == Fate::Leaves {
                             marks[j] |= GONE;
                         }
                     }
@@ -159,13 +150,14 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
         w: &World<'_, G>,
         clock: &Clock,
     ) -> Vec<Out<G>> {
+        debug_assert!(targets.is_sorted());
         let ns = &self.ns[..];
         self.rows
             .par_chunks_mut(ROWS_PER_TASK)
-            .zip(self.wake.par_chunks_mut(ROWS_PER_TASK))
+            .zip(self.due.par_chunks_mut(ROWS_PER_TASK))
             .zip(self.marks.par_chunks_mut(ROWS_PER_TASK))
             .enumerate()
-            .map(|(c, ((rows, wake), marks))| {
+            .map(|(c, ((rows, due), marks))| {
                 let mut out = Out::new(phase);
                 let ns = &ns[c * ROWS_PER_TASK..c * ROWS_PER_TASK + rows.len()];
                 let (Some(&lo), Some(&hi)) = (ns.first(), ns.last()) else {
@@ -190,7 +182,7 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
                             marks[j] |= TOUCHED;
                             out.begin(id);
                             K::apply(id, &mut rows[j], &letters[i..end], w, &mut out);
-                            if out.end(&mut wake[j]) {
+                            if out.end(&mut due[j]) == Fate::Leaves {
                                 marks[j] |= GONE;
                             }
                         }
@@ -202,13 +194,7 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
             .collect()
     }
 
-    fn push(
-        &mut self,
-        prev: &mut dyn Any,
-        n: u32,
-        row: Box<dyn Any>,
-        wake: Tick,
-    ) -> (Vec<u8>, Vec<u8>) {
+    fn push(&mut self, prev: &mut dyn Any, n: u32, row: Box<dyn Any>, due: Tick) -> Encoded {
         let prev = own::<K>(prev);
         let Ok(row) = row.downcast::<K>() else {
             unreachable!("a row pushed to another kind's table")
@@ -218,13 +204,16 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
         prev.rows.push((*row).clone());
         self.ns.push(n);
         self.rows.push(*row);
-        self.wake.push(wake);
+        self.due.push(due);
         self.marks.push(0);
         let row = &self.rows[self.rows.len() - 1];
-        (row.sent().to_bytes(), row.saved().to_bytes())
+        Encoded {
+            sent: row.sent().to_bytes(),
+            saved: row.saved().to_bytes(),
+        }
     }
 
-    fn finish(&mut self, prev: &mut dyn Any, kind: u16, record: &mut Record, clock: &Clock) {
+    fn commit(&mut self, prev: &mut dyn Any, kind: u16, record: &mut Record, clock: &Clock) {
         let prev = own::<K>(prev);
         let ns = &self.ns[..];
         let parts: Vec<Changes> = prev
@@ -246,7 +235,7 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
                         }
                         let id = Id { kind, n: ns[j] };
                         if marks[j] & GONE != 0 {
-                            part.gone.push(id);
+                            part.despawned.push(id);
                             part.saved.push((id, None));
                             continue;
                         }
@@ -267,8 +256,8 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
             .collect();
         let mut gone = false;
         for part in parts {
-            gone |= !part.gone.is_empty();
-            record.gone.extend(part.gone);
+            gone |= !part.despawned.is_empty();
+            record.despawned.extend(part.despawned);
             record.shown.extend(part.shown);
             record.saved.extend(part.saved);
         }
@@ -278,7 +267,7 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
             keep_only(&mut prev.rows, &keep);
             keep_only(&mut self.ns, &keep);
             keep_only(&mut self.rows, &keep);
-            keep_only(&mut self.wake, &keep);
+            keep_only(&mut self.due, &keep);
             keep_only(&mut self.marks, &keep);
         }
     }
@@ -287,12 +276,12 @@ impl<G: Game, K: Kind<G>> Rows<G> for Live<K> {
         let ns = &self.ns[..];
         self.rows
             .par_chunks(ROWS_PER_TASK)
-            .zip(self.wake.par_chunks(ROWS_PER_TASK))
+            .zip(self.due.par_chunks(ROWS_PER_TASK))
             .enumerate()
-            .map(|(c, (rows, wake))| {
-                let rows = rows.iter().zip(wake).zip(&ns[c * ROWS_PER_TASK..]);
-                rows.fold(0u64, |h, ((row, wake), n)| {
-                    h.wrapping_add(canon::hash(&(kind, n, wake, row)))
+            .map(|(c, (rows, due))| {
+                let rows = rows.iter().zip(due).zip(&ns[c * ROWS_PER_TASK..]);
+                rows.fold(0u64, |h, ((row, due), n)| {
+                    h.wrapping_add(canon::hash(&(kind, n, due, row)))
                 })
             })
             .reduce(|| 0, u64::wrapping_add)

@@ -1,6 +1,7 @@
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
-use game::{Line, Loaded};
+use game::{KnobsFile, Line, Loaded};
 use protocol::flags;
 use server::{Limits, View};
 
@@ -31,7 +32,6 @@ pub enum Script {
     Wander,
     Line,
     Stand,
-    /// Runs at the nearest body that is not rooted and swings at it with the group's action.
     Fight,
 }
 
@@ -52,13 +52,9 @@ pub struct Group {
     pub clock_at_start_ms: u32,
     pub lie: Option<Lie>,
     pub control_of: Option<usize>,
-    /// The action a fighter swings with.
-    pub action: u32,
-    /// Whether a rooted body stands; one that does not walks on, and is corrected.
+    pub swing_action: u32,
     pub heeds_roots: bool,
-    /// The one game state this bot's model of what it was sent leaves out, counting from 1: a
-    /// control for the check of that model.
-    pub drop_shown: Option<u64>,
+    pub drop_shown: Option<NonZeroU64>,
 }
 
 /// The top of the verdict an expectation can read, so no group may take one of these names.
@@ -104,7 +100,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
     let (mut view_at, mut limits_at) = (None, None);
-    let mut game = Chosen::default();
+    let mut game = GameSettings::default();
     for s in &text.settings {
         let fault = |what: String| Bad::at(&s.at, what);
         match s.key.as_str() {
@@ -199,24 +195,23 @@ struct Draft {
     speed: Option<f32>,
 }
 
-/// The game a scenario names, its knobs file and overlay, and the knobs it sets itself.
 #[derive(Default)]
-struct Chosen<'a> {
+struct GameSettings<'a> {
     settings: Vec<&'a Setting>,
 }
 
-impl Chosen<'_> {
+impl GameSettings<'_> {
     fn load(&self, seed: u64) -> Result<Option<Loaded>, Bad> {
-        let file = |s: &Setting| {
+        let file = |s: &Setting| -> Result<KnobsFile, String> {
             let path: PathBuf = s.at.file.parent().unwrap_or(Path::new(".")).join(&s.value);
-            catalog::read(&path).map(|lines| (lines, path.display().to_string()))
+            catalog::read(&path)
         };
         let (mut name, mut base, mut over, mut own) = (None, None, Vec::new(), Vec::new());
         for &s in &self.settings {
             match s.key.as_str() {
                 "game" => name = Some(s),
                 "game.knobs" => base = Some(file(s).map_err(|e| Bad::at(&s.at, e))?),
-                "game.overlay" => over = file(s).map_err(|e| Bad::at(&s.at, e))?.0,
+                "game.overlay" => over = file(s).map_err(|e| Bad::at(&s.at, e))?.lines,
                 key => own.push(Line {
                     key: key.trim_start_matches("knobs.").to_owned(),
                     value: s.value.clone(),
@@ -238,10 +233,7 @@ impl Chosen<'_> {
             return Err(Bad::at(&name.at, what));
         }
         over.extend(own);
-        let base = base
-            .as_ref()
-            .map(|(lines, file)| (&lines[..], file.as_str()));
-        catalog::load(&name.value, base, &over, seed)
+        catalog::load(&name.value, base.as_ref(), &over, seed)
             .map(Some)
             .map_err(|what| Bad { at: None, what })
     }
@@ -413,7 +405,7 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
             };
         }
         "clock_at_start_ms" => g.clock_at_start_ms = whole(v)?,
-        "action" => g.action = whole(v)?,
+        "swing_action" => g.swing_action = whole(v)?,
         "heeds_roots" => g.heeds_roots = yes(v)?,
         "drop_shown" => g.drop_shown = Some(whole(v)?),
         field => match field.strip_prefix("lie.") {
@@ -441,7 +433,7 @@ fn group(name: &str) -> Group {
         clock_at_start_ms: 0,
         lie: None,
         control_of: None,
-        action: 1,
+        swing_action: 1,
         heeds_roots: true,
         drop_shown: None,
     }

@@ -82,7 +82,6 @@ pub fn liar_of(spec: &Spec, groups: &[usize]) -> Vec<Option<usize>> {
         .collect()
 }
 
-/// Where the scenario's server applies inputs and letters out of order, as a control.
 #[derive(Clone, Copy, Debug)]
 pub struct Orders {
     pub inputs: InputOrder,
@@ -159,7 +158,7 @@ pub fn run(
             &liar_of,
             &mut accepted,
         )?;
-        for id in stepper.placed() {
+        for id in stepper.placed_last_tick() {
             let acc = &mut accounts[id as usize];
             acc.awaited_ack = acc.awaited_ack.wrapping_add(1);
         }
@@ -352,7 +351,7 @@ fn brief(g: &Group, group: usize, spawn: Spawn, seed: u64, run_ms: u32) -> Brief
         clock_at_start_ms: g.clock_at_start_ms,
         seed,
         route_until_ms,
-        action: g.action,
+        swing_action: g.swing_action,
         heeds_roots: g.heeds_roots,
         drop_shown: g.drop_shown,
     }

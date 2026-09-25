@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
-use protocol::{LEN_BYTES, Record, ServerMessage};
+use std::num::NonZeroU64;
 
-/// What a bot was sent of the game's state of each entity in its view, frame by frame as the
-/// server sends them, before the network's delay.
+use protocol::{LEN_BYTES, Record, ServerMessage};
+use server::InView;
+
 #[derive(Default)]
 pub struct Shown {
     by_slot: BTreeMap<u16, (u32, Option<Vec<u8>>)>,
     records: u64,
-    drop: Option<u64>,
+    drop: Option<NonZeroU64>,
 }
 
 impl Shown {
-    /// A model that leaves out the `drop`th state it is sent: a control for the check.
-    pub fn dropping(drop: Option<u64>) -> Self {
+    pub fn dropping(drop: Option<NonZeroU64>) -> Self {
         Self {
             drop,
             ..Self::default()
@@ -34,7 +34,7 @@ impl Shown {
                 }
                 Record::Game { slot, state } => {
                     self.records += 1;
-                    if self.drop == Some(self.records) {
+                    if self.drop.is_some_and(|d| d.get() == self.records) {
                         continue;
                     }
                     if let Some(held) = self.by_slot.get_mut(&slot) {
@@ -46,11 +46,9 @@ impl Shown {
         }
     }
 
-    /// The first way this differs from `view`, the server's: each entity in view by slot, and the
-    /// state it now shows.
-    pub fn differs(&self, view: &[(u16, u32, &[u8])]) -> Option<String> {
+    pub fn differs(&self, view: &[InView<'_>]) -> Option<String> {
         let mut ours = self.by_slot.iter();
-        for &(slot, id, state) in view {
+        for &InView { slot, id, state } in view {
             match ours.next() {
                 Some((&s, (i, held)))
                     if s == slot && *i == id && held.as_deref() == Some(state) => {}

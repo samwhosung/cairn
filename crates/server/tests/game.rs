@@ -1,6 +1,3 @@
-//! A game in the server's tick: its actions, its roots and placements, and what observers are
-//! shown of it, played through the in-process stepper.
-
 use std::collections::HashMap;
 
 use game::{Delivery, Game, Id, Kind, Letter, Out, World};
@@ -9,7 +6,9 @@ use protocol::{
 };
 use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 
-/// Action 1 roots a runner where it stands, and action 2 puts it back at its spawn, free.
+const ROOT: u32 = 1;
+const HOME: u32 = 2;
+
 struct Tag;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,8 +41,8 @@ impl Game for Tag {
 
     fn action(number: u32) -> Option<Called> {
         match number {
-            1 => Some(Called::Root),
-            2 => Some(Called::Home),
+            ROOT => Some(Called::Root),
+            HOME => Some(Called::Home),
             _ => None,
         }
     }
@@ -189,10 +188,10 @@ fn a_game_roots_and_places_a_body_and_its_observers_are_shown_its_state() {
             input(1, 0, Input::Join(hello("B"))),
         ],
         vec![claim(1, 1, 0, 13.0, 0.0)],
-        vec![input(1, 2, Input::Action(1))],
+        vec![input(1, 2, Input::Action(ROOT))],
         vec![claim(1, 3, 0, 16.0, 0.0), claim(1, 4, 1, 16.0, 0.0)],
         vec![claim(1, 5, 2, 13.0, 1.0)],
-        vec![input(1, 6, Input::Action(2))],
+        vec![input(1, 6, Input::Action(HOME))],
         vec![claim(1, 7, 3, 11.0, 0.0)],
     ];
     let mut seen: Vec<(Vec<Got>, Vec<Got>)> = Vec::new();

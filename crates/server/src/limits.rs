@@ -97,8 +97,6 @@ impl Limits {
         }
     }
 
-    /// A body the game roots may turn and fall, but its claims may stand no further than the
-    /// slack from where it was rooted.
     pub fn judge(&self, body: &Body, claim: &Claim, received_ms: u32) -> Verdict {
         if claim.ack != body.correction_seq {
             return Verdict::Stale;
@@ -114,10 +112,7 @@ impl Limits {
         if self.off_the_clock(body, m, received_ms) {
             return Verdict::Refuse(Why::Clock);
         }
-        if body
-            .rooted_at
-            .is_some_and(|at| (m.pos[0] - at[0]).hypot(m.pos[1] - at[1]) > self.slack)
-        {
+        if self.off_the_root(body, m) {
             return Verdict::Refuse(Why::Speed);
         }
         let launched = m.flags & flags::FALLING != 0 && last.flags & flags::FALLING == 0;
@@ -166,6 +161,13 @@ impl Limits {
             return Verdict::Refuse(Why::Clock);
         }
         Verdict::Accept
+    }
+
+    fn off_the_root(&self, body: &Body, m: &Movement) -> bool {
+        body.rooted_at.is_some_and(|at| {
+            let (dx, dy) = (m.pos[0] - at[0], m.pos[1] - at[1]);
+            (dx * dx + dy * dy).sqrt() > self.slack
+        })
     }
 
     fn off_the_clock(&self, body: &Body, m: &Movement, received_ms: u32) -> bool {

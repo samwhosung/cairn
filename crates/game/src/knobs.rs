@@ -8,8 +8,25 @@ pub struct Line {
     pub at: String,
 }
 
-/// The lines of a knobs file's text, `#` starting a comment; a key set twice is an error.
-pub fn lines(text: &str, file: &str) -> Result<Vec<Line>, String> {
+/// A knobs file: its name, as its faults give it, and its lines.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KnobsFile {
+    pub name: String,
+    pub lines: Vec<Line>,
+}
+
+impl KnobsFile {
+    /// `text` read as a knobs file called `name`, `#` starting a comment; a key set twice is an
+    /// error.
+    pub fn parse(text: &str, name: &str) -> Result<Self, String> {
+        Ok(Self {
+            name: name.to_owned(),
+            lines: lines(text, name)?,
+        })
+    }
+}
+
+fn lines(text: &str, file: &str) -> Result<Vec<Line>, String> {
     let mut out: Vec<Line> = Vec::new();
     for (i, raw) in text.lines().enumerate() {
         let at = format!("{file}:{}", i + 1);
@@ -39,7 +56,7 @@ pub fn lines(text: &str, file: &str) -> Result<Vec<Line>, String> {
 /// A game's knobs, as [`knobs!`](crate::knobs) declares them.
 pub trait Knobs: Clone + Debug + Send + Sync + 'static {
     /// The knobs `base` sets, which must be every one, with `over` laid on them in order.
-    fn read(base: &[Line], base_file: &str, over: &[Line]) -> Result<Self, String>;
+    fn read(base: &KnobsFile, over: &[Line]) -> Result<Self, String>;
 }
 
 /// A value a knob may hold.
@@ -106,12 +123,11 @@ macro_rules! knobs {
 
         impl $crate::Knobs for $name {
             fn read(
-                base: &[$crate::Line],
-                base_file: &str,
+                base: &$crate::KnobsFile,
                 over: &[$crate::Line],
             ) -> ::std::result::Result<Self, ::std::string::String> {
                 $(let mut $field: ::std::option::Option<$ty> = ::std::option::Option::None;)*
-                for (lines, is_base) in [(base, true), (over, false)] {
+                for (lines, is_base) in [(&base.lines[..], true), (over, false)] {
                     for line in lines {
                         match line.key.as_str() {
                             $(::std::stringify!($field) => {
@@ -132,7 +148,8 @@ macro_rules! knobs {
                     if is_base {
                         $(if $field.is_none() {
                             return ::std::result::Result::Err(::std::format!(
-                                "{base_file}: sets no `{}`",
+                                "{}: sets no `{}`",
+                                base.name,
                                 ::std::stringify!($field)
                             ));
                         })*
@@ -159,9 +176,9 @@ mod tests {
     }
 
     fn read(base: &str, over: &str) -> Result<Test, String> {
-        let base = lines(base, "base.knobs")?;
-        let over = lines(over, "over.knobs")?;
-        Test::read(&base, "base.knobs", &over)
+        let base = KnobsFile::parse(base, "base.knobs")?;
+        let over = KnobsFile::parse(over, "over.knobs")?;
+        Test::read(&base, &over.lines)
     }
 
     #[test]

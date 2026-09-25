@@ -114,13 +114,11 @@ pub struct Args {
 pub struct Joining {
     pub how: Join,
     pub name: String,
-    pub game: Option<Chosen>,
+    pub game: Option<GameChoice>,
 }
 
-/// A game to run on the window's own server: its name, a knobs file in place of its own, and
-/// one laid on them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Chosen {
+pub struct GameChoice {
     pub name: String,
     pub knobs: Option<PathBuf>,
     pub overlay: Option<PathBuf>,
@@ -322,7 +320,7 @@ fn join(
         Some(_) if matches!(how, Join::Connect(_)) => {
             return Err("--game runs on the window's own server: alone or --host".into());
         }
-        Some(name) => Some(Chosen {
+        Some(name) => Some(GameChoice {
             name,
             knobs: given.remove("knobs").map(PathBuf::from),
             overlay: given.remove("overlay").map(PathBuf::from),
@@ -646,7 +644,7 @@ mod tests {
         assert_eq!(game(""), None);
         assert_eq!(
             game("--host --game melee --overlay a.knobs"),
-            Some(Chosen {
+            Some(GameChoice {
                 name: "melee".into(),
                 knobs: None,
                 overlay: Some(PathBuf::from("a.knobs")),

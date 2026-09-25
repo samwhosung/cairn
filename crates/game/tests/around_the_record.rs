@@ -1,6 +1,3 @@
-//! A rule that credits a kill straight into the killer's row, around the record, does not compile;
-//! the same rule crediting its own row does. Each is built as a crate of its own on this one.
-
 use std::path::Path;
 use std::process::{Command, Output};
 

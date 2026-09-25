@@ -1,8 +1,8 @@
-//! The rule API a game on the server is written on: kinds of rows in typed tables, rules that read last tick's world and write only their own row, messages, timers, spawning and knobs, and the tick that runs them.
+//! The rule API a game on the server is written on: kinds of rows in typed tables, rules that see the world as the last tick left it and change only the row they run for, letters between rows, timers, spawning and knobs, and the tick that runs them.
 //!
-//! Each target applies its letters sorted by (target, sender, message), in up to two rounds a
-//! tick, and every roll hashes the seed, the tick, the row and a salt, so the world comes out the
-//! same on any number of threads.
+//! Letters reach their rows sorted by target, sender and message, at most twice a tick, and a roll
+//! depends only on the seed, the tick, the row and a salt, so the world comes out the same on any
+//! number of threads.
 
 mod bytes;
 mod canon;
@@ -21,15 +21,14 @@ use std::hash::Hash;
 
 pub use bytes::Bytes;
 pub use engine::Engine;
-pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Took, Turn, load};
-pub use knobs::{Knob, Knobs, Line, lines};
+pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Stages, Took, Turn, load};
+pub use knobs::{Knob, Knobs, KnobsFile, Line};
 pub use out::Out;
 pub use record::{Record, Saves};
 pub use space::Spot;
 pub use table::Table;
 pub use world::World;
 
-/// A tick of the server's clock.
 pub type Tick = u32;
 
 /// A row's name: its kind, counted in the order the game declares them with players as kind 0,

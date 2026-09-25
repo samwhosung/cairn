@@ -189,7 +189,6 @@ impl Observer {
         }
     }
 
-    /// Each entity in view, by the slot its client knows it by.
     pub fn in_view(&self) -> Vec<(u16, u32)> {
         self.seen.iter().map(|e| (e.slot, e.id)).collect()
     }
@@ -362,7 +361,7 @@ impl Pass<'_> {
                 s.kept_at[e.id as usize] = r;
                 let mut e = e;
                 if self.refresh_or_let_go(&mut e) {
-                    self.show(e.id, e.slot, false);
+                    self.write_game_state(e.id, e.slot, false);
                     s.kept.push(e);
                 }
             } else {
@@ -407,11 +406,10 @@ impl Pass<'_> {
         );
         self.built.shared_bytes += write_appear(self.out, slot, intro, relay) as u64;
         self.built.appeared += 1;
-        self.show(id, slot, true);
+        self.write_game_state(id, slot, true);
     }
 
-    /// The game's state of entity `id`, on its appearing and on each change after.
-    fn show(&mut self, id: u32, slot: u16, appearing: bool) {
+    fn write_game_state(&mut self, id: u32, slot: u16, appearing: bool) {
         let Some((state, changed_at)) = self.game.and_then(|g| g.shown(id)) else {
             return;
         };
@@ -433,7 +431,7 @@ impl Pass<'_> {
         }
         let kept = self.refresh_or_let_go(e);
         if kept {
-            self.show(e.id, e.slot, false);
+            self.write_game_state(e.id, e.slot, false);
         }
         kept
     }

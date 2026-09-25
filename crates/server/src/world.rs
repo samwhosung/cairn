@@ -31,7 +31,6 @@ pub enum Input {
     HostJoin(Hello),
     Claim(Claim),
     Teleport(Claim),
-    /// An action of the game the server runs, by its number.
     Action(u32),
     Leave,
 }
@@ -59,7 +58,6 @@ pub struct Body {
     pub flags_changed_at: u32,
     pub refused: u32,
     pub stale: u32,
-    /// Where on the ground the game holds the body; `None` while it is free.
     pub rooted_at: Option<[f32; 2]>,
     pub placed: Option<Placement>,
 }
@@ -185,7 +183,6 @@ impl World {
         &self.next
     }
 
-    /// The bodies as last tick left them.
     pub fn before(&self) -> &[Body] {
         &self.prev
     }
@@ -278,8 +275,6 @@ impl World {
         acts
     }
 
-    /// The game actions among `inputs` of players still present, by player and then in the order
-    /// each sent them.
     pub fn actions(&self, inputs: &[Stamped]) -> Vec<(u32, u32)> {
         let mut actions: Vec<(u32, u32)> = inputs
             .iter()
@@ -293,8 +288,6 @@ impl World {
         actions
     }
 
-    /// Puts and roots bodies as the game orders. Each order is a placement the body's client
-    /// takes before its claims count again.
     pub fn order(&mut self, orders: &[(u32, BodyOrder)]) {
         let tick = self.tick;
         for &(id, order) in orders {

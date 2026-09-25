@@ -51,7 +51,6 @@ impl Hash for Spot {
     }
 }
 
-/// The players' bodies as last tick left them, and where each first stood.
 #[derive(Default)]
 pub struct Space {
     bodies: Vec<Option<Spot>>,
@@ -96,8 +95,6 @@ impl Space {
         self.spawns.get(n as usize).copied()
     }
 
-    /// Every present body within `r` of `at` on the ground, in the order of its cell and then its
-    /// number.
     pub fn near(&self, at: [f32; 3], r: f32, mut f: impl FnMut(u32, Spot)) {
         let (lo, hi) = (cell(at[0] - r, at[1] - r), cell(at[0] + r, at[1] + r));
         let centre = Spot {

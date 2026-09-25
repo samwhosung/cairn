@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{Engine, Game, Id, Knobs, Line, Record, Spot, Tick, lines};
+use crate::{Engine, Game, Id, Knobs, KnobsFile, Line, Record, Spot, Tick};
 
 /// The order each row applies a round's letters in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -42,6 +42,13 @@ pub struct Took {
     pub wall_ns: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stages {
+    pub rules: Took,
+    pub deliver: Took,
+    pub record: Took,
+}
+
 /// A game running inside the server, whatever the game.
 pub trait Hosted: Send + Sync {
     fn name(&self) -> &'static str;
@@ -64,8 +71,7 @@ pub trait Hosted: Send + Sync {
     /// What the rules counted, since the game started.
     fn counts(&self) -> &BTreeMap<&'static str, i64>;
 
-    /// The CPU the last tick's stages took: stepping, delivering, recording.
-    fn took(&self) -> [Took; 3];
+    fn took(&self) -> Stages;
 }
 
 type Start = dyn Fn(u32, Delivery) -> Box<dyn Hosted> + Send + Sync;
@@ -83,7 +89,6 @@ impl Loaded {
         self.name
     }
 
-    /// What its rules count.
     pub fn counts(&self) -> &'static [&'static str] {
         self.counts
     }
@@ -99,18 +104,13 @@ impl fmt::Debug for Loaded {
     }
 }
 
-/// Game `G` on `base`, a knobs file's lines and the file's name, or on its own knobs without one,
-/// with `over` laid on them.
-pub fn load<G: Game>(
-    base: Option<(&[Line], &str)>,
-    over: &[Line],
-    seed: u64,
-) -> Result<Loaded, String> {
-    let own_file = format!("{}'s own knobs", G::NAME);
-    let knobs = if let Some((base, file)) = base {
-        G::Knobs::read(base, file, over)?
+/// Game `G` on the knobs file `base`, or on its own without one, with `over` laid on them.
+pub fn load<G: Game>(base: Option<&KnobsFile>, over: &[Line], seed: u64) -> Result<Loaded, String> {
+    let knobs = if let Some(base) = base {
+        G::Knobs::read(base, over)?
     } else {
-        G::Knobs::read(&lines(G::KNOBS, &own_file)?, &own_file, over)?
+        let own = KnobsFile::parse(G::KNOBS, &format!("{}'s own knobs", G::NAME))?;
+        G::Knobs::read(&own, over)?
     };
     Ok(Loaded {
         name: G::NAME,

@@ -26,7 +26,7 @@ pub use protocol::Movement;
 pub use replicate::{PastReach, Tier, View};
 pub use serve::{Config, Window};
 pub use stats::{PHASES, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns};
-pub use stepper::{Link, Stepper};
+pub use stepper::{InView, Link, Stepper};
 pub use world::{Input, InputOrder, Refusal, Spawn, Stamped};
 
 use crate::log::LogReader;

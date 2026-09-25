@@ -1,6 +1,6 @@
 //! The player's own movement, claimed to the server as the client's cadence says, the teleports
-//! it asks for, the server's answers, a correction or a grant, with where the server holds the
-//! player until they come, and where the game puts it.
+//! it asks for, and the server's answers, a correction or a grant, with where the server holds the
+//! player until they come.
 
 use std::collections::VecDeque;
 use std::f32::consts::TAU;

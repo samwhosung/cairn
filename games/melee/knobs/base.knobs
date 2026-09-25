@@ -1,8 +1,9 @@
-# Melee. A variant is an overlay of the keys it changes, and an unknown key is an error.
+# Melee's knobs. A file laid over them may set any of them anew; a key melee does not have is
+# refused.
 
 health = 100          # a player's full health
 swing_ms = 2000       # after a swing, how long until the next may go
-reach = 5             # how near, in yards, a swing's target must stand...
+reach_yd = 5          # how near a swing's target must stand...
 arc_deg = 180         # ...and within how wide an arc about the swinger's facing
 damage_min = 10       # a hit's damage is rolled between these...
 damage_max = 20

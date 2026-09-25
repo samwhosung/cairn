@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroU64;
 
 use protocol::{
     Claim, ClientMessage, LEN_BYTES, Movement, Pos, Record, ServerMessage, Welcome, Wrapped,
@@ -29,9 +30,9 @@ pub struct Brief {
     pub clock_at_start_ms: u32,
     pub seed: u64,
     pub route_until_ms: u32,
-    pub action: u32,
+    pub swing_action: u32,
     pub heeds_roots: bool,
-    pub drop_shown: Option<u64>,
+    pub drop_shown: Option<NonZeroU64>,
 }
 
 pub struct Outgoing {
@@ -301,8 +302,7 @@ impl Client {
         }
     }
 
-    /// Takes in what the server sent it at `now`, to arrive after the network's lag, and models
-    /// the game's state it was sent at once.
+    /// Takes in what the server sent it at `now`, to arrive after the network's lag.
     pub fn receive(&mut self, now: u32) {
         while let Some(frame) = self.link.next_frame() {
             self.shown.take(&frame);
@@ -380,8 +380,6 @@ impl Client {
         }
     }
 
-    /// Takes a placement: a rooted body stands where it is put unless it does not heed roots, and
-    /// a freed one goes on with its script from where it is put.
     fn placed(&mut self, seq: u32, rooted: bool, movement: &Movement, t: u32, world: &World<'_>) {
         if rooted {
             self.tally.roots += 1;
@@ -396,7 +394,7 @@ impl Client {
         let track = if rooted {
             self.stand(&at, clock)
         } else {
-            self.plan(&at, clock, world)
+            self.route_from(&at, clock, world)
         };
         let heeds = self.brief.heeds_roots;
         let Some(body) = &mut self.body else {
@@ -420,8 +418,7 @@ impl Client {
         Track::line(at, &stand, start, self.brief.route_until_ms.max(start))
     }
 
-    /// The route its script takes it on from `at`, starting at `start` on its clock.
-    fn plan(&self, at: &Spawn, start: u32, world: &World<'_>) -> Track {
+    fn route_from(&self, at: &Spawn, start: u32, world: &World<'_>) -> Track {
         let b = &self.brief;
         let until = b.route_until_ms.max(start);
         match b.script {
@@ -510,7 +507,7 @@ impl Client {
             facing: w.spawn.facing,
         };
         let start = self.clock(t) + START_AFTER_WELCOME_MS;
-        let track = self.plan(&spawn, start, world);
+        let track = self.route_from(&spawn, start, world);
         let b = &self.brief;
         let mover = Mover::new(spawn.pos, spawn.facing, b.lies.clone(), b.claims);
         self.body = Some(Body { track, mover });
@@ -529,8 +526,8 @@ impl Client {
             && !body.mover.rooted
         {
             let spot = body.track.pose(clock).spot;
-            let (aim, swing) = self.fighter.frame(t, spot.xy, sight);
-            if let Some(aim) = aim {
+            let choice = self.fighter.frame(t, spot.xy, sight);
+            if let Some(aim) = choice.aim {
                 let (facing, run_yd) = match aim {
                     Aim::Toward { facing, run_yd } => (facing, run_yd),
                     Aim::Still => (spot.facing, 0.0),
@@ -547,9 +544,9 @@ impl Client {
                 let until = self.brief.route_until_ms.max(clock);
                 body.track = Track::line(&from, &pace, clock, until);
             }
-            if swing {
+            if choice.swing {
                 let mut bytes = Vec::new();
-                ClientMessage::Action(self.brief.action).write(&mut bytes);
+                ClientMessage::Action(self.brief.swing_action).write(&mut bytes);
                 self.outbound.push_back(Outgoing {
                     arrives_ms: self.net.out(t),
                     bytes,

@@ -3,17 +3,15 @@ use std::hash::{Hash, Hasher};
 const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0100_0000_01b3;
 
-/// FNV-1a over the bytes a value's `Hash` writes: no seed, so the same value hashes alike in every
-/// process.
-pub struct Fnv(u64);
+pub struct StableHasher(u64);
 
-impl Default for Fnv {
+impl Default for StableHasher {
     fn default() -> Self {
         Self(OFFSET)
     }
 }
 
-impl Hasher for Fnv {
+impl Hasher for StableHasher {
     fn finish(&self) -> u64 {
         self.0
     }
@@ -34,7 +32,7 @@ impl Hasher for Fnv {
 }
 
 pub fn hash(value: &impl Hash) -> u64 {
-    let mut h = Fnv::default();
+    let mut h = StableHasher::default();
     value.hash(&mut h);
     h.finish()
 }

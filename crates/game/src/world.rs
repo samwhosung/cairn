@@ -69,7 +69,7 @@ impl<'a, G: Game> World<'a, G> {
         dice::roll(self.seed, self.tick, id, salt)
     }
 
-    /// A roll in `lo..=hi`.
+    /// A roll in `lo..=hi`, or `lo` when the range is empty.
     pub fn range(&self, id: Id, salt: u32, lo: u32, hi: u32) -> u32 {
         dice::within(self.roll(id, salt), lo, hi)
     }

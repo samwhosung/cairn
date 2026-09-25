@@ -10,7 +10,6 @@ fn scramble(mut z: u64) -> u64 {
     z ^ (z >> 33)
 }
 
-/// A roll that depends only on the world's seed, the tick, the row that rolls and its salt.
 pub fn roll(seed: u64, tick: Tick, id: Id, salt: u32) -> u64 {
     let who = (u64::from(id.kind) << 32) | u64::from(id.n);
     [u64::from(tick), who, u64::from(salt)]
@@ -20,7 +19,6 @@ pub fn roll(seed: u64, tick: Tick, id: Id, salt: u32) -> u64 {
         })
 }
 
-/// Uniform in `lo..=hi`; `lo` when the range is empty.
 pub fn within(roll: u64, lo: u32, hi: u32) -> u32 {
     if hi <= lo {
         return lo;
@@ -28,7 +26,6 @@ pub fn within(roll: u64, lo: u32, hi: u32) -> u32 {
     lo + (roll % (u64::from(hi - lo) + 1)) as u32
 }
 
-/// True with probability `p`.
 pub fn chance(roll: u64, p: f64) -> bool {
     ((roll >> 11) as f64) < p * (1u64 << 53) as f64
 }

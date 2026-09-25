@@ -1,21 +1,19 @@
-//! Melee played headless on the rule API, its bodies standing where they joined.
-
 use std::f32::consts::PI;
 use std::ops::Range;
 
 use game::{BodyOrder, Delivery, Engine, Hosted, Id, Knobs as _, Spot, Turn};
-use melee::{Fighter, Knobs, Melee, SWING};
+use melee::{Fighter, Knobs, Life, Melee, SWING};
 
 const QUICK: &str = "swing_ms = 50\ndamage_min = 30\ndamage_max = 30\nrespawn_s = 1\n";
 
-/// Melee on its own knobs with `overlays` laid on them in turn.
 fn engine(overlays: &[&str]) -> Engine<Melee> {
-    let base = game::lines(include_str!("../knobs/base.knobs"), "base.knobs").expect("lines");
+    let own = include_str!("../knobs/base.knobs");
+    let base = game::KnobsFile::parse(own, "base.knobs").expect("its own knobs");
     let over: Vec<game::Line> = overlays
         .iter()
-        .flat_map(|o| game::lines(o, "overlay").expect("lines"))
+        .flat_map(|o| game::KnobsFile::parse(o, "overlay").expect("lines").lines)
         .collect();
-    let knobs = Knobs::read(&base, "base.knobs", &over).expect("knobs");
+    let knobs = Knobs::read(&base, &over).expect("knobs");
     Engine::new(knobs, 3, 50, Delivery::Canonical)
 }
 
@@ -26,7 +24,6 @@ fn at(x: f32, y: f32, facing: f32) -> Spot {
     }
 }
 
-/// Runs `ticks`, player 0 swinging in every one, and returns each tick's orders for the bodies.
 fn fight(e: &mut Engine<Melee>, bodies: &[Spot], ticks: Range<u32>) -> Vec<(u32, u32, BodyOrder)> {
     let joined: Vec<(u32, Spot)> = (0..).zip(bodies.iter().copied()).collect();
     let present: Vec<Option<Spot>> = bodies.iter().copied().map(Some).collect();
@@ -66,7 +63,7 @@ fn a_swing_kills_in_front_the_killer_is_credited_and_the_dead_rise_at_their_spaw
     assert_eq!(orders, [(3, 1, rooted), (23, 1, risen)]);
     let (killer, dead) = (fighter(&e, 0), fighter(&e, 1));
     assert_eq!((killer.kills, dead.deaths), (1, 1));
-    assert!(!dead.dead && dead.health == 100, "{dead:?}");
+    assert!(dead.life == Life::Alive && dead.health == 100, "{dead:?}");
     let counts = e.counts();
     assert_eq!(
         (counts["deaths"], counts["respawns"], counts["down"]),
@@ -97,7 +94,7 @@ fn permadeath_leaves_the_dead_down_and_a_dangerous_world_hits_twice_as_hard() {
     let bodies = [at(0.0, 0.0, 0.0), at(3.0, 0.0, PI)];
     let mut e = engine(&[QUICK, include_str!("../knobs/permadeath.knobs")]);
     fight(&mut e, &bodies, 0..60);
-    assert!(fighter(&e, 1).dead);
+    assert_eq!(fighter(&e, 1).life, Life::Dead { rises_at: None });
     assert_eq!((e.counts()["respawns"], e.counts()["down"]), (0, 1));
     let mut e = engine(&[QUICK, include_str!("../knobs/dangerous.knobs")]);
     fight(&mut e, &bodies, 0..1);
@@ -111,7 +108,7 @@ fn its_own_knobs_and_its_overlays_load() {
         include_str!("../knobs/permadeath.knobs"),
         include_str!("../knobs/dangerous.knobs"),
     ] {
-        let over = game::lines(overlay, "overlay").expect("lines");
-        game::load::<Melee>(None, &over, 1).expect("loads");
+        let over = game::KnobsFile::parse(overlay, "overlay").expect("lines");
+        game::load::<Melee>(None, &over.lines, 1).expect("loads");
     }
 }
