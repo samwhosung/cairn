@@ -138,6 +138,10 @@ struct Frame<'a> {
 }
 
 impl UnitDriver {
+    pub(crate) fn upper_body_one_shot(&self) -> Option<AnimationNodeIndex> {
+        self.upper_body_one_shot
+    }
+
     fn play(
         &mut self,
         tr: &mut AnimationTransitions,

@@ -7,6 +7,7 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
 
 use crate::rig::{AnimClip, ClipEvent, ModelAnimations, RigPose};
+use crate::unit::UnitDriver;
 
 /// One event key a clip crossed this frame.
 #[derive(Message, Clone, Copy, Debug)]
@@ -125,35 +126,49 @@ type Driven<'a> = (
     &'a AnimationTransitions,
     &'a GlobalTransform,
     Option<&'a RigPose>,
+    Option<&'a UnitDriver>,
 );
 
-/// A unit's keys come from the clip it armed last, which is the newest variation while two
-/// cross-fade.
+/// A unit's keys come from the clip its base armed last, which is the newest variation while two
+/// cross-fade, and from the one-shot it plays above the spine.
 pub(crate) fn fire_unit_events(
     units: Query<'_, '_, Driven<'_>>,
     globals: Query<'_, '_, &GlobalTransform>,
     mut last: Local<'_, TrackMemory>,
+    mut last_upper: Local<'_, TrackMemory>,
     mut out: MessageWriter<'_, AnimEvent>,
 ) {
-    for (entity, anims, player, transitions, world, pose) in &units {
-        let Some(node) = transitions.get_main_animation() else {
-            continue;
-        };
-        let Some(clip) = anims.clips.iter().find(|c| c.node == node) else {
-            continue;
-        };
-        let Some(cur) = player
-            .animation(node)
-            .map(bevy::animation::ActiveAnimation::seek_time)
-        else {
-            continue;
-        };
-        let scan = advance_track(&mut last, entity, node, cur);
+    for (entity, anims, player, transitions, world, pose, driver) in &units {
         let frame = EventFrame {
             world,
             rig: pose.and_then(|p| Some((p, globals.get(p.joints_root).ok()?))),
         };
-        scan_events(clip, entity, scan, cur, &frame, &mut out);
+        let base = transitions
+            .get_main_animation()
+            .and_then(|node| Some((node, anims.clips.iter().find(|c| c.node == node)?)));
+        let upper = driver
+            .and_then(UnitDriver::upper_body_one_shot)
+            .and_then(|node| {
+                Some((
+                    node,
+                    anims.clips.iter().find(|c| c.upper_node == Some(node))?,
+                ))
+            });
+        let tracks: [(&mut TrackMemory, _); 2] = [(&mut *last, base), (&mut *last_upper, upper)];
+        for (memory, playing) in tracks {
+            let Some((node, clip)) = playing else {
+                memory.remove(&entity);
+                continue;
+            };
+            let Some(cur) = player
+                .animation(node)
+                .map(bevy::animation::ActiveAnimation::seek_time)
+            else {
+                continue;
+            };
+            let scan = advance_track(memory, entity, node, cur);
+            scan_events(clip, entity, scan, cur, &frame, &mut out);
+        }
     }
 }
 

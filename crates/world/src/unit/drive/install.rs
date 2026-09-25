@@ -5,6 +5,7 @@ use bevy::animation::AnimationPlugin;
 use bevy::animation::graph::AnimationGraphHandle;
 use bevy::animation::transition::AnimationTransitions;
 use bevy::asset::{AssetPlugin, LoadState};
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
@@ -14,6 +15,7 @@ use super::super::motion::{UnitMotion, UnitShow};
 use super::{UPPER_BODY_OVER_GAIT, UPPER_BODY_RELEASE_SECS, UnitDriver, drive_units};
 use crate::M2Model;
 use crate::rig::{AnimRng, ModelAnimations, ModelSkeleton, RigPose, pose_evaluation};
+use crate::rig_events::{AnimEvent, fire_unit_events};
 
 const HUMAN_MALE: &str = "Character\\Human\\Male\\HumanMale.mdx";
 const ATTACK_UNARMED: u16 = 16;
@@ -32,7 +34,8 @@ fn app(data: &Path) -> App {
         .add_plugins(crate::LoadersPlugin)
         .insert_resource(TimeUpdateStrategy::ManualDuration(STEP))
         .init_resource::<AnimRng>()
-        .add_systems(Update, drive_units);
+        .add_message::<AnimEvent>()
+        .add_systems(Update, (drive_units, fire_unit_events).chain());
     pose_evaluation(&mut app);
     app.finish();
     app.cleanup();
@@ -66,6 +69,7 @@ fn frames_in(secs: f32) -> usize {
 struct Sampled {
     locals_from_the_telling: Vec<Vec<Transform>>,
     swung_seq: Option<usize>,
+    keys_from_the_telling: Vec<(usize, [u8; 4])>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -114,6 +118,9 @@ fn sampled(
     }
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
     app.world_mut().entity_mut(body).insert(scene.once_settled);
+    let mut keys = MessageCursor::<AnimEvent>::default();
+    keys.clear(app.world().resource::<Messages<AnimEvent>>());
+    let mut keys_from_the_telling = Vec::new();
     let mut locals = Vec::new();
     let mut swung_seq = None;
     for frame in 0..frames {
@@ -121,6 +128,8 @@ fn sampled(
             .entity_mut(body)
             .insert(motion_from_the_telling(frame));
         app.update();
+        let fired = keys.read(app.world().resource::<Messages<AnimEvent>>());
+        keys_from_the_telling.extend(fired.filter(|k| k.entity == body).map(|k| (frame, k.ident)));
         let e = app.world().entity(body);
         locals.push(e.get::<RigPose>().expect("a rig").locals.clone());
         let player = e.get::<AnimationPlayer>().expect("a player");
@@ -141,6 +150,7 @@ fn sampled(
     Sampled {
         locals_from_the_telling: locals,
         swung_seq,
+        keys_from_the_telling,
     }
 }
 
@@ -634,5 +644,87 @@ fn a_wound_over_the_ready_stance_takes_the_whole_body_and_one_without_it_the_tor
          moves the {} leg bones on {recoiled} bone-frames; without it, the legs are the Stand's \
          bit for bit and the whole-body comparison is {control_apart} bone-frames apart",
         legs.len()
+    );
+}
+
+#[test]
+fn a_swing_fires_its_keys_standing_and_above_the_spine_on_the_run() {
+    let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
+        eprintln!("skipped: WOW_DATA is not set");
+        return;
+    };
+    let mut app = app(&data);
+    let (skeleton, anims) = human(&mut app);
+    let swing_secs = anims
+        .clips
+        .iter()
+        .filter(|c| c.anim_id == ATTACK_UNARMED)
+        .map(|c| c.duration)
+        .fold(0.0, f32::max);
+    let frames = frames_in(swing_secs) + 5;
+    let running = UnitMotion {
+        speed: 7.0,
+        flags: FORWARD,
+        ..UnitMotion::default()
+    };
+    let swing = Scene::plays(Some(ATTACK_UNARMED));
+    let human = (&skeleton, &anims);
+    let standing = sampled(&mut app, human, &|_| UnitMotion::default(), swing, frames);
+    let on_the_run = sampled(&mut app, human, &|_| running, swing, frames);
+    let clip = anims
+        .clips
+        .iter()
+        .find(|c| Some(c.seq_index) == standing.swung_seq)
+        .expect("the swung clip");
+    let attack_keys = |fired: &[(usize, [u8; 4])]| -> Vec<(usize, [u8; 4])> {
+        fired
+            .iter()
+            .copied()
+            .filter(|(_, k)| k == b"$CSS" || k == b"$CAH")
+            .collect()
+    };
+    let authored: Vec<(f32, [u8; 4])> = clip
+        .events
+        .iter()
+        .filter(|e| e.ident == *b"$CSS" || e.ident == *b"$CAH")
+        .map(|e| (e.time, e.ident))
+        .collect();
+    let fired = attack_keys(&standing.keys_from_the_telling);
+    assert_eq!(
+        fired.iter().map(|&(_, k)| k).collect::<Vec<_>>(),
+        authored.iter().map(|&(_, k)| k).collect::<Vec<_>>(),
+        "standing, the swing fires its keys once each, in order"
+    );
+    for (&(frame, ident), &(time, _)) in fired.iter().zip(&authored) {
+        let due = time / STEP.as_secs_f32();
+        assert!(
+            (frame as f32 - due).abs() <= 1.0,
+            "{} fired at frame {frame}, its time is frame {due}",
+            String::from_utf8_lossy(&ident)
+        );
+    }
+    assert_eq!(
+        on_the_run.swung_seq, standing.swung_seq,
+        "one swing to compare"
+    );
+    assert_eq!(
+        attack_keys(&on_the_run.keys_from_the_telling),
+        fired,
+        "on the run, the swing above the spine fires them on the same frames"
+    );
+    let named: Vec<String> = authored
+        .iter()
+        .zip(&fired)
+        .map(|(&(time, ident), &(frame, _))| {
+            format!(
+                "{} at {time} s, frame {frame}",
+                String::from_utf8_lossy(&ident)
+            )
+        })
+        .collect();
+    eprintln!(
+        "the swing, sequence {:?}, fires {} standing and on the run",
+        standing.swung_seq,
+        named.join(", ")
     );
 }
