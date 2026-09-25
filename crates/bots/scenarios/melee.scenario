@@ -1,7 +1,6 @@
 # Melee: each bot runs at the nearest body that is not rooted and swings at it. The dead are
 # rooted where they fall and rise at their spawn, and an honest client is never corrected for
-# it; a client that walks on while rooted is. Every bot is shown the swings and how each came out,
-# the wounds, deaths, poses and stances of the bodies in its view and its own.
+# it; a client that walks on while rooted is.
 place = goldshire
 seconds = 60
 game = melee

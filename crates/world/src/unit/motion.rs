@@ -133,7 +133,7 @@ pub struct UnitShow {
 pub enum Outcome {
     Hit,
     Crit,
-    /// A hit the client voices at its loudest.
+    /// A crushing blow: the one struck always gives its crushing cry, if its body has one.
     Crushing,
     Miss,
     Dodge,
@@ -144,11 +144,11 @@ pub enum Outcome {
     Immune,
 }
 
-/// A body attacked another, as its game told it beside the swing the body plays.
+/// A body's attack, as its game told it beside the swing the body plays.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnitAttack {
     pub attacker: Entity,
-    /// The one it attacked, if this client sees it.
+    /// The body it attacked, if it attacked one and this client sees it.
     pub target: Option<Entity>,
     pub outcome: Outcome,
 }

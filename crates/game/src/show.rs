@@ -19,7 +19,7 @@ pub mod anim {
 pub enum Outcome {
     Hit,
     Crit,
-    /// A hit the client voices at its loudest.
+    /// A crushing blow: the one struck always gives its crushing cry, if its body has one.
     Crushing,
     Miss,
     Dodge,

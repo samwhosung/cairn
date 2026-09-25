@@ -123,7 +123,8 @@ impl<G: Game> Out<G> {
     }
 
     /// Tells the player this row is, and everyone who sees its body, that it attacked `target`,
-    /// which came out as `outcome`: beside the swing it plays, it is what the client sounds.
+    /// which came out as `outcome`: beside the swing it plays, it is what the client sounds. A
+    /// target that is not a player's row has no body, and is told as none.
     pub fn attack(&mut self, target: Option<Id>, outcome: Outcome) {
         let target = target.filter(|t| t.is_player()).map(|t| t.n);
         self.show(Show::Attack(target, outcome));

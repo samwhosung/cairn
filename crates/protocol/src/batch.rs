@@ -84,14 +84,15 @@ pub enum Record<'a> {
     Show { whose: Whose, show: Show },
 }
 
-/// Whose body a show is: an entity in view, by its slot, or this client's own mover.
+/// A body a show names: an entity in view, by its slot, or this client's own mover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Whose {
     Slot(u16),
     Own,
 }
 
-/// What a game has a body show, in the install's `AnimationData.dbc` ids.
+/// What a game has a body show: its animations, by the install's `AnimationData.dbc` ids, and its
+/// attacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Show {
     /// The animation plays once, from its start.
@@ -101,7 +102,7 @@ pub enum Show {
     /// The body idles in this animation where it would stand, until it is told another, or stops
     /// with `None`.
     Idle(Option<u16>),
-    /// The body attacked `target`, if this client sees the one it attacked, and it came out so.
+    /// The body attacked `target`, if it attacked one this client sees, and it came out so.
     Attack {
         target: Option<Whose>,
         outcome: Outcome,

@@ -129,8 +129,6 @@ type Driven<'a> = (
     Option<&'a UnitDriver>,
 );
 
-/// A unit's keys come from the clip its base armed last, which is the newest variation while two
-/// cross-fade, and from the one-shot it plays above the spine.
 pub(crate) fn fire_unit_events(
     units: Query<'_, '_, Driven<'_>>,
     globals: Query<'_, '_, &GlobalTransform>,

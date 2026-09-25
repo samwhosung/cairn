@@ -30,7 +30,7 @@ impl fmt::Display for Error {
             Self::UnknownKind(k) => write!(f, "unknown message kind {k}"),
             Self::UnknownRecord(k) => write!(f, "unknown batch record {k}"),
             Self::UnknownWhy(k) => write!(f, "unknown reason {k} for a correction"),
-            Self::UnknownShow(k) => write!(f, "unknown way {k} for a body to show an animation"),
+            Self::UnknownShow(k) => write!(f, "unknown way {k} for a body to show something"),
             Self::UnknownOutcome(k) => write!(f, "unknown outcome {k} of an attack"),
             Self::UnknownTarget(t) => write!(f, "{t} is neither a slot nor a target of an attack"),
             Self::Name => f.write_str("a name that is not UTF-8"),
