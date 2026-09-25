@@ -148,9 +148,8 @@ const SCENARIOS: [Scenario; 7] = [
 fn an_honest_client_walking_the_scenarios_is_never_put_back() {
     let mut refused = Vec::new();
     for walk in &SCENARIOS {
-        let server = serve_over_loopback(&[walk.at]);
-        let look = CharacterLook::naked(1, 0);
-        let Some(mut w) = Walker::joined_over_loopback(server.addr(), "Walker", look, HZ) else {
+        let clock = serve(&[walk.at], HZ);
+        let Some(mut w) = Walker::joined(&clock, "Walker", CharacterLook::naked(1, 0)) else {
             return;
         };
         (walk.walk)(&mut w);
@@ -158,7 +157,7 @@ fn an_honest_client_walking_the_scenarios_is_never_put_back() {
         let net = w.net().expect("still joined");
         let (claims, corrections) = (net.claims_sent(), net.corrections());
         drop(w);
-        let summary = server.stop().expect("the server stops");
+        let summary = clock.borrow_mut().stop();
         let why: Vec<String> = Why::ALL
             .iter()
             .zip(summary.refused)
