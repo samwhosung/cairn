@@ -2,6 +2,7 @@
 //! plugins and keys the window uses. Every scenario skips without `WOW_DATA`.
 
 mod alone;
+mod fight;
 mod heard;
 mod honest;
 mod liar;

@@ -24,7 +24,7 @@ use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
 use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
-use super::walker::{Through, time_update};
+use super::walker::{Through, hosts, time_update};
 use crate::net::{Net, NetPlugin};
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::flags::FALLING;
@@ -116,6 +116,25 @@ impl Painter {
             name: "Painter".into(),
             look: look.clone(),
         };
+        Self::welcomed(through, feet, heading_deg, look)
+    }
+
+    /// [`Painter::joined`], to a server of its own that others may join.
+    pub(super) fn hosting(
+        cfg: server::Config,
+        feet: [f32; 3],
+        heading_deg: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
+        Self::welcomed(Through::Hosts(Box::new(cfg)), feet, heading_deg, look)
+    }
+
+    fn welcomed(
+        through: Through,
+        feet: [f32; 3],
+        heading_deg: f32,
+        look: CharacterLook,
+    ) -> Option<Self> {
         let mut painter = Self::build(feet, heading_deg, look, Some(through))?;
         let spawn = painter
             .app
@@ -147,12 +166,13 @@ impl Painter {
         let tables = CharacterTables::load(&install).expect("the character tables");
         let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
-        let judge_on_drop = matches!(through, Some(Through::ItsOwn { .. }));
+        let judge_on_drop = matches!(through, Some(Through::ItsOwn { .. } | Through::Hosts(_)));
         let net = through.map(|t| match t {
             Through::ItsOwn { record } => alone::own_server(map.id, pose, &look, record),
             Through::Loopback { addr, name, look } => {
                 Net::connect(addr, crate::net::hello(name, &look))
             }
+            Through::Hosts(cfg) => hosts(*cfg, &look),
         });
         let mut app = App::new();
         world::register_source(&mut app, &install);

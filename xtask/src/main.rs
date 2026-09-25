@@ -178,7 +178,11 @@ fn commits(root: &Path, range: &str) -> Result<()> {
     bail!("{}", bad.join("\n"))
 }
 
-const PICTURE_TESTS: [&str; 2] = ["scenarios::pictures::", "scenarios::together::two_players"];
+const PICTURE_TESTS: [&str; 3] = [
+    "scenarios::pictures::",
+    "scenarios::together::two_players",
+    "scenarios::fight::",
+];
 
 fn pictures(root: &Path, dir: &Path) -> Result<()> {
     if std::env::var_os("WOW_DATA").is_none() {

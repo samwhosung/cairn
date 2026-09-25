@@ -49,6 +49,8 @@ pub enum Through {
         name: String,
         look: CharacterLook,
     },
+    /// A server of its own run as this config says, which others may join.
+    Hosts(Box<server::Config>),
 }
 
 pub fn time_update(over_loopback: bool, step: Duration) -> TimeUpdateStrategy {
@@ -202,6 +204,7 @@ impl Walker {
             Through::Loopback { addr, name, look } => {
                 Net::connect(addr, crate::net::hello(name, &look))
             }
+            Through::Hosts(cfg) => hosts(*cfg, &look),
         };
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin, InputPlugin));
@@ -482,6 +485,10 @@ impl Walker {
         self.app.world_mut().despawn(e);
         self.app.update();
     }
+}
+
+pub fn hosts(cfg: server::Config, look: &CharacterLook) -> Net {
+    Net::host(cfg, crate::net::hello("Host".into(), look)).expect("a server of its own")
 }
 
 impl Drop for Walker {

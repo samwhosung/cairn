@@ -77,7 +77,7 @@ fn runner(server: SocketAddr, look: CharacterLook) -> Runner {
     }
 }
 
-fn wait(p: &mut Painter, secs: f32) {
+pub(super) fn wait(p: &mut Painter, secs: f32) {
     let until = Instant::now() + Duration::from_secs_f32(secs.max(0.0));
     loop {
         let next = Instant::now() + STEP;
@@ -89,7 +89,7 @@ fn wait(p: &mut Painter, secs: f32) {
     }
 }
 
-fn others_dressed_and_skinned(p: &mut Painter) -> bool {
+pub(super) fn others_dressed_and_skinned(p: &mut Painter) -> bool {
     let world = p.app.world_mut();
     let bodies: Vec<UnitBody> = world
         .query_filtered::<&UnitBody, (With<OtherPlayer>, With<BodyDressed>)>()
