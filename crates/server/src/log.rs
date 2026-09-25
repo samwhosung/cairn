@@ -23,14 +23,12 @@ pub struct Header {
     pub check: bool,
     pub map: u32,
     pub spawns: Vec<Spawn>,
-    pub game: Option<Logged>,
-    /// The players the world knew as the run began.
-    pub players: Vec<Player>,
+    pub game: Option<LoggedGame>,
+    pub players_at_start: Vec<Player>,
 }
 
-/// The game a run played, as it was loaded.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Logged {
+pub struct LoggedGame {
     pub name: String,
     pub seed: u64,
     pub knobs: KnobsFile,
@@ -65,9 +63,9 @@ impl LogWriter {
             put_lines(&mut b, &g.knobs.lines);
             put_lines(&mut b, &g.overlay);
         }
-        b.extend_from_slice(&(header.players.len() as u32).to_le_bytes());
-        for p in &header.players {
-            b.extend_from_slice(&p.id.to_le_bytes());
+        b.extend_from_slice(&(header.players_at_start.len() as u32).to_le_bytes());
+        for p in &header.players_at_start {
+            b.extend_from_slice(&p.file_id.to_le_bytes());
             put_text(&mut b, &p.name);
             b.push(u8::from(p.place.is_some()));
             if let Some(at) = p.place {
@@ -158,7 +156,7 @@ impl LogReader {
             });
         }
         let game = read_some(&mut input, |r| {
-            Ok(Logged {
+            Ok(LoggedGame {
                 name: read_text(r)?,
                 seed: read_u64(r)?,
                 knobs: KnobsFile {
@@ -171,7 +169,7 @@ impl LogReader {
         let n = read_u32(&mut input)?;
         let mut players = Vec::new();
         for _ in 0..n {
-            let (id, name) = (read_u32(&mut input)?, read_text(&mut input)?);
+            let (file_id, name) = (read_u32(&mut input)?, read_text(&mut input)?);
             let place = read_some(&mut input, |r| {
                 let map = read_u32(r)?;
                 let [x, y, z, facing] = read_spot(r)?;
@@ -183,7 +181,7 @@ impl LogReader {
             })?;
             let saved = read_some(&mut input, read_bytes)?;
             players.push(Player {
-                id,
+                file_id,
                 name,
                 place,
                 saved,
@@ -197,7 +195,7 @@ impl LogReader {
                 map,
                 spawns,
                 game,
-                players,
+                players_at_start: players,
             },
         })
     }

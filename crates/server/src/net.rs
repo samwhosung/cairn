@@ -69,7 +69,6 @@ impl Outbox {
         }
     }
 
-    /// Counts `bytes` as queued for the client, to be sent when the frame is let out.
     pub fn hold(&self, bytes: Vec<u8>) -> Held {
         self.queued_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
         Held {
@@ -90,7 +89,6 @@ impl Outbox {
     }
 }
 
-/// A frame built for a client and held until the changes of its tick are durable.
 pub struct Held {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     bytes: Vec<u8>,

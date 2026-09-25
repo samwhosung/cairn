@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 pub use bytes::Bytes;
-pub use columns::{Column, Columns, Field, Scalar, Schema, Sql, Value};
+pub use columns::{Column, Columns, Field, Scalar, Schema, Sql, Tables, Value};
 pub use engine::Engine;
 pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Stages, Took, Turn, load};
 pub use knobs::{Knob, Knobs, KnobsFile, Line};
@@ -81,7 +81,6 @@ pub trait Game: Sized + Send + Sync + 'static {
     fn action(number: u32) -> Option<Self::Msg>;
 }
 
-/// What a game's players save.
 pub type Saved<G> = <<G as Game>::Player as Kind<G>>::Saved;
 
 /// A kind of row. Every field is part of the world, and the world's hash reads them all.

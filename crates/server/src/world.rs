@@ -127,6 +127,11 @@ pub struct Admitted {
     pub spawn: Movement,
 }
 
+pub struct Admission {
+    pub admitted: Vec<Admitted>,
+    pub refused: Vec<u32>,
+}
+
 pub struct World {
     tick: u32,
     prev: Vec<Body>,
@@ -200,13 +205,11 @@ impl World {
         self.next.iter().filter(|b| b.present).count()
     }
 
-    /// Gives each join a body where `admit` puts it, or at the next spawn; returns the admitted
-    /// and the connections `admit` refused.
     pub fn admit(
         &mut self,
         inputs: &[Stamped],
-        mut admit: impl FnMut(&str) -> Admit,
-    ) -> (Vec<Admitted>, Vec<u32>) {
+        mut decide: impl FnMut(&str) -> Admit,
+    ) -> Admission {
         let (mut admitted, mut refused) = (Vec::new(), Vec::new());
         for s in inputs {
             let (Input::Join(hello) | Input::HostJoin(hello)) = &s.input else {
@@ -216,12 +219,13 @@ impl World {
                 continue;
             }
             let id = self.prev.len() as u32;
-            let spawn = match admit(&hello.name) {
+            let spawn = match decide(&hello.name) {
                 Admit::Refused => {
                     refused.push(s.conn);
                     continue;
                 }
-                Admit::At(back) => back.unwrap_or(self.spawns[id as usize % self.spawns.len()]),
+                Admit::AtSpawn => self.spawns[id as usize % self.spawns.len()],
+                Admit::Back(spawn) => spawn,
             };
             let body = Body {
                 movement: Movement {
@@ -247,7 +251,7 @@ impl World {
                 spawn: body.movement,
             });
         }
-        (admitted, refused)
+        Admission { admitted, refused }
     }
 
     pub fn route(&self, inputs: &[Stamped], order: InputOrder) -> Vec<Act> {

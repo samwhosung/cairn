@@ -137,11 +137,10 @@ pub struct TickStats {
     pub stale: u32,
     pub built: Built,
     pub hash: u64,
-    /// Rows the tick handed the writer.
+    /// Rows the tick saved, or would have with a file.
     pub saved_rows: u32,
-    /// The tick's transaction, when it made one.
     pub commit: Option<Commit>,
-    /// How long the tick's caller waited for its results to be let out.
+    /// How long a stepper's tick waited on its results being let out.
     pub wait_ns: u64,
 }
 
@@ -208,7 +207,6 @@ pub struct Summary {
     pub saving: SaveCost,
 }
 
-/// What saving cost over a run's ticks.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SaveCost {
     pub commits: usize,
@@ -234,7 +232,7 @@ impl SaveCost {
         Self {
             commits: commits.len(),
             rows_per_tick: ticks.iter().map(|t| f64::from(t.saved_rows)).sum::<f64>() / n,
-            bytes_per_tick: per_tick(|c| c.bytes),
+            bytes_per_tick: per_tick(|c| c.value_bytes),
             wal_bytes_per_tick: per_tick(|c| c.wal_bytes),
             commit: ms(|c| c.commit_ns),
             durable: ms(|c| c.durable_ns),

@@ -12,8 +12,7 @@ use server::{InputOrder, Replay, Replicate};
 
 const FIGHTERS: usize = 6;
 const QUICK: &str = "swing_ms = 100\ndamage_min = 40\ndamage_max = 80\nrespawn_s = 1\n";
-/// Melee's action that swings.
-const SWING: u32 = 1;
+const MELEE_SWING: u32 = 1;
 const KILLS: usize = 5;
 
 fn scratch(name: &str) -> PathBuf {
@@ -33,7 +32,6 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// A fighter over TCP: it swings ten times a second and keeps the last tick it was sent.
 fn fighter(addr: SocketAddr, name: String, stop: Arc<AtomicBool>) -> JoinHandle<Option<u32>> {
     std::thread::spawn(move || {
         let mut stream = TcpStream::connect(addr).ok()?;
@@ -53,7 +51,7 @@ fn fighter(addr: SocketAddr, name: String, stop: Arc<AtomicBool>) -> JoinHandle<
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= swing_at {
                 out.clear();
-                ClientMessage::Action(SWING).write(&mut out);
+                ClientMessage::Action(MELEE_SWING).write(&mut out);
                 let _ = stream.write_all(&out);
                 swing_at += Duration::from_millis(100);
             }
@@ -114,25 +112,26 @@ fn serve(dir: &Path, log: &Path, early: bool) -> Served {
     Served { child, addr }
 }
 
-/// What one run killed at a random moment left: the last tick a client was sent, the last tick
-/// in the file, and whether the file holds the world as it stood then.
 struct Killed {
-    sent: u32,
-    in_file: Option<u32>,
+    last_sent: u32,
+    last_in_file: Option<u32>,
     file_is_the_world: bool,
-    /// Ticks after the one in the file, up to the last one a client was sent, that saved anything.
-    lost: Vec<u32>,
-    /// Every fighter's kills and deaths in the file, summed.
-    kills_deaths: (i64, i64),
+    sent_and_lost: Vec<u32>,
+    kills_in_file: i64,
+    deaths_in_file: i64,
 }
 
 impl Killed {
     fn say(&self) -> String {
-        let (kills, deaths) = self.kills_deaths;
         format!(
-            "a client was sent tick {}, the file holds tick {:?} ({kills} kills, {deaths} deaths \
-             in all), the file is the world then: {}, ticks that saved and were sent after it: {:?}",
-            self.sent, self.in_file, self.file_is_the_world, self.lost
+            "a client was sent tick {}, the file holds tick {:?} ({} kills, {} deaths in all), \
+             the file is the world then: {}, ticks that saved and were sent after it: {:?}",
+            self.last_sent,
+            self.last_in_file,
+            self.kills_in_file,
+            self.deaths_in_file,
+            self.file_is_the_world,
+            self.sent_and_lost
         )
     }
 }
@@ -175,9 +174,9 @@ fn run_and_kill(dir: &Path, round: usize, after: Duration, early: bool) -> Kille
         "the run replays tick for tick"
     );
     let melee = catalog::load("melee", None, &[], 0).expect("melee");
-    let file = server::scan(&world, melee.schemas()[0].as_ref()).expect("a full scan");
-    let lost = replayed
-        .saving
+    let file = server::scan(&world, melee.tables().players.as_ref()).expect("a full scan");
+    let sent_and_lost = replayed
+        .ticks_that_saved
         .iter()
         .copied()
         .filter(|&t| in_file.is_none_or(|d| t > d) && t <= sent)
@@ -191,17 +190,15 @@ fn run_and_kill(dir: &Path, round: usize, after: Duration, early: bool) -> Kille
             .sum()
     };
     Killed {
-        sent,
-        in_file,
+        last_sent: sent,
+        last_in_file: in_file,
         file_is_the_world: replayed.kept.as_ref() == Some(&file),
-        lost,
-        kills_deaths: (whole(0), whole(1)),
+        sent_and_lost,
+        kills_in_file: whole(0),
+        deaths_in_file: whole(1),
     }
 }
 
-/// A killed server has lost no result a client was sent: every tick up to the last one a client
-/// was sent that saved anything is in the file, and the file is the world as it stood at its
-/// last tick. The control lets results out before their changes are durable: a kill loses one.
 #[test]
 fn a_server_killed_at_random_loses_nothing_a_client_was_sent() {
     let dir = scratch("held");
@@ -215,22 +212,27 @@ fn a_server_killed_at_random_loses_nothing_a_client_was_sent() {
         let killed = run_and_kill(&dir, round, after, false);
         let said = killed.say();
         eprintln!("kill {round} after {after:?}: {said}");
-        assert!(killed.file_is_the_world && killed.lost.is_empty(), "{said}");
+        assert!(
+            killed.file_is_the_world && killed.sent_and_lost.is_empty(),
+            "{said}"
+        );
     }
+}
+
+#[test]
+fn a_server_that_lets_results_out_early_loses_one_a_client_was_sent_at_every_kill() {
     let dir = scratch("early");
     for round in 0..2 {
         let killed = run_and_kill(&dir, round, Duration::from_millis(2000), true);
         let said = killed.say();
         eprintln!("control {round}: {said}");
-        assert!(killed.file_is_the_world, "{said}");
         assert!(
-            !killed.lost.is_empty(),
-            "results let out early: a kill loses one"
+            killed.file_is_the_world && !killed.sent_and_lost.is_empty(),
+            "{said}"
         );
     }
 }
 
-/// A game's run replays tick for tick; without the players' actions it parts.
 #[test]
 fn a_games_run_replays_at_every_tick_and_parts_without_its_actions() {
     let dir = scratch("replay");

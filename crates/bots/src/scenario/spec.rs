@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use game::{KnobsFile, Line, Loaded};
 use protocol::flags;
-use server::{Limits, View};
+use server::{Limits, Saving, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
 use super::shown::{Drops, Nth};
@@ -26,18 +26,13 @@ pub struct Spec {
     pub expects: Vec<Expect>,
     pub game: Option<Loaded>,
     pub world: WorldFile,
-    /// A control: the writer leaves out the first player's row handed over at or after this tick.
-    pub drops: Option<u32>,
+    pub saving: Saving,
 }
 
-/// Where a scenario's world is kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorldFile {
-    /// A file of its own, made for the run and removed after it.
-    Fresh,
-    /// A file at this path, which must not exist yet: a scenario starts from an empty world.
+    Temporary,
     At(PathBuf),
-    /// Memory only.
     Unsaved,
 }
 
@@ -110,8 +105,8 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         groups: Vec::new(),
         expects: text.expects,
         game: None,
-        world: WorldFile::Fresh,
-        drops: None,
+        world: WorldFile::Temporary,
+        saving: Saving::Held,
     };
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
@@ -286,7 +281,7 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
             }
             spec.world = WorldFile::At(path);
         }
-        "world.drops" => spec.drops = Some(whole(v)?),
+        "world.drops" => spec.saving = Saving::Drops(whole(v)?),
         key => {
             let knob = if let Some(k) = key.strip_prefix("limits.") {
                 limits_knob(&mut spec.limits, k)

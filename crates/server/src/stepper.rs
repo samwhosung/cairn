@@ -66,7 +66,7 @@ impl Stepper {
         Self::with(cfg.sim(opened, delivery)?, cfg, order)
     }
 
-    /// A world on `cfg` that knows `players` and keeps no file, as a replay starts.
+    /// A world on `cfg` that knows `players` and keeps no file.
     pub fn starting(cfg: &Config, players: Vec<Player>, order: InputOrder) -> io::Result<Self> {
         let roster = Roster::new(players, cfg.map, cfg.tick_ms);
         let sim = cfg
@@ -175,11 +175,12 @@ impl Stepper {
         self.sim.keeping()
     }
 
-    /// Where the world's file differs from the world's saved state, by a full scan of each, once
-    /// the last tick's changes are durable; `None` also when the world keeps no file.
+    /// Where the world's file differs from the world's saved state, by a full scan of each, after
+    /// the last tick, whose changes [`Stepper::tick`] waited on; `None` also when the world keeps
+    /// no file.
     pub fn file_differs(&self) -> Option<String> {
         let writer = self.sim.writer()?;
-        let schema = self.sim.game().and_then(|g| g.schemas()[0]);
+        let schema = self.sim.game().and_then(|g| g.tables().players);
         let file = match scan(writer.path(), schema.as_ref()) {
             Ok(file) => file,
             Err(e) => return Some(e),
@@ -239,12 +240,14 @@ impl Stepper {
                 .wait_released(st.tick)
                 .unwrap_or_else(|why| panic!("the world's file: {why}"));
             st.wait_ns = waited.as_nanos() as u64;
-            st.commit = writer.commits().into_iter().find(|c| c.tick == st.tick);
+            st.commit = writer
+                .take_commits()
+                .into_iter()
+                .find(|c| c.tick == st.tick);
         }
         st
     }
 
-    /// The world's file, when it keeps one.
     pub fn world_file(&self) -> Option<&std::path::Path> {
         self.sim.writer().map(crate::save::Writer::path)
     }

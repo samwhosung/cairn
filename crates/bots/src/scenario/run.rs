@@ -4,7 +4,7 @@ use std::time::Instant;
 use game::Delivery;
 use protocol::{Appearance, ClientMessage, Hello, Pos, VERSION};
 use rayon::prelude::*;
-use server::{Config, Input, InputOrder, Refusal, Saving, Spawn, Stepper, TickStats, Why};
+use server::{Config, Input, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
 
 use super::client::{Accepted, Brief, Client, Delivered, Seen, Taken, Tally, World};
 use super::played::Played;
@@ -199,21 +199,20 @@ fn config(spec: &Spec, briefs: &[Brief], threads: usize, file: &WorldAt) -> Conf
         tick_ms: spec.tick_ms,
         game: spec.game.clone(),
         world: file.path.clone(),
-        saving: spec.drops.map_or(Saving::Held, Saving::Drops),
+        saving: spec.saving,
         ..Config::default()
     }
 }
 
-/// The file a run keeps its world in; a fresh one is removed once the run is over.
 struct WorldAt {
     path: Option<PathBuf>,
-    fresh: bool,
+    temporary: bool,
 }
 
 impl WorldAt {
     fn of(spec: &Spec) -> Self {
         match &spec.world {
-            WorldFile::Fresh => {
+            WorldFile::Temporary => {
                 let name: String = spec
                     .name
                     .chars()
@@ -225,16 +224,16 @@ impl WorldAt {
                 let file = format!("cairn-{name}-{}-{nanos}.sqlite", std::process::id());
                 Self {
                     path: Some(std::env::temp_dir().join(file)),
-                    fresh: true,
+                    temporary: true,
                 }
             }
             WorldFile::At(path) => Self {
                 path: Some(path.clone()),
-                fresh: false,
+                temporary: false,
             },
             WorldFile::Unsaved => Self {
                 path: None,
-                fresh: false,
+                temporary: false,
             },
         }
     }
@@ -242,7 +241,7 @@ impl WorldAt {
 
 impl Drop for WorldAt {
     fn drop(&mut self) {
-        let Some(path) = self.path.as_ref().filter(|_| self.fresh) else {
+        let Some(path) = self.path.as_ref().filter(|_| self.temporary) else {
             return;
         };
         for end in ["", "-wal", "-shm", "-lock"] {

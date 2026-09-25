@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use game::{Delivery, Loaded};
 
 use crate::limits::Limits;
-use crate::log::{Header, LogWriter, Logged};
+use crate::log::{Header, LogWriter, LoggedGame};
 use crate::net::Shared;
 use crate::replicate::View;
 use crate::save::{Opened, Roster, Saving, Writer};
@@ -15,8 +15,7 @@ use crate::sim::{Batches, Sim};
 use crate::stats::{SaveCost, Summary, TickStats, process_cpu_ns};
 use crate::world::{InputOrder, Spawn};
 
-/// A tick's results wait at most this many ticks on the writer before the tick waits too.
-const MOST_TICKS_HELD: u32 = 20;
+const MAX_TICKS_UNRELEASED: u32 = 20;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -50,18 +49,16 @@ impl Config {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
     }
 
-    /// Opens the world's file, when it has one, for this server's game.
     pub(crate) fn open_world(&self) -> io::Result<Option<Opened>> {
         let Some(path) = &self.world else {
             return Ok(None);
         };
-        let game = self.game.as_ref().map(|g| (g.name(), g.schemas()));
+        let game = self.game.as_ref().map(|g| (g.name(), g.tables()));
         crate::save::open(path, game)
             .map(Some)
             .map_err(io::Error::other)
     }
 
-    /// The simulation this config starts, from the players `opened` knew, saving to it.
     pub(crate) fn sim(&self, opened: Option<Opened>, delivery: Delivery) -> io::Result<Sim> {
         let players = opened
             .as_ref()
@@ -182,7 +179,7 @@ pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::
             if let Some(why) = writer.failed() {
                 return Err(io::Error::other(why));
             }
-            if let Some(back) = st.tick.checked_sub(MOST_TICKS_HELD) {
+            if let Some(back) = st.tick.checked_sub(MAX_TICKS_UNRELEASED) {
                 writer.wait_released(back).map_err(io::Error::other)?;
             }
         }
@@ -239,19 +236,17 @@ fn log(path: &std::path::Path, cfg: &Config, sim: &Sim) -> io::Result<LogWriter>
         check: cfg.limits.check,
         map: cfg.map,
         spawns: sim.world().spawns().to_vec(),
-        game: cfg.game.as_ref().map(|g| Logged {
+        game: cfg.game.as_ref().map(|g| LoggedGame {
             name: g.name().to_owned(),
             seed: g.seed(),
             knobs: g.knobs().clone(),
             overlay: g.overlay().to_vec(),
         }),
-        players: sim.roster().players().cloned().collect(),
+        players_at_start: sim.roster().players().cloned().collect(),
     };
     LogWriter::create(path, &header)
 }
 
-/// Saves where everyone stands, makes every change durable, and puts each transaction beside
-/// the tick that made it.
 fn stop(sim: &mut Sim, ticks: &mut [TickStats]) -> io::Result<()> {
     sim.stop();
     if let Some(writer) = sim.take_writer() {

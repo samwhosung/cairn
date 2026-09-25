@@ -25,7 +25,8 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          own knobs or the --knobs FILE, with an --overlay FILE laid on them; the window shows
          what the game has each body do, and takes where the game puts the player. --world
          keeps the window's own world in FILE and starts from it, the players known by name; a
-         host keeps it by default where the server does (see server --help), and a window alone
+         host keeps it by default in the user's data directory, named after its game (on
+         macOS ~/Library/Application Support/cairn/worlds/NAME.sqlite), and a window alone
          keeps nothing unless told
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
@@ -120,7 +121,6 @@ pub struct Joining {
     pub how: Join,
     pub name: String,
     pub game: Option<GameChoice>,
-    /// The file the window's own server keeps its world in.
     pub world: Option<PathBuf>,
 }
 

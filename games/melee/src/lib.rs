@@ -22,7 +22,6 @@ game::knobs! {
 pub struct Melee;
 
 game::saved! {
-    /// What a fighter keeps from one visit to the next.
     pub struct Score {
         pub kills: u32,
         pub deaths: u32,

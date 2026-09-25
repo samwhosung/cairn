@@ -1,19 +1,16 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 
-use game::{Schema, Value};
+use game::{Schema, Tables, Value};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 
 use super::{Batch, Keeping, Kept, Place, Player};
 
-/// The layout of the world's own tables. A file of a later layout is refused.
-pub(super) const FORMAT: i64 = 1;
+const LAYOUT_VERSION: i64 = 1;
 const OWN: [&str; 3] = ["world", "player", "position"];
 const WAL_LIMIT_BYTES: i64 = 64 << 20;
 
-/// A world's file as the server that keeps it opened it: the connection, the lock that keeps
-/// any other server out, the game's table of its players, and what it held.
 pub struct Opened {
     pub path: PathBuf,
     pub(super) conn: Connection,
@@ -71,11 +68,11 @@ fn at(path: &Path) -> impl Fn(rusqlite::Error) -> String + '_ {
     move |e| format!("{}: {e}", path.display())
 }
 
-/// Opens the world at `path`, making it if there is none, for a server running `game` (its name
-/// and each kind's saved table) or none. Refuses a file another server keeps, one of another
-/// game or of a later layout, and one whose saved fields this build cannot read; a field or a
-/// kind added since the file was written is added to it.
-pub fn open(path: &Path, game: Option<(&str, &[Option<Schema>])>) -> Result<Opened, String> {
+/// Opens the world at `path`, making it if there is none, for a server running the game named
+/// with its tables, or none. Refuses a file another server keeps, one of another game or of a
+/// later layout, and one whose saved fields this build cannot read; a field of the players'
+/// table added since the file was written, or the table itself, is added to it.
+pub fn open(path: &Path, game: Option<(&str, &Tables)>) -> Result<Opened, String> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -99,11 +96,11 @@ pub fn open(path: &Path, game: Option<(&str, &[Option<Schema>])>) -> Result<Open
         .map_err(at(path))?;
     layout(&tx, path)?;
     let name = game.map(|g| g.0);
-    run_as(&tx, path, name)?;
+    claim_for_game(&tx, path, name)?;
     if let Some(table) = &table {
         columns(&tx, path, table, name.unwrap_or_default())?;
     }
-    strangers(&tx, path, table.as_ref(), name)?;
+    refuse_unknown_tables(&tx, path, table.as_ref(), name)?;
     tx.execute("UPDATE world SET value = value + 1 WHERE key = 'runs'", [])
         .map_err(at(path))?;
     tx.execute("UPDATE world SET value = NULL WHERE key = 'tick'", [])
@@ -138,14 +135,11 @@ fn lock(path: &Path) -> Result<File, String> {
     }
 }
 
-fn players_table(
-    path: &Path,
-    game: Option<(&str, &[Option<Schema>])>,
-) -> Result<Option<Table>, String> {
-    let Some((name, schemas)) = game else {
+fn players_table(path: &Path, game: Option<(&str, &Tables)>) -> Result<Option<Table>, String> {
+    let Some((name, tables)) = game else {
         return Ok(None);
     };
-    if let Some(other) = schemas.iter().skip(1).flatten().next() {
+    if let Some(other) = tables.others.first() {
         return Err(format!(
             "{}: {name} saves `{}` rows of a kind other than its players', and a world keeps only \
              its players' yet",
@@ -153,7 +147,7 @@ fn players_table(
             other.name
         ));
     }
-    let table = schemas.first().copied().flatten().map(Table::new);
+    let table = tables.players.map(Table::new);
     if let Some(t) = table.as_ref().filter(|t| OWN.contains(&t.name.as_str())) {
         return Err(format!(
             "{}: {name} saves its players in `{}`, a table of the world's own",
@@ -168,13 +162,13 @@ fn layout(tx: &Transaction<'_>, path: &Path) -> Result<(), String> {
     let format: i64 = tx
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(at(path))?;
-    if format > FORMAT {
+    if format > LAYOUT_VERSION {
         return Err(format!(
-            "{}: a world of layout {format}, from a later build; this one reads layout {FORMAT}",
+            "{}: a world of layout {format}, from a later build; this one reads layout {LAYOUT_VERSION}",
             path.display()
         ));
     }
-    if format == FORMAT {
+    if format == LAYOUT_VERSION {
         return Ok(());
     }
     if !tables(tx, path)?.is_empty() {
@@ -189,7 +183,7 @@ fn layout(tx: &Transaction<'_>, path: &Path) -> Result<(), String> {
          CREATE TABLE player (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE) STRICT;
          CREATE TABLE position (player INTEGER PRIMARY KEY, map INTEGER NOT NULL,
              x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, facing REAL NOT NULL) STRICT;
-         PRAGMA user_version = {FORMAT};"
+         PRAGMA user_version = {LAYOUT_VERSION};"
     ))
     .map_err(at(path))
 }
@@ -206,8 +200,7 @@ fn tables(tx: &Transaction<'_>, path: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// A world is its game's: one that ran a game is refused to a server running another or none.
-fn run_as(tx: &Transaction<'_>, path: &Path, game: Option<&str>) -> Result<(), String> {
+fn claim_for_game(tx: &Transaction<'_>, path: &Path, game: Option<&str>) -> Result<(), String> {
     let was: Option<String> = tx
         .query_row("SELECT value FROM world WHERE key = 'game'", [], |r| {
             r.get(0)
@@ -335,8 +328,7 @@ fn column(f: &game::Field, default: Value) -> Result<String, String> {
     ))
 }
 
-/// Refuses a table the world does not know: one of a later build, or of a kind the game dropped.
-fn strangers(
+fn refuse_unknown_tables(
     tx: &Transaction<'_>,
     path: &Path,
     table: Option<&Table>,
@@ -388,7 +380,7 @@ fn player(r: &rusqlite::Row<'_>, table: Option<&Table>) -> Result<Player, String
     let sql = |e: rusqlite::Error| e.to_string();
     let name: String = r.get(1).map_err(sql)?;
     let bad = |what: String| format!("player `{name}`: {what}");
-    let id = u32::try_from(r.get::<_, i64>(0).map_err(sql)?)
+    let file_id = u32::try_from(r.get::<_, i64>(0).map_err(sql)?)
         .map_err(|_| bad("its number is out of range".into()))?;
     let place = match r.get::<_, Option<i64>>(2).map_err(sql)? {
         Some(map) => {
@@ -418,7 +410,7 @@ fn player(r: &rusqlite::Row<'_>, table: Option<&Table>) -> Result<Player, String
         _ => None,
     };
     Ok(Player {
-        id,
+        file_id,
         name,
         place,
         saved,
@@ -441,15 +433,14 @@ fn sql(v: Value) -> rusqlite::types::Value {
     }
 }
 
-/// What one transaction wrote: rows, and the bytes of their values.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Wrote {
     pub rows: u32,
-    pub bytes: u32,
+    pub value_bytes: u32,
 }
 
 /// Writes `batch` in one transaction, durable once this returns, leaving out `skip` rows of the
-/// game's. The game's rows turn from bytes to columns here.
+/// game's.
 pub(super) fn write(
     conn: &mut Connection,
     table: Option<&Table>,
@@ -460,14 +451,14 @@ pub(super) fn write(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     {
         let mut s = tx.prepare_cached("INSERT INTO player (id, name) VALUES (?1, ?2)")?;
-        for (id, name) in &batch.joined {
+        for (id, name) in &batch.new_players {
             s.execute(params![id, name])?;
             wrote.rows += 1;
-            wrote.bytes += 8 + name.len() as u32;
+            wrote.value_bytes += 8 + name.len() as u32;
         }
         if let Some(t) = table {
             let mut s = tx.prepare_cached(&t.upsert)?;
-            for (id, bytes) in batch.rows.iter().skip(skip) {
+            for (id, bytes) in batch.game_rows.iter().skip(skip) {
                 let values = t.schema.values(bytes).ok_or_else(|| {
                     rusqlite::Error::ToSqlConversionFailure(
                         format!("player {id}: its saved fields do not read as `{}`", t.name).into(),
@@ -477,7 +468,7 @@ pub(super) fn write(
                     .chain(values.into_iter().map(sql));
                 s.execute(rusqlite::params_from_iter(all))?;
                 wrote.rows += 1;
-                wrote.bytes += 8 * (1 + t.schema.fields.len() as u32);
+                wrote.value_bytes += 8 * (1 + t.schema.fields.len() as u32);
             }
         }
         let mut s = tx.prepare_cached(
@@ -489,7 +480,7 @@ pub(super) fn write(
             let [x, y, z] = p.pos.map(f64::from);
             s.execute(params![id, p.map, x, y, z, f64::from(p.facing)])?;
             wrote.rows += 1;
-            wrote.bytes += 48;
+            wrote.value_bytes += 48;
         }
         tx.prepare_cached("UPDATE world SET value = ?1 WHERE key = 'tick'")?
             .execute([batch.tick])?;

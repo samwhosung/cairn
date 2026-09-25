@@ -15,10 +15,8 @@ pub use file::{Opened, open, scan};
 pub use read::read;
 pub use writer::{Commit, Writer};
 
-/// About once a minute, each player's position is saved if it moved; and always as it leaves.
 const POSITIONS_EVERY_MS: u32 = 60_000;
 
-/// Where a player stood, as the world's file keeps it: a map, a spot on it and a facing.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Place {
     pub map: u32,
@@ -59,17 +57,16 @@ pub enum Saving {
     #[default]
     Held,
     /// Each tick's results leave at once, and its changes are committed only once the next tick
-    /// that changes anything has let its results out, so some result out is never durable.
+    /// that saves anything has let its results out: a kill always loses a tick whose results are
+    /// out.
     Early,
     /// The first player's row handed over at or after this tick is never written.
     Drops(u32),
 }
 
-/// A player the world knows: its number in the file, its name, where it last stood as saved, and
-/// the game's saved fields of it, encoded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Player {
-    pub id: u32,
+    pub file_id: u32,
     pub name: String,
     pub place: Option<Place>,
     pub saved: Option<Vec<u8>>,
@@ -82,22 +79,19 @@ pub struct Kept {
     pub saved: Option<Vec<Value>>,
 }
 
-/// Every player's saved state, by name.
 pub type Keeping = BTreeMap<String, Kept>;
 
-/// What one tick hands the writer: the players new to the world, the game's rows of players that
-/// changed, and the places saved.
 #[derive(Clone, Debug, Default)]
 pub struct Batch {
     pub tick: u32,
-    pub joined: Vec<(u32, String)>,
-    pub rows: Vec<(u32, Vec<u8>)>,
+    pub new_players: Vec<(u32, String)>,
+    pub game_rows: Vec<(u32, Vec<u8>)>,
     pub places: Vec<(u32, Place)>,
 }
 
 impl Batch {
     pub fn rows(&self) -> usize {
-        self.joined.len() + self.rows.len() + self.places.len()
+        self.new_players.len() + self.game_rows.len() + self.places.len()
     }
 }
 
@@ -107,7 +101,6 @@ struct Known {
     here: bool,
 }
 
-/// The players the world knows by name, which body each has now, and what the tick saves.
 pub struct Roster {
     known: Vec<Known>,
     by_name: HashMap<String, usize>,
@@ -118,15 +111,15 @@ pub struct Roster {
     batch: Batch,
 }
 
-/// A join the roster admits, and where the player comes back to if it saved a place on this map.
 pub enum Admit {
     Refused,
-    At(Option<Spawn>),
+    AtSpawn,
+    Back(Spawn),
 }
 
 impl Roster {
     pub fn new(players: Vec<Player>, map: u32, tick_ms: u16) -> Self {
-        let next_id = players.iter().map(|p| p.id + 1).max().unwrap_or(0);
+        let next_id = players.iter().map(|p| p.file_id + 1).max().unwrap_or(0);
         let by_name = (0..)
             .zip(&players)
             .map(|(i, p)| (p.name.clone(), i))
@@ -153,19 +146,18 @@ impl Roster {
         self.known.iter().map(|k| &k.player)
     }
 
-    /// Admits a player named `name` unless one of that name is in the world.
     pub fn admit(&mut self, name: &str) -> Admit {
         let i = match self.by_name.get(name) {
             Some(&i) if self.known[i].here => return Admit::Refused,
             Some(&i) => i,
             None => {
-                let id = self.next_id;
+                let file_id = self.next_id;
                 self.next_id += 1;
-                self.batch.joined.push((id, name.to_owned()));
+                self.batch.new_players.push((file_id, name.to_owned()));
                 self.by_name.insert(name.to_owned(), self.known.len());
                 self.known.push(Known {
                     player: Player {
-                        id,
+                        file_id,
                         name: name.to_owned(),
                         place: None,
                         saved: None,
@@ -177,18 +169,18 @@ impl Roster {
             }
         };
         self.known[i].here = true;
-        let back = self.known[i].player.place.filter(|p| p.map == self.map);
-        Admit::At(back.map(|p| Spawn {
-            pos: p.pos,
-            facing: p.facing,
-        }))
+        match self.known[i].player.place.filter(|p| p.map == self.map) {
+            Some(p) => Admit::Back(Spawn {
+                pos: p.pos,
+                facing: p.facing,
+            }),
+            None => Admit::AtSpawn,
+        }
     }
 
-    /// Gives the player named `name` body `n`; what it saved, if anything, goes to `restored`.
-    pub fn bind(&mut self, n: u32, name: &str, restored: &mut Vec<(u32, Vec<u8>)>) {
-        let Some(&i) = self.by_name.get(name) else {
-            return;
-        };
+    /// Gives the player named `name` body `n`, and returns what it saved.
+    pub fn bind(&mut self, n: u32, name: &str) -> Option<Vec<u8>> {
+        let &i = self.by_name.get(name)?;
         if let Some(old) = self.known[i].body.replace(n) {
             self.bodies[old as usize] = None;
         }
@@ -196,12 +188,9 @@ impl Roster {
             self.bodies.resize(n as usize + 1, None);
         }
         self.bodies[n as usize] = Some(i);
-        if let Some(saved) = &self.known[i].player.saved {
-            restored.push((n, saved.clone()));
-        }
+        self.known[i].player.saved.clone()
     }
 
-    /// Body `n` left the world standing on `body`: its place is saved.
     pub fn leave(&mut self, n: u32, body: &Body) {
         let Some(i) = self.bodies.get(n as usize).copied().flatten() else {
             return;
@@ -210,8 +199,7 @@ impl Roster {
         self.place(i, Place::of(self.map, body));
     }
 
-    /// The game's changed rows of players, by body.
-    pub fn take(&mut self, record: &Record) {
+    pub fn take_player_rows(&mut self, record: &Record) {
         for (id, saved) in &record.saved {
             if !id.is_player() {
                 continue;
@@ -223,14 +211,13 @@ impl Roster {
                 continue;
             }
             self.batch
-                .rows
-                .push((self.known[i].player.id, bytes.clone()));
+                .game_rows
+                .push((self.known[i].player.file_id, bytes.clone()));
             self.known[i].player.saved = Some(bytes.clone());
         }
     }
 
-    /// Saves where each body due this tick stands, if it moved since it was last saved.
-    pub fn due(&mut self, tick: u32, bodies: &[Body]) {
+    pub fn save_due_places(&mut self, tick: u32, bodies: &[Body]) {
         let first = (tick % self.every) as usize;
         for n in (first..bodies.len()).step_by(self.every as usize) {
             if let (true, Some(&Some(i))) = (bodies[n].present, self.bodies.get(n)) {
@@ -239,8 +226,7 @@ impl Roster {
         }
     }
 
-    /// Saves where every body in the world stands, as the server stops.
-    pub fn all(&mut self, bodies: &[Body]) {
+    pub fn save_every_place(&mut self, bodies: &[Body]) {
         for (n, body) in bodies.iter().enumerate() {
             if let (true, Some(&Some(i))) = (body.present, self.bodies.get(n)) {
                 self.place(i, Place::of(self.map, body));
@@ -252,20 +238,16 @@ impl Roster {
         let player = &mut self.known[i].player;
         if player.place != Some(at) {
             player.place = Some(at);
-            self.batch.places.push((player.id, at));
+            self.batch.places.push((player.file_id, at));
         }
     }
 
-    /// What the tick saves, taken for the writer.
-    pub fn batch(&mut self, tick: u32) -> Batch {
+    pub fn take_batch(&mut self, tick: u32) -> Batch {
         let mut batch = std::mem::take(&mut self.batch);
         batch.tick = tick;
         batch
     }
 
-    /// Every player's saved state as the world would have the file hold it: where it last stood
-    /// as saved, and the game's saved fields of it from `scan`, every row of the world's; one not
-    /// in the world this run keeps what it came with.
     pub fn keeping(&self, schema: Option<&Schema>, scan: &BTreeMap<game::Id, Vec<u8>>) -> Keeping {
         self.known
             .iter()

@@ -23,7 +23,6 @@ impl Sql {
     }
 }
 
-/// A column of a saved table: its name, what it holds, and whether it may hold nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Field {
     pub name: &'static str,
@@ -165,6 +164,14 @@ impl Columns for () {
     }
 }
 
+/// The tables a game's kinds save into.
+#[derive(Clone, Debug, Default)]
+pub struct Tables {
+    pub players: Option<Schema>,
+    /// Those of its other kinds that save anything.
+    pub others: Vec<Schema>,
+}
+
 /// A saved table whatever its row's type: the server keeps a game's saved fields as bytes and
 /// turns them into columns through this.
 #[derive(Clone, Copy, Debug)]
@@ -193,7 +200,8 @@ impl Schema {
         (self.values)(bytes)
     }
 
-    /// The bytes of a row whose columns hold `values`; `None` when a field cannot hold its value.
+    /// The bytes of a row whose columns hold `values`; `None` unless they are one value a field,
+    /// each one its field can hold.
     pub fn bytes(&self, values: &[Value]) -> Option<Vec<u8>> {
         (self.bytes)(values)
     }

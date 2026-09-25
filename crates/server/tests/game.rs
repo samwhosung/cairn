@@ -148,7 +148,6 @@ impl Client {
     }
 }
 
-/// A world file of its own for a test, none there yet.
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("worlds");
     std::fs::create_dir_all(&dir).expect("a scratch directory");

@@ -121,8 +121,7 @@ pub struct Replayed {
     pub hash: u64,
     /// The first tick whose world hash differs from the recorded one.
     pub first_mismatch: Option<u32>,
-    /// The ticks that saved anything.
-    pub saving: Vec<u32>,
+    pub ticks_that_saved: Vec<u32>,
     /// Every player's saved state after [`Replay::keeping_at`].
     pub kept: Option<Keeping>,
     /// Every refused claim or teleport, when the replay was asked to keep them.
@@ -177,7 +176,7 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
         game,
         ..Config::default()
     };
-    let players = std::mem::take(&mut log.header.players);
+    let players = std::mem::take(&mut log.header.players_at_start);
     let mut stepper = Stepper::starting(&cfg, players, how.order)?;
     if how.keep_refusals {
         stepper.keep_refusals();
@@ -200,7 +199,7 @@ pub fn replay(path: &Path, how: &Replay<'_>) -> io::Result<Replayed> {
         }
         let st = stepper.tick(&logged.inputs);
         if st.saved_rows > 0 {
-            out.saving.push(st.tick);
+            out.ticks_that_saved.push(st.tick);
         }
         if how.keeping_at == Some(st.tick) {
             out.kept = Some(stepper.keeping());

@@ -28,13 +28,12 @@ fn on_wal(_: &Wal, pages: c_int) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// One tick's transaction as the writer saw it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Commit {
     pub tick: u32,
     pub rows: u32,
-    /// The bytes of the values written.
-    pub bytes: u32,
+    /// The values written, at eight bytes a number and a name's length.
+    pub value_bytes: u32,
     /// The bytes the write-ahead log took: whole pages.
     pub wal_bytes: u32,
     /// From the tick handing its changes over to their being durable.
@@ -43,8 +42,13 @@ pub struct Commit {
     pub commit_ns: u64,
 }
 
+struct Handed {
+    batch: Batch,
+    at: Instant,
+}
+
 enum Job {
-    Save(Batch, Instant),
+    Save(Handed),
     Release(u32, Vec<Held>),
 }
 
@@ -57,15 +61,10 @@ struct State {
 
 type Shared = Arc<(Mutex<State>, Condvar)>;
 
-/// A tick's changes, and when the tick handed them over.
-type Handed = (Batch, Instant);
-
 fn state(shared: &Shared) -> MutexGuard<'_, State> {
     shared.0.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The thread that makes each tick's changes durable in the world's file, and then lets that
-/// tick's results out; a second thread checkpoints the file.
 pub struct Writer {
     jobs: Option<mpsc::Sender<Job>>,
     shared: Shared,
@@ -94,10 +93,10 @@ impl Writer {
         &self.path
     }
 
-    /// Hands over what a tick saves; a tick that saves nothing needs no transaction.
     pub fn save(&self, batch: Batch) {
         if batch.rows() > 0 {
-            self.send(Job::Save(batch, Instant::now()));
+            let at = Instant::now();
+            self.send(Job::Save(Handed { batch, at }));
         }
     }
 
@@ -112,8 +111,6 @@ impl Writer {
         }
     }
 
-    /// Waits until the results of `tick` and every tick before it are out; returns how long it
-    /// waited, or why they never will be.
     pub fn wait_released(&self, tick: u32) -> Result<Duration, String> {
         let started = Instant::now();
         let mut s = state(&self.shared);
@@ -132,13 +129,11 @@ impl Writer {
         }
     }
 
-    /// Why the writer stopped, if it did.
     pub fn failed(&self) -> Option<String> {
         state(&self.shared).failed.clone()
     }
 
-    /// The transactions made since the last call.
-    pub fn commits(&self) -> Vec<Commit> {
+    pub fn take_commits(&self) -> Vec<Commit> {
         std::mem::take(&mut state(&self.shared).commits)
     }
 
@@ -174,10 +169,9 @@ fn fail(shared: &Shared, why: String) {
     shared.1.notify_all();
 }
 
-/// Stops whoever waits on the writer when its thread panics.
-struct Watch<'a>(&'a Shared);
+struct FailOnPanic<'a>(&'a Shared);
 
-impl Drop for Watch<'_> {
+impl Drop for FailOnPanic<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
             fail(self.0, "the writer thread panicked".into());
@@ -186,7 +180,7 @@ impl Drop for Watch<'_> {
 }
 
 fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shared: &Shared) {
-    let _watch = Watch(shared);
+    let _fail_on_panic = FailOnPanic(shared);
     let path = opened.path.clone();
     let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
     opened.conn.wal_hook(Some(on_wal));
@@ -209,14 +203,18 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     };
     let (mut out, mut next): (Option<Handed>, Option<Handed>) = (None, None);
     let (mut dropped, mut made, mut pages) = (false, 0u32, 0);
-    let mut commit = |conn: &mut Connection, batch: &Batch, handed: Instant| {
+    let mut commit = |conn: &mut Connection, Handed { batch, at: handed }: Handed| {
         let skip = match saving {
-            Saving::Drops(from) if !dropped && batch.tick >= from && !batch.rows.is_empty() => 1,
+            Saving::Drops(from)
+                if !dropped && batch.tick >= from && !batch.game_rows.is_empty() =>
+            {
+                1
+            }
             _ => 0,
         };
         dropped |= skip > 0;
         let started = Instant::now();
-        let wrote = file::write(conn, opened.table.as_ref(), batch, skip).map_err(at)?;
+        let wrote = file::write(conn, opened.table.as_ref(), &batch, skip).map_err(at)?;
         let now = WAL_PAGES.get();
         let taken = if now >= pages { now - pages } else { now };
         pages = now;
@@ -227,7 +225,7 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
         state(shared).commits.push(Commit {
             tick: batch.tick,
             rows: wrote.rows,
-            bytes: wrote.bytes,
+            value_bytes: wrote.value_bytes,
             wal_bytes: taken.unsigned_abs() * WAL_PAGE_BYTES,
             durable_ns: handed.elapsed().as_nanos() as u64,
             commit_ns: started.elapsed().as_nanos() as u64,
@@ -236,22 +234,20 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     };
     while let Ok(job) = jobs.recv() {
         let done = match job {
-            Job::Save(batch, handed) if saving == Saving::Early => {
-                next = Some((batch, handed));
+            Job::Save(handed) if saving == Saving::Early => {
+                next = Some(handed);
                 Ok(())
             }
-            Job::Save(batch, handed) => commit(&mut opened.conn, &batch, handed),
+            Job::Save(handed) => commit(&mut opened.conn, handed),
             Job::Release(tick, held) => {
                 for frame in held {
                     frame.send();
                 }
                 state(shared).released = Some(tick);
                 shared.1.notify_all();
-                if next.as_ref().is_some_and(|(b, _)| b.tick == tick) {
+                if next.as_ref().is_some_and(|h| h.batch.tick == tick) {
                     let was = std::mem::replace(&mut out, next.take());
-                    was.map_or(Ok(()), |(batch, handed)| {
-                        commit(&mut opened.conn, &batch, handed)
-                    })
+                    was.map_or(Ok(()), |handed| commit(&mut opened.conn, handed))
                 } else {
                     Ok(())
                 }
@@ -261,8 +257,8 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
             return fail(shared, why);
         }
     }
-    for (batch, handed) in [out.take(), next.take()].into_iter().flatten() {
-        if let Err(why) = commit(&mut opened.conn, &batch, handed) {
+    for handed in [out.take(), next.take()].into_iter().flatten() {
+        if let Err(why) = commit(&mut opened.conn, handed) {
             return fail(shared, why);
         }
     }
@@ -276,7 +272,6 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     }
 }
 
-/// Checkpoints on a connection of its own each time it is kicked, never waiting on a reader.
 fn checkpoint(path: &Path, kicked: &mpsc::Receiver<()>) -> Result<(), String> {
     let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
     let conn = Connection::open(path).map_err(at)?;

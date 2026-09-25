@@ -75,7 +75,6 @@ impl Sim {
         self
     }
 
-    /// Starts from the players `roster` knows, and saves what each tick changes through `writer`.
     pub fn with_roster(mut self, roster: Roster, writer: Option<Writer>) -> Self {
         self.roster = roster;
         self.writer = writer;
@@ -110,15 +109,12 @@ impl Sim {
         self.writer.take()
     }
 
-    /// Every player's saved state as the file should hold it after this tick: a full scan of
-    /// the game's rows, and where each player last stood as saved.
     pub fn keeping(&self) -> Keeping {
-        let schema = self.game.as_ref().and_then(|g| g.schemas()[0]);
+        let schema = self.game.as_ref().and_then(|g| g.tables().players);
         let scan = self.game.as_ref().map(|g| g.saved()).unwrap_or_default();
         self.roster.keeping(schema.as_ref(), &scan)
     }
 
-    /// Lets the last tick's results out once its changes are durable.
     pub fn release(&mut self) {
         if let Some(writer) = &self.writer {
             let tick = self.world.tick().wrapping_sub(1);
@@ -126,10 +122,9 @@ impl Sim {
         }
     }
 
-    /// Saves where every player in the world stands, as the server stops.
     pub fn stop(&mut self) {
-        self.roster.all(self.world.before());
-        let batch = self.roster.batch(self.world.tick());
+        self.roster.save_every_place(self.world.before());
+        let batch = self.roster.take_batch(self.world.tick());
         if let Some(writer) = &self.writer {
             writer.save(batch);
         }
@@ -180,14 +175,16 @@ impl Sim {
         };
         let mut clock = Instant::now();
         let (mut joined, mut restored) = (Vec::new(), Vec::new());
-        let (admitted, refused) = phases[ADMIT].time(|| world.admit(inputs, |n| roster.admit(n)));
+        let admission = phases[ADMIT].time(|| world.admit(inputs, |n| roster.admit(n)));
         if let Batches::Send(shared) = batches {
-            for conn in refused {
+            for conn in admission.refused {
                 drop(shared.take_outbox(conn));
             }
         }
-        for admitted in admitted {
-            roster.bind(admitted.id, world.name(admitted.id), &mut restored);
+        for admitted in admission.admitted {
+            if let Some(saved) = roster.bind(admitted.id, world.name(admitted.id)) {
+                restored.push((admitted.id, saved));
+            }
             let outbox = match batches {
                 Batches::Send(shared) => shared.take_outbox(admitted.conn),
                 Batches::Skip => None,
@@ -249,7 +246,7 @@ impl Sim {
             let playing = lap_ns(&mut clock);
             phases[RECORD].time(|| {
                 world.order(game.orders());
-                roster.take(game.record());
+                roster.take_player_rows(game.record());
             });
             let Stages {
                 rules,
@@ -265,8 +262,8 @@ impl Sim {
             }
         }
         let batch = phases[RECORD].time(|| {
-            roster.due(world.tick(), world.stepped());
-            roster.batch(world.tick())
+            roster.save_due_places(world.tick(), world.stepped());
+            roster.take_batch(world.tick())
         });
         st.saved_rows = batch.rows() as u32;
         if let Some(writer) = writer {
@@ -289,7 +286,7 @@ impl Sim {
                 relays,
                 clients,
                 game: game.as_deref(),
-                holding: writer.is_some(),
+                hold_until_durable: writer.is_some(),
             };
             let phase = &phases[REPLICATE];
             observers

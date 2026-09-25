@@ -29,8 +29,8 @@ pub fn read(path: &Path, statements: &[String], timeout: Duration) -> Result<Str
         let _ = watch.join();
         result.map_err(|e| match e.sqlite_error_code() {
             Some(ErrorCode::OperationInterrupted) => format!(
-                "{sql}: stopped after {:.1} s, the longest a read may take here",
-                timeout.as_secs_f64()
+                "{sql}: stopped after {} ms, the longest a read may take here",
+                timeout.as_millis()
             ),
             _ => format!("{sql}: {e}"),
         })?;

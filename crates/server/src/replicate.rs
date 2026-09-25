@@ -175,7 +175,6 @@ pub struct Observer {
     fresh: bool,
     size_hint: usize,
     pub outbox: Option<Outbox>,
-    /// This tick's batch, when it waits on the tick's changes being durable.
     pub held: Option<Held>,
 }
 
@@ -255,8 +254,7 @@ pub struct Scene<'a> {
     pub relays: &'a Relays,
     pub clients: &'a Shared,
     pub game: Option<&'a dyn Hosted>,
-    /// Whether batches wait on their tick's changes being durable.
-    pub holding: bool,
+    pub hold_until_durable: bool,
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -329,7 +327,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     built.bytes = out.len() as u64;
     o.size_hint = out.len();
     if let Some(outbox) = &o.outbox {
-        if scene.holding {
+        if scene.hold_until_durable {
             o.held = Some(outbox.hold(out));
         } else {
             outbox.send(out);

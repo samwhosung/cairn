@@ -9,7 +9,7 @@ use crate::record::Record;
 use crate::show::{BodyShow, Poses, Shows};
 use crate::space::Space;
 use crate::table::{Pair, Rows};
-use crate::{Anim, Bytes, Game, Id, Kind, Kinds, Letter, Schema, Spot, Table, Tick, World, canon};
+use crate::{Anim, Bytes, Game, Id, Kind, Kinds, Letter, Spot, Table, Tables, Tick, World, canon};
 
 pub(crate) const NEVER: Tick = Tick::MAX;
 const ROUNDS: u8 = 2;
@@ -55,7 +55,7 @@ pub struct Engine<G: Game> {
     delivery: Delivery,
     tick: Tick,
     kinds: Vec<TypeId>,
-    schemas: Vec<Option<Schema>>,
+    tables: Tables,
     prevs: Vec<Box<dyn Any + Send + Sync>>,
     lives: Vec<Box<dyn Rows<G>>>,
     next_n: Vec<u32>,
@@ -107,11 +107,10 @@ impl<G: Game> Engine<G> {
             u16::try_from(declared.tables.len()).is_ok(),
             "too many kinds"
         );
-        let (mut kinds, mut schemas) = (Vec::new(), Vec::new());
-        let (mut prevs, mut lives) = (Vec::new(), Vec::new());
+        let tables = tables_of(&declared);
+        let (mut kinds, mut prevs, mut lives) = (Vec::new(), Vec::new(), Vec::new());
         for pair in declared.tables {
             kinds.push(pair.kind);
-            schemas.push(pair.schema);
             prevs.push(pair.prev);
             lives.push(pair.live);
         }
@@ -123,7 +122,7 @@ impl<G: Game> Engine<G> {
             tick: 0,
             next_n: vec![0; kinds.len()],
             kinds,
-            schemas,
+            tables,
             prevs,
             lives,
             space: Space::default(),
@@ -230,13 +229,22 @@ impl<G: Game> Engine<G> {
     }
 }
 
-/// Each kind's saved table as `G` declares its kinds, players first.
-pub(crate) fn schemas<G: Game>() -> Vec<Option<Schema>> {
+pub(crate) fn tables<G: Game>() -> Tables {
     let mut declared = Kinds {
         tables: vec![Pair::of::<G::Player>()],
     };
     G::kinds(&mut declared);
-    declared.tables.iter().map(|t| t.schema).collect()
+    tables_of(&declared)
+}
+
+fn tables_of<G: Game>(declared: &Kinds<G>) -> Tables {
+    Tables {
+        players: declared.tables[0].schema,
+        others: declared.tables[1..]
+            .iter()
+            .filter_map(|t| t.schema)
+            .collect(),
+    }
 }
 
 fn reverse_each_run<T: PartialOrd, L>(to: &[T], letters: &mut [L]) {
@@ -358,8 +366,8 @@ impl<G: Game> Hosted for Engine<G> {
         self.poses.held(n)
     }
 
-    fn schemas(&self) -> &[Option<Schema>] {
-        &self.schemas
+    fn tables(&self) -> &Tables {
+        &self.tables
     }
 
     fn shown(&self, n: u32) -> Option<&[u8]> {

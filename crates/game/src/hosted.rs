@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{Anim, Engine, Game, Id, Knobs, KnobsFile, Line, Record, Schema, Shows, Spot, Tick};
+use crate::{Anim, Engine, Game, Id, Knobs, KnobsFile, Line, Record, Shows, Spot, Tables, Tick};
 
 /// The order each row applies a round's letters in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,8 +68,7 @@ pub trait Hosted: Send + Sync {
     /// The pose a player's body holds now.
     fn held(&self, n: u32) -> Option<Anim>;
 
-    /// Each kind's saved table, players first; `None` for a kind that saves nothing.
-    fn schemas(&self) -> &[Option<Schema>];
+    fn tables(&self) -> &Tables;
 
     /// A player's sent fields, encoded.
     fn shown(&self, n: u32) -> Option<&[u8]>;
@@ -95,7 +94,7 @@ pub struct Loaded {
     knobs: KnobsFile,
     over: Vec<Line>,
     seed: u64,
-    schemas: Vec<Option<Schema>>,
+    tables: Tables,
     start: Arc<Start>,
 }
 
@@ -109,7 +108,6 @@ impl Loaded {
         &self.knobs
     }
 
-    /// The lines laid on its knobs.
     pub fn overlay(&self) -> &[Line] {
         &self.over
     }
@@ -118,9 +116,8 @@ impl Loaded {
         self.seed
     }
 
-    /// Each kind's saved table, players first; `None` for a kind that saves nothing.
-    pub fn schemas(&self) -> &[Option<Schema>] {
-        &self.schemas
+    pub fn tables(&self) -> &Tables {
+        &self.tables
     }
 
     pub fn counts(&self) -> &'static [&'static str] {
@@ -151,7 +148,7 @@ pub fn load<G: Game>(base: Option<&KnobsFile>, over: &[Line], seed: u64) -> Resu
         knobs: base,
         over: over.to_vec(),
         seed,
-        schemas: crate::engine::schemas::<G>(),
+        tables: crate::engine::tables::<G>(),
         start: Arc::new(move |tick_ms, delivery| {
             Box::new(Engine::<G>::new(knobs.clone(), seed, tick_ms, delivery))
         }),

@@ -7,8 +7,7 @@ use protocol::{
 use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 
 const QUICK: &str = "swing_ms = 50\ndamage_min = 60\ndamage_max = 60\nrespawn_s = 1\n";
-/// Melee's action that swings.
-const SWING: u32 = 1;
+const MELEE_SWING: u32 = 1;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("worlds");
@@ -27,7 +26,6 @@ fn melee() -> Loaded {
     catalog::load("melee", None, &over.lines, 1).expect("melee")
 }
 
-/// Two spawns 3 yd apart, facing each other along x.
 fn config(world: Option<PathBuf>) -> Config {
     Config {
         tick_threads: 2,
@@ -47,12 +45,17 @@ fn config(world: Option<PathBuf>) -> Config {
     }
 }
 
+#[derive(Default)]
+struct Told {
+    welcome: Option<Welcome>,
+    last_seq: u32,
+}
+
 struct Run {
     stepper: Stepper,
     links: Vec<Link>,
     nth: Vec<u32>,
-    /// Each connection's welcome, and the last correction or placement it was told of.
-    told: Vec<(Option<Welcome>, u32)>,
+    told: Vec<Told>,
 }
 
 impl Run {
@@ -72,12 +75,12 @@ impl Run {
         for conn in 0..self.links.len() {
             while let Some(frame) = self.links[conn].next_frame() {
                 match ServerMessage::read(&frame[LEN_BYTES..]) {
-                    Ok(ServerMessage::Welcome(w)) => self.told[conn].0 = Some(w),
+                    Ok(ServerMessage::Welcome(w)) => self.told[conn].welcome = Some(w),
                     Ok(ServerMessage::Batch(batch)) => {
                         for record in batch.flatten() {
                             if let Record::Place { seq, .. } | Record::Correct { seq, .. } = record
                             {
-                                self.told[conn].1 = seq;
+                                self.told[conn].last_seq = seq;
                             }
                         }
                     }
@@ -98,12 +101,11 @@ impl Run {
         }
     }
 
-    /// Joins as `name` and returns the connection and its welcome.
     fn join(&mut self, name: &str) -> (u32, Option<Welcome>) {
         let conn = self.links.len() as u32;
         self.links.push(self.stepper.connect(conn));
         self.nth.push(0);
-        self.told.push((None, 0));
+        self.told.push(Told::default());
         let hello = Hello {
             version: VERSION,
             name: name.into(),
@@ -111,16 +113,16 @@ impl Run {
         };
         let join = self.input(conn, Input::Join(hello));
         self.tick(&[join]);
-        (conn, self.told[conn as usize].0)
+        (conn, self.told[conn as usize].welcome)
     }
 
     fn body(&self, conn: u32) -> Option<game::Spot> {
-        self.stepper.body(self.told[conn as usize].0?.id)
+        self.stepper.body(self.told[conn as usize].welcome?.id)
     }
 
     fn swing(&mut self, conn: u32, ticks: u32) {
         for _ in 0..ticks {
-            let swing = self.input(conn, Input::Action(SWING));
+            let swing = self.input(conn, Input::Action(MELEE_SWING));
             self.tick(&[swing]);
         }
     }
@@ -131,7 +133,6 @@ impl Run {
         }
     }
 
-    /// A walk of `yd` along y from where the body stands, over a second, as a client claims it.
     fn walk(&mut self, conn: u32, yd: f32) -> [f32; 3] {
         let i = conn as usize;
         let body = self.body(conn).expect("in the world");
@@ -143,7 +144,7 @@ impl Run {
             facing: body.facing,
             ..Movement::default()
         };
-        let ack = self.told[i].1;
+        let ack = self.told[i].last_seq;
         let claim = self.input(conn, Input::Claim(Claim { ack, movement }));
         self.tick(&[claim]);
         to

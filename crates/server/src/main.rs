@@ -13,7 +13,7 @@ use server::{
 
 const USAGE: &str = "\
 usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unchecked]
-              [--world FILE | --unsaved] [--record FILE]
+              [--world FILE | --unsaved] [--record FILE] [--results-early]
               [--players N --arrival S --settle S --measure S --grace S]
               [--game NAME [--knobs FILE] [--overlay FILE] [--seed N]] [--label TEXT]
          serve a world on 127.0.0.1:P (7777 by default). With --players, once N players
@@ -32,7 +32,7 @@ usage: server [--port P] [--threads N] [--io-threads N] [--spawns FILE] [--unche
          and world hash to FILE. --game runs a game's rules (melee) on its own knobs, or on
          the --knobs FILE, with an --overlay FILE laid on them; --seed seeds its rolls.
          --results-early, a control, lets a tick's results out before its changes are
-         durable, and commits them only with the next tick's.
+         durable, and commits them only once the next tick that saves anything is out.
        server read [--world FILE | --game NAME] [--timeout S] SQL...
          run each SQL statement on a world's file without writing to it, each a read of
          its own given up after S seconds (5), while its server runs; print what each
