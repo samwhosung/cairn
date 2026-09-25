@@ -40,6 +40,7 @@ game::knobs! {
 impl Game for Embers {
     const NAME: &'static str = "embers";
     const KNOBS: &'static str = "sparks = 3\nlife = 4\n";
+    const COUNTS: &'static [&'static str] = &["ember steps"];
     type Knobs = Knobs;
     type Msg = Msg;
     type Player = Ember;
@@ -257,7 +258,10 @@ fn a_row_with_nothing_due_and_no_letter_is_not_stepped() {
 fn a_game_loads_on_its_own_knobs_and_an_overlay_names_its_faults() {
     let over = game::lines("life = 9\n", "over.knobs").expect("lines");
     let loaded = game::load::<Embers>(None, &over, 1).expect("loads");
-    assert_eq!(loaded.name(), "embers");
+    assert_eq!(
+        (loaded.name(), loaded.counts()),
+        ("embers", &["ember steps"][..])
+    );
     let bad = game::lines("\nheat = 9\n", "bad.knobs").expect("lines");
     let fault = game::load::<Embers>(None, &bad, 1).expect_err("an unknown key");
     assert_eq!(fault, "bad.knobs:2: `heat` is not a knob of this game");

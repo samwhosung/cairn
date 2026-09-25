@@ -1,6 +1,7 @@
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use crate::hosted::{BodyOrder, Delivery, Hosted, Took, Turn};
 use crate::out::{ACT, Out, ROUND, Spawned};
@@ -36,10 +37,11 @@ impl Clock {
         out
     }
 
-    fn took(&self) -> Took {
+    fn took(&self, wall_ns: u64) -> Took {
         Took {
             cpu_ns: self.cpu_ns.load(Ordering::Relaxed),
             largest_ns: self.largest_ns.load(Ordering::Relaxed),
+            wall_ns,
         }
     }
 }
@@ -78,6 +80,11 @@ impl<G: Game> Gathered<G> {
             self.spawns.append(&mut out.spawns);
             self.orders.append(&mut out.orders);
             for (what, by) in out.counts.drain(..) {
+                debug_assert!(
+                    G::COUNTS.contains(&what),
+                    "{} counts `{what}` undeclared",
+                    G::NAME
+                );
                 *counts.entry(what).or_default() += by;
             }
         }
@@ -117,7 +124,7 @@ impl<G: Game> Engine<G> {
             record: Record::default(),
             shown: Vec::new(),
             orders: Vec::new(),
-            counts: BTreeMap::new(),
+            counts: G::COUNTS.iter().map(|&what| (what, 0)).collect(),
             took: [Took::default(); 3],
         }
     }
@@ -207,6 +214,7 @@ impl<G: Game> Hosted for Engine<G> {
 
     fn tick(&mut self, turn: &Turn<'_>) {
         let clocks = [(); 3].map(|()| Clock::new(turn.cpu_ns));
+        let mut walls = [Instant::now(); 4];
         self.tick = turn.tick;
         self.record.open(turn.tick);
         clocks[0].time(|| {
@@ -248,6 +256,7 @@ impl<G: Game> Hosted for Engine<G> {
         for (k, live) in self.lives.iter_mut().enumerate() {
             got.take(live.step(k as u16, &world, &clocks[0]), &mut self.counts);
         }
+        walls[1] = Instant::now();
         for round in 0..ROUNDS {
             if got.mail.is_empty() {
                 break;
@@ -273,6 +282,7 @@ impl<G: Game> Hosted for Engine<G> {
             }
         }
         self.carry = std::mem::take(&mut got.mail);
+        walls[2] = Instant::now();
         for (k, live) in self.lives.iter_mut().enumerate() {
             live.finish(
                 self.prevs[k].as_mut(),
@@ -296,7 +306,12 @@ impl<G: Game> Hosted for Engine<G> {
             }
         });
         self.settle_orders(got.orders);
-        self.took = clocks.map(|c| c.took());
+        walls[3] = Instant::now();
+        let mut stage = 0;
+        self.took = clocks.map(|c| {
+            stage += 1;
+            c.took(walls[stage].duration_since(walls[stage - 1]).as_nanos() as u64)
+        });
     }
 
     fn orders(&self) -> &[(u32, BodyOrder)] {

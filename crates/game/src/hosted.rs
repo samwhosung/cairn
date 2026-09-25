@@ -34,11 +34,12 @@ pub struct Turn<'a> {
     pub cpu_ns: fn() -> u64,
 }
 
-/// CPU a stage of the tick took: in all, and in the largest task.
+/// What a stage of the tick took: its CPU in all and in its largest task, and its wall time.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Took {
     pub cpu_ns: u64,
     pub largest_ns: u64,
+    pub wall_ns: u64,
 }
 
 /// A game running inside the server, whatever the game.
@@ -73,12 +74,18 @@ type Start = dyn Fn(u32, Delivery) -> Box<dyn Hosted> + Send + Sync;
 #[derive(Clone)]
 pub struct Loaded {
     name: &'static str,
+    counts: &'static [&'static str],
     start: Arc<Start>,
 }
 
 impl Loaded {
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// What its rules count.
+    pub fn counts(&self) -> &'static [&'static str] {
+        self.counts
     }
 
     pub fn start(&self, tick_ms: u32, delivery: Delivery) -> Box<dyn Hosted> {
@@ -107,6 +114,7 @@ pub fn load<G: Game>(
     };
     Ok(Loaded {
         name: G::NAME,
+        counts: G::COUNTS,
         start: Arc::new(move |tick_ms, delivery| {
             Box::new(Engine::<G>::new(knobs.clone(), seed, tick_ms, delivery))
         }),

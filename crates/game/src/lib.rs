@@ -60,6 +60,8 @@ pub trait Game: Sized + Send + Sync + 'static {
     const NAME: &'static str;
     /// The knobs file the game runs on unless given another; it sets every key.
     const KNOBS: &'static str;
+    /// What its rules count with [`Out::count`], each reported even while it stands at 0.
+    const COUNTS: &'static [&'static str] = &[];
     type Knobs: Knobs;
     type Msg: Clone + Ord + Hash + Debug + Send + Sync + 'static;
     type Player: Kind<Self>;
