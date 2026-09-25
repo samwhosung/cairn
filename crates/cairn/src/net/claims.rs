@@ -1,16 +1,16 @@
-//! The player's own movement, claimed to the server as the client's cadence says, and the
-//! corrections the server answers a refused claim with.
+//! The player's own movement, claimed to the server as the client's cadence says, the teleports
+//! it asks for, and the corrections the server answers a refused claim or teleport with.
 
 use std::f32::consts::TAU;
 use std::time::Duration;
 
 use bevy::math::ops;
 use bevy::prelude::*;
-use protocol::{Cadence, Claim, ClientMessage, Jump, Movement, flags};
+use protocol::{Cadence, Claim, ClientMessage, Jump, Movement, Why, flags};
 use world::coords::{bevy_to_wow, wow_to_bevy};
 
 use super::Net;
-use crate::player::{Mode, Player};
+use crate::player::{Mode, Player, Teleported};
 
 pub struct Claims {
     cadence: Cadence,
@@ -19,7 +19,11 @@ pub struct Claims {
     arc_began: Option<f32>,
     pub corrections: u32,
     #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
+    pub told: Option<Why>,
+    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
     pub sent: u32,
+    #[cfg_attr(not(test), allow(dead_code, reason = "the scenarios read it"))]
+    pub teleports: u32,
 }
 
 impl Claims {
@@ -29,20 +33,25 @@ impl Claims {
             ack: 0,
             arc_began: None,
             corrections: 0,
+            told: None,
             sent: 0,
+            teleports: 0,
         }
     }
 
-    pub fn correct(&mut self, player: &mut Player, seq: u32, movement: &Movement) {
+    pub fn correct(&mut self, player: &mut Player, seq: u32, why: Why, movement: &Movement) {
         player.pos = wow_to_bevy(movement.pos);
         player.face_yaw = movement.facing;
         player.model_yaw = movement.facing;
         player.vel_y = 0.0;
         player.horiz_vel = Vec3::ZERO;
         player.airborne_since = None;
+        // Put back far from where it was, the body waits for the collision there.
+        player.settling = true;
         self.ack = seq;
         self.cadence.report_now();
         self.corrections += 1;
+        self.told = Some(why);
     }
 }
 
@@ -92,8 +101,10 @@ pub(super) fn claim(
     time: Res<'_, Time>,
     mode: Res<'_, Mode>,
     player: Res<'_, Player>,
+    mut teleported: MessageReader<'_, '_, Teleported>,
     mut net: ResMut<'_, Net>,
 ) {
+    let teleported = teleported.read().count() > 0;
     let Net { claims, link, .. } = &mut *net;
     let Some(claims) = claims else {
         return;
@@ -101,12 +112,18 @@ pub(super) fn claim(
     let flying = *mode == Mode::Fly;
     let movement = movement_of(&player, flying, time.elapsed(), claims.arc_began);
     claims.arc_began = player.airborne_since;
-    let claim = ClientMessage::Claim(Claim {
+    let claim = Claim {
         ack: claims.ack,
         movement,
-    });
+    };
+    if teleported {
+        claims.cadence = Cadence::new(&movement);
+        link.send(&ClientMessage::Teleport(claim));
+        claims.teleports += 1;
+        return;
+    }
     for _ in 0..claims.cadence.claims(&movement) {
-        link.send(&claim);
+        link.send(&ClientMessage::Claim(claim));
         claims.sent += 1;
     }
 }

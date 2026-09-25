@@ -16,7 +16,7 @@ use bevy::transform::TransformPlugin;
 use world::collision::{CollisionPlugin, CollisionResidency, Liquids, WorldCollision};
 use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::{CharacterLook, CharacterTables};
-use world::{CurrentMap, Install};
+use world::{CurrentMap, Install, WorldCamera};
 
 use crate::net::{Net, NetPlugin};
 use crate::player::state::Player;
@@ -242,6 +242,41 @@ impl Walker {
         player.airborne_since = None;
         player.settling = true;
         self.settle();
+    }
+
+    /// Flies, as Ctrl+Shift+F does, with the camera over `xy` until the collision there has come,
+    /// and returns the ground under it.
+    pub fn fly_over(&mut self, xy: [f32; 2]) -> f32 {
+        self.chord(KeyCode::KeyF);
+        assert_eq!(*self.app.world().resource::<Mode>(), Mode::Fly);
+        self.put_camera([xy[0], xy[1], 500.0]);
+        self.settle();
+        self.ground_under(xy[0], xy[1], 500.0)
+            .expect("ground under the point")
+    }
+
+    /// Lands where `wow` is, as Ctrl+Shift+G does, flying, with the camera there.
+    pub fn land(&mut self, wow: [f32; 3]) {
+        self.put_camera(wow);
+        self.chord(KeyCode::KeyG);
+        assert_eq!(*self.app.world().resource::<Mode>(), Mode::Walk);
+    }
+
+    fn chord(&mut self, key: KeyCode) {
+        self.press(KeyCode::ControlLeft);
+        self.press(KeyCode::ShiftLeft);
+        self.tap(key);
+        self.release(KeyCode::ShiftLeft);
+        self.release(KeyCode::ControlLeft);
+    }
+
+    fn put_camera(&mut self, wow: [f32; 3]) {
+        let world = self.app.world_mut();
+        world
+            .query_filtered::<&mut Transform, With<WorldCamera>>()
+            .single_mut(world)
+            .expect("the camera")
+            .translation = wow_to_bevy(wow);
     }
 
     /// The highest front-facing ground under a WoW column, from `from_z` down.

@@ -6,6 +6,7 @@ mod honest;
 mod liar;
 mod pair;
 mod pictures;
+mod solo;
 mod together;
 mod walker;
 

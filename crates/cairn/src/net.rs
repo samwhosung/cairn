@@ -101,6 +101,17 @@ impl Net {
     }
 
     #[cfg(test)]
+    pub fn teleports_sent(&self) -> u32 {
+        self.claims.as_ref().map_or(0, |c| c.teleports)
+    }
+
+    /// Why the server last put the player back.
+    #[cfg(test)]
+    pub fn told(&self) -> Option<protocol::Why> {
+        self.claims.as_ref().and_then(|c| c.told)
+    }
+
+    #[cfg(test)]
     pub fn faults(&mut self) -> &mut Faults {
         &mut self.others.faults
     }
@@ -224,7 +235,7 @@ fn receive(
                     match record {
                         Ok(Record::Correct { seq, why, movement }) => {
                             if let Some(claims) = &mut net.claims {
-                                claims.correct(&mut player, seq, &movement);
+                                claims.correct(&mut player, seq, why, &movement);
                                 warn!(
                                     "the server put the player back at {:?}, {} times now: {why}",
                                     movement.pos, claims.corrections

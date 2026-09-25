@@ -48,6 +48,11 @@ pub enum Mode {
 #[derive(Resource)]
 pub struct PlayerCapsule(pub Collider);
 
+/// The body was put where it stands without walking there, and the server must be asked to put it
+/// there too.
+#[derive(Message)]
+pub struct Teleported;
+
 /// Walks a character of `look` standing at the pose's target, facing its heading, or flies the
 /// pose's camera when `mode` is [`Mode::Fly`].
 pub struct PlayerPlugin {
@@ -74,6 +79,7 @@ impl Plugin for PlayerPlugin {
             )))
             .init_resource::<CameraControl>()
             .init_resource::<CameraOptions>()
+            .add_message::<Teleported>()
             .add_systems(Startup, move |mut commands: Commands<'_, '_>| {
                 commands.spawn((
                     world::world_camera(pose.transform()),
@@ -106,6 +112,7 @@ fn switch_mode(
     keys: Res<'_, ButtonInput<KeyCode>>,
     mut mode: ResMut<'_, Mode>,
     mut player: ResMut<'_, Player>,
+    mut teleported: MessageWriter<'_, Teleported>,
     mut camera: Query<'_, '_, (&Transform, &mut CameraRig, &mut Fly), With<WorldCamera>>,
     mut body: Query<'_, '_, (&mut UnitMotion, &mut UnitAlpha), With<PlayerBody>>,
 ) {
@@ -134,6 +141,7 @@ fn switch_mode(
                 player.face_yaw = fly.yaw();
                 player.vel_y = 0.0;
                 player.settling = true;
+                teleported.write(Teleported);
             }
             *mode = Mode::Walk;
         }
