@@ -1,13 +1,17 @@
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bevy::animation::transition::AnimationTransitions;
 use bevy::input::keyboard::KeyCode;
 use bevy::prelude::*;
+use bevy::time::Real;
 use protocol::flags;
 use world::coords::bevy_to_wow;
-use world::unit::{BodyDressed, CharacterLook, UnitBody};
+use world::rig::ModelAnimations;
+use world::unit::{BodyDressed, CharacterLook, UnitBody, UnitMotion};
 
 use super::honest::{Stand, serve};
 use super::pair::Act;
@@ -21,6 +25,10 @@ const STEP: Duration = Duration::from_nanos(16_666_667);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const SUBJECT_WITHIN_YD: f32 = 12.0;
 const STATE_TIMEOUT: Duration = Duration::from_secs(10);
+const DRESSED_STEADY_FOR: Duration = Duration::from_secs(10);
+const CROWD_WATCHED: Duration = Duration::from_secs(60);
+const MOVING_OVER_YD_PER_S: f32 = 1.0;
+const STAND_ANIM: u16 = 0;
 
 const RUN_AND_JUMP: [(f32, Act); 4] = [
     (0.0, Act::Press(KeyCode::KeyW)),
@@ -260,19 +268,23 @@ fn crowd(p: &mut Painter) -> Crowd {
     Crowd { seen, dressed }
 }
 
-#[test]
-#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES and \
-            CAIRN_SERVER to a server a crowd walks"]
-fn the_frame_cost_beside_a_crowd() {
+fn joined_to_the_crowd() -> Option<Painter> {
     let Some(server) = std::env::var("CAIRN_SERVER")
         .ok()
         .and_then(|a| a.parse().ok())
     else {
         eprintln!("skipped: set CAIRN_SERVER");
-        return;
+        return None;
     };
     let at = [GOLDSHIRE[0], GOLDSHIRE[1], 57.0];
-    let Some(mut p) = Painter::joined(server, at, EAST, CharacterLook::naked(1, 0)) else {
+    Painter::joined(server, at, EAST, CharacterLook::naked(1, 0))
+}
+
+#[test]
+#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES and \
+            CAIRN_SERVER to a server a crowd walks"]
+fn the_frame_cost_beside_a_crowd() {
+    let Some(mut p) = joined_to_the_crowd() else {
         return;
     };
     let deadline = Instant::now() + LOAD_TIMEOUT;
@@ -287,5 +299,97 @@ fn the_frame_cost_beside_a_crowd() {
     let running = frame_costs(&mut p, 1200);
     eprintln!(
         "beside a crowd of {seen} ({dressed} dressed): standing {standing}; running {running}"
+    );
+}
+
+#[derive(Default)]
+struct Drawn {
+    frames: u32,
+    moving: f64,
+    playing_stand: f64,
+    at_speed_zero: f64,
+    unskinned: f64,
+    unskinned_units: HashSet<Entity>,
+}
+
+fn look_at_the_crowd(p: &mut Painter, last: &mut HashMap<Entity, Vec2>, d: &mut Drawn) {
+    let world = p.app.world_mut();
+    let dt = world.resource::<Time<Real>>().delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+    d.frames += 1;
+    let mut q = world.query_filtered::<(
+        Entity,
+        &Transform,
+        &UnitMotion,
+        Option<&BodyDressed>,
+        Option<&AnimationTransitions>,
+        Option<&ModelAnimations>,
+    ), With<OtherPlayer>>();
+    for (e, t, motion, dressed, tr, anims) in q.iter(world) {
+        let at = Vec2::new(t.translation.x, t.translation.z);
+        let Some(was) = last.insert(e, at) else {
+            continue;
+        };
+        if at.distance(was) / dt <= MOVING_OVER_YD_PER_S {
+            continue;
+        }
+        let dt = f64::from(dt);
+        d.moving += dt;
+        let clip = tr
+            .and_then(AnimationTransitions::get_main_animation)
+            .and_then(|node| anims?.clips.iter().find(|c| c.node == node))
+            .map(|c| c.anim_id);
+        if clip == Some(STAND_ANIM) {
+            d.playing_stand += dt;
+        }
+        if motion.speed == 0.0 {
+            d.at_speed_zero += dt;
+        }
+        if dressed.is_some_and(|b| b.slot == 0) {
+            d.unskinned += dt;
+            d.unskinned_units.insert(e);
+        }
+    }
+}
+
+#[test]
+#[ignore = "a measurement, for a release build on a GPU; set WOW_DATA, CAIRN_PICTURES and \
+            CAIRN_SERVER to a server a crowd walks"]
+fn how_a_walking_crowd_is_drawn() {
+    let Some(mut p) = joined_to_the_crowd() else {
+        return;
+    };
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    let (mut most, mut since) = (0, Instant::now());
+    while !(p.arrived() && most > 0 && since.elapsed() > DRESSED_STEADY_FOR) {
+        assert!(Instant::now() < deadline, "the crowd never arrived");
+        wait(&mut p, 0.0);
+        let dressed = crowd(&mut p).dressed;
+        if dressed > most {
+            (most, since) = (dressed, Instant::now());
+        }
+    }
+    let Crowd { seen, dressed } = crowd(&mut p);
+    let (mut last, mut d) = (HashMap::new(), Drawn::default());
+    let until = Instant::now() + CROWD_WATCHED;
+    while Instant::now() < until {
+        let next = Instant::now() + STEP;
+        p.app.update();
+        look_at_the_crowd(&mut p, &mut last, &mut d);
+        thread::sleep(next.saturating_duration_since(Instant::now()));
+    }
+    let pct = |x: f64| 100.0 * x / d.moving.max(f64::MIN_POSITIVE);
+    eprintln!(
+        "a crowd of {seen} ({dressed} dressed) watched {} s over {} frames: drawn moving {:.1} \
+         unit-s, playing Stand {:.1}%, at speed 0 {:.1}%, unskinned {:.1}% by {} units",
+        CROWD_WATCHED.as_secs(),
+        d.frames,
+        d.moving,
+        pct(d.playing_stand),
+        pct(d.at_speed_zero),
+        pct(d.unskinned),
+        d.unskinned_units.len(),
     );
 }
