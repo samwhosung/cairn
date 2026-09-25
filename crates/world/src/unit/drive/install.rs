@@ -8,7 +8,7 @@ use bevy::asset::{AssetPlugin, LoadState};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use super::super::motion::anim::{COMBAT_WOUND, RUN};
+use super::super::motion::anim::{COMBAT_WOUND, READY_UNARMED, RUN};
 use super::super::motion::move_flags::FORWARD;
 use super::super::motion::{UnitMotion, UnitShow};
 use super::{UPPER_BODY_OVER_GAIT, UPPER_BODY_RELEASE_SECS, UnitDriver, drive_units};
@@ -68,11 +68,30 @@ struct Sampled {
     swung_seq: Option<usize>,
 }
 
+/// What a body is shown from its spawn, and what it is told once its gait has settled.
+#[derive(Clone, Copy, Default)]
+struct Scene {
+    from_the_spawn: UnitShow,
+    told: UnitShow,
+}
+
+impl Scene {
+    fn plays(play: Option<u16>) -> Self {
+        Self {
+            told: UnitShow {
+                play,
+                ..UnitShow::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
 fn sampled(
     app: &mut App,
     (skeleton, anims): (&ModelSkeleton, &ModelAnimations),
     motion_from_the_telling: &dyn Fn(usize) -> UnitMotion,
-    told: Option<u16>,
+    scene: Scene,
     frames: usize,
 ) -> Sampled {
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
@@ -85,7 +104,7 @@ fn sampled(
             AnimationGraphHandle(anims.graph.clone()),
             UnitDriver::default(),
             motion_from_the_telling(0),
-            UnitShow::default(),
+            scene.from_the_spawn,
             Transform::default(),
         ))
         .id();
@@ -95,10 +114,7 @@ fn sampled(
         app.update();
     }
     *app.world_mut().resource_mut::<AnimRng>() = AnimRng::default();
-    app.world_mut().entity_mut(body).insert(UnitShow {
-        play: told,
-        pose: None,
-    });
+    app.world_mut().entity_mut(body).insert(scene.told);
     let mut locals = Vec::new();
     let mut swung_seq = None;
     for frame in 0..frames {
@@ -113,7 +129,7 @@ fn sampled(
             anims
                 .clips
                 .iter()
-                .filter(|c| Some(c.anim_id) == told)
+                .filter(|c| Some(c.anim_id) == scene.told.play)
                 .find(|c| {
                     std::iter::once(c.node)
                         .chain(c.upper_node)
@@ -197,11 +213,11 @@ fn a_swing_on_the_run_leaves_the_legs_to_the_run_and_one_standing_takes_the_whol
         ..UnitMotion::default()
     };
     let standing = UnitMotion::default();
-    let swing = Some(ATTACK_UNARMED);
+    let (swing, bare) = (Scene::plays(Some(ATTACK_UNARMED)), Scene::default());
     let human = (&skeleton, &anims);
     let whole_body_human = (&skeleton, &whole_body_only);
     let (running, standing) = (&|_| running, &|_| standing);
-    let run = sampled(&mut app, human, running, None, frames).locals_from_the_telling;
+    let run = sampled(&mut app, human, running, bare, frames).locals_from_the_telling;
     let on_the_run = sampled(&mut app, human, running, swing, frames);
     let whole_on_the_run =
         sampled(&mut app, whole_body_human, running, swing, frames).locals_from_the_telling;
@@ -303,9 +319,9 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
     };
     let standing = UnitMotion::default();
     let stand_then_run = &|frame| if frame < runs_from { standing } else { running };
-    let swing = Some(ATTACK_UNARMED);
+    let (swing, bare) = (Scene::plays(Some(ATTACK_UNARMED)), Scene::default());
     let human = (&skeleton, &anims);
-    let run = sampled(&mut app, human, stand_then_run, None, frames).locals_from_the_telling;
+    let run = sampled(&mut app, human, stand_then_run, bare, frames).locals_from_the_telling;
     let moved_up = sampled(&mut app, human, stand_then_run, swing, frames);
     let whole_body_human = (&skeleton, &whole_body_only);
     let never_lifted =
@@ -406,8 +422,15 @@ fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_tors
     let standing = UnitMotion::default();
     let stand_then_run = &|frame| if frame < runs_from { standing } else { running };
     let human = (&skeleton, &anims);
-    let run = sampled(&mut app, human, stand_then_run, None, frames).locals_from_the_telling;
-    let hit = sampled(&mut app, human, stand_then_run, Some(COMBAT_WOUND), frames);
+    let run =
+        sampled(&mut app, human, stand_then_run, Scene::default(), frames).locals_from_the_telling;
+    let hit = sampled(
+        &mut app,
+        human,
+        stand_then_run,
+        Scene::plays(Some(COMBAT_WOUND)),
+        frames,
+    );
     let hit = &hit.locals_from_the_telling;
 
     let legs = below_the_spine(&anims);
@@ -453,5 +476,164 @@ fn a_wound_begun_standing_leaves_the_legs_to_the_run_and_eases_out_over_the_tors
          the client's to within {worst_off:.2e} rad, {shown} bone-frames over {VISIBLY_APART_RAD} \
          rad from the run",
         legs.len(),
+    );
+}
+
+fn bone_frames_apart(a: &[Vec<Transform>], b: &[Vec<Transform>]) -> usize {
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| a.iter().zip(b).filter(|(a, b)| a != b).count())
+        .sum()
+}
+
+#[test]
+fn an_idled_body_stands_ready_bone_for_bone_runs_as_it_would_and_stands_once_let_go() {
+    let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
+        eprintln!("skipped: WOW_DATA is not set");
+        return;
+    };
+    let mut app = app(&data);
+    let (skeleton, anims) = human(&mut app);
+    let ready = anims
+        .find_resolved(READY_UNARMED, &|_| None)
+        .expect("a ready stance");
+    let frames = frames_in(ready.duration * 2.0) + 10;
+    let running = UnitMotion {
+        speed: 7.0,
+        flags: FORWARD,
+        ..UnitMotion::default()
+    };
+    let (running, standing) = (&|_| running, &|_| UnitMotion::default());
+    let idles = UnitShow {
+        idle: Some(READY_UNARMED),
+        ..UnitShow::default()
+    };
+    let holds = UnitShow {
+        pose: Some(READY_UNARMED),
+        ..UnitShow::default()
+    };
+    let told = |told| Scene {
+        told,
+        ..Scene::default()
+    };
+    let let_go = |from_the_spawn| Scene {
+        from_the_spawn,
+        ..Scene::default()
+    };
+    let mut body = |motion: &dyn Fn(usize) -> UnitMotion, scene| {
+        sampled(&mut app, (&skeleton, &anims), motion, scene, frames).locals_from_the_telling
+    };
+    let idled = body(standing, told(idles));
+    let held = body(standing, told(holds));
+    let dropped = body(standing, told(UnitShow::default()));
+    let runs = body(running, Scene::default());
+    let runs_idled = body(running, told(idles));
+    let let_go_of_the_idle = body(standing, let_go(idles));
+    let let_go_of_the_pose = body(standing, let_go(holds));
+    let kept = body(
+        standing,
+        Scene {
+            from_the_spawn: idles,
+            told: idles,
+        },
+    );
+
+    assert!(
+        idled == held,
+        "idled, the body stands in the stance as one holding it does, bone for bone"
+    );
+    let apart = bone_frames_apart(&dropped, &held);
+    assert!(
+        apart > 0,
+        "its show dropped, the body stands in Stand, which the comparison tells apart"
+    );
+    assert!(runs_idled == runs, "moving, it runs as it would");
+    assert!(
+        let_go_of_the_idle == let_go_of_the_pose,
+        "let go, it stands as a body let go of a held pose does"
+    );
+    let kept_apart = bone_frames_apart(&kept, &let_go_of_the_pose);
+    assert!(kept_apart > 0, "the comparison tells a stance kept apart");
+    eprintln!(
+        "over {frames} frames of {} bones: idled, the stance held, bit for bit (dropped, {apart} \
+         bone-frames apart); running, the run bit for bit; let go, a let-go pose's stand bit for \
+         bit (kept, {kept_apart} apart)",
+        skeleton.joints.len()
+    );
+}
+
+#[test]
+fn a_wound_over_the_ready_stance_takes_the_whole_body_and_one_without_it_the_torso() {
+    let Some(data) = std::env::var_os("WOW_DATA").map(PathBuf::from) else {
+        eprintln!("skipped: WOW_DATA is not set");
+        return;
+    };
+    let mut app = app(&data);
+    let (skeleton, anims) = human(&mut app);
+    let whole_body_only = without_upper_nodes(&anims);
+    let wound = anims
+        .find_resolved(COMBAT_WOUND, &|_| None)
+        .expect("a wound");
+    let frames = frames_in(wound.duration) + 10;
+    let standing = &|_| UnitMotion::default();
+    let ready = UnitShow {
+        idle: Some(READY_UNARMED),
+        ..UnitShow::default()
+    };
+    let hit = UnitShow {
+        play: Some(COMBAT_WOUND),
+        ..ready
+    };
+    let (in_the_stance, stance_left_out) = (
+        Scene {
+            from_the_spawn: ready,
+            told: hit,
+        },
+        Scene::plays(Some(COMBAT_WOUND)),
+    );
+    let mut body = |anims, scene| {
+        sampled(&mut app, (&skeleton, anims), standing, scene, frames).locals_from_the_telling
+    };
+    let recoils = body(&anims, in_the_stance);
+    let recoils_whole = body(&whole_body_only, in_the_stance);
+    let stands_ready = body(
+        &anims,
+        Scene {
+            from_the_spawn: ready,
+            told: ready,
+        },
+    );
+    let flinches = body(&anims, stance_left_out);
+    let flinches_whole = body(&whole_body_only, stance_left_out);
+    let stands = body(&anims, Scene::default());
+
+    assert!(
+        recoils == recoils_whole,
+        "over the stance, the wound is its whole-body clip's, bone for bone"
+    );
+    let control_apart = bone_frames_apart(&flinches, &flinches_whole);
+    assert!(
+        control_apart > 0,
+        "the stance left out, the comparison tells the wound apart from its whole-body clip"
+    );
+    let legs = below_the_spine(&anims);
+    let legs_moved = |a: &[Vec<Transform>], b: &[Vec<Transform>]| {
+        a.iter()
+            .zip(b)
+            .map(|(a, b)| legs.iter().filter(|&&l| a[l] != b[l]).count())
+            .sum::<usize>()
+    };
+    let recoiled = legs_moved(&recoils, &stands_ready);
+    assert!(recoiled > 0, "over the stance, the wound moves the legs");
+    assert_eq!(
+        legs_moved(&flinches, &stands),
+        0,
+        "without it, the legs stand in Stand bit for bit"
+    );
+    eprintln!(
+        "over {frames} frames: over the stance, the wound is the whole-body clip's bit for bit and \
+         moves the {} leg bones on {recoiled} bone-frames; without it, the legs are the Stand's \
+         bit for bit and the whole-body comparison is {control_apart} bone-frames apart",
+        legs.len()
     );
 }

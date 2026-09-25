@@ -12,9 +12,9 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use super::super::motion::anim::{
-    COMBAT_WOUND, DEAD, DEATH, FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, RUN, SHUFFLE_LEFT,
-    SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SPECIAL_1H, STAND, STAND_WOUND, SWIM, SWIM_IDLE,
-    WALK, WALK_BACKWARDS,
+    COMBAT_WOUND, DEAD, DEATH, FALL, JUMP, JUMP_END, JUMP_LAND_RUN, JUMP_START, READY_UNARMED, RUN,
+    SHUFFLE_LEFT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SPECIAL_1H, STAND, STAND_WOUND, SWIM,
+    SWIM_IDLE, WALK, WALK_BACKWARDS,
 };
 use super::super::motion::move_flags::{
     BACKWARD, FALLING, FALLING_FAR, FORWARD, SWIMMING, TURN_LEFT, WALK_MODE,
@@ -420,6 +420,7 @@ fn dressed_fighter(app: &mut App, spawn: fn(&mut App, &[Row]) -> Entity) -> Enti
         (COMBAT_WOUND, 1.0, false, 0.0, 0x7fff, (0, 0)),
         (SPECIAL_1H, 1.0, false, 0.0, 0x7fff, (0, 0)),
         (STAND_WOUND, 1.0, false, 0.0, 0x7fff, (0, 0)),
+        (READY_UNARMED, 1.0, true, 0.0, 0x7fff, (0, 0)),
     ]);
     let unit = spawn(app, &rows);
     let mut e = app.world_mut().entity_mut(unit);
@@ -434,9 +435,15 @@ fn dressed_fighter(app: &mut App, spawn: fn(&mut App, &[Row]) -> Entity) -> Enti
 }
 
 fn told(app: &mut App, unit: Entity, play: Option<u16>, pose: Option<u16>) {
-    app.world_mut()
-        .entity_mut(unit)
-        .insert(UnitShow { play, pose });
+    let mut e = app.world_mut().entity_mut(unit);
+    let idle = e.get::<UnitShow>().and_then(|s| s.idle);
+    e.insert(UnitShow { play, pose, idle });
+}
+
+fn idled(app: &mut App, unit: Entity, idle: Option<u16>) {
+    let mut e = app.world_mut().entity_mut(unit);
+    let show = e.get::<UnitShow>().copied().unwrap_or_default();
+    e.insert(UnitShow { idle, ..show });
 }
 
 fn main_clip_progress(app: &App, unit: Entity) -> Option<(f32, bool)> {
@@ -746,4 +753,5 @@ fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
     assert_eq!(upper_body(&app, unit), None);
 }
 
+mod idle;
 mod wound;

@@ -339,6 +339,7 @@ fn key_one_swings_and_the_one_it_kills_lies_dead_for_both_and_does_not_walk_whil
                 == Some(UnitShow {
                     play: Some(DEATH),
                     pose: Some(DEAD),
+                    idle: None,
                 })
     };
     assert!(

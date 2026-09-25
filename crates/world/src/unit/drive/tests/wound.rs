@@ -137,3 +137,17 @@ fn a_wound_told_again_starts_over_and_one_the_model_lacks_changes_nothing() {
     assert_eq!(flinch(&app, bare), None);
     assert_eq!(base_and_mode(&app, bare), (Some(STAND), Mode::Gait));
 }
+
+#[test]
+fn over_a_ready_stance_a_combat_wound_takes_the_whole_body() {
+    let mut app = app();
+    let unit = dressed_fighter(&mut app, body_with_upper_nodes);
+    frames(&mut app, 2);
+    idled(&mut app, unit, Some(READY_UNARMED));
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(COMBAT_WOUND), None);
+    frames(&mut app, 1);
+    let hit = flinch(&app, unit).expect("the wound");
+    assert!(!hit.upper_body_only, "{hit:?}");
+    assert_eq!(base_and_mode(&app, unit), (Some(READY_UNARMED), Mode::Gait));
+}

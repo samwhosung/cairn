@@ -62,6 +62,8 @@ pub(crate) mod anim {
     pub const COMBAT_WOUND: u16 = 9;
     pub const COMBAT_CRITICAL: u16 = 10;
     pub const READY_UNARMED: u16 = 25;
+    pub const READY_1H: u16 = 26;
+    pub const READY_2HL: u16 = 28;
     pub const READY_BOW: u16 = 29;
 }
 
@@ -88,10 +90,10 @@ impl StandState {
 
 use anim::{
     COMBAT_CRITICAL, COMBAT_WOUND, DEAD, DEATH, DROWN, DROWNED, FALL, FLY, JUMP, JUMP_END,
-    JUMP_LAND_RUN, JUMP_START, KNEEL_END, KNEEL_LOOP, KNEEL_START, READY_BOW, READY_UNARMED, RUN,
-    SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP, SLEEP, SLEEP_DOWN,
-    SLEEP_UP, SPECIAL_1H, SPECIAL_2H, SPECIAL_UNARMED, SPRINT, STAND, STAND_WOUND, SWIM,
-    SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
+    JUMP_LAND_RUN, JUMP_START, KNEEL_END, KNEEL_LOOP, KNEEL_START, READY_1H, READY_2HL, READY_BOW,
+    READY_UNARMED, RUN, SHUFFLE_LEFT, SHUFFLE_RIGHT, SIT_GROUND, SIT_GROUND_DOWN, SIT_GROUND_UP,
+    SLEEP, SLEEP_DOWN, SLEEP_UP, SPECIAL_1H, SPECIAL_2H, SPECIAL_UNARMED, SPRINT, STAND,
+    STAND_WOUND, SWIM, SWIM_BACKWARDS, SWIM_IDLE, SWIM_LEFT, SWIM_RIGHT, WALK, WALK_BACKWARDS,
 };
 
 /// A unit's movement this frame, as its animation reads it. A unit without one stands.
@@ -121,6 +123,9 @@ pub struct UnitShow {
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
     pub pose: Option<u16>,
+    /// Where the body would stand, it idles in this instead, until the game lets it go: it still
+    /// moves as it would, and a held pose wins.
+    pub idle: Option<u16>,
 }
 
 pub(crate) const DEFAULT_WALK_SPEED: f32 = 2.5;
@@ -197,6 +202,15 @@ pub(crate) enum Mode {
     },
     ShowPlayed(u16),
     ShowPosed(u16),
+}
+
+/// What a body the game idles in `idle` stands in, the wanted id first: the client falls a
+/// weapon's ready stance back to the unarmed one.
+pub(crate) fn idle_candidates(idle: u16) -> [u16; 3] {
+    match idle {
+        READY_1H..=READY_2HL => [idle, READY_UNARMED, STAND],
+        _ => [idle, STAND, STAND],
+    }
 }
 
 /// The gait a unit plays, the wanted id first and the fallbacks after it.

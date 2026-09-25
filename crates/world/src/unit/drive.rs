@@ -8,8 +8,8 @@ use bevy::prelude::*;
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
     Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, UnitShow, current_bracket, gait_candidates,
-    is_wound, jump_land_pick, legs_take_up_locomotion, move_flags, moves_up_when_the_legs_move,
-    playback_rate, plays_on_upper_body, scaled_rate,
+    idle_candidates, is_wound, jump_land_pick, legs_take_up_locomotion, move_flags,
+    moves_up_when_the_legs_move, playback_rate, plays_on_upper_body, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 use wound::Wound;
@@ -129,6 +129,7 @@ fn roll_oneshot<'a>(
 struct Frame<'a> {
     anims: &'a ModelAnimations,
     motion: UnitMotion,
+    idle: Option<u16>,
     bracket: Option<Bracketed>,
     /// A step-off in the air: its gait keeps rolling as it left the ground.
     gait_held_aloft: bool,
@@ -519,7 +520,14 @@ impl UnitDriver {
         player: &mut AnimationPlayer,
         rng: &mut AnimRng,
     ) {
-        let cands = gait_candidates(&f.motion, DEFAULT_WALK_SPEED);
+        let idle_cands;
+        let cands = match (gait_candidates(&f.motion, DEFAULT_WALK_SPEED), f.idle) {
+            ([STAND], Some(idle)) => {
+                idle_cands = idle_candidates(idle);
+                &idle_cands[..]
+            }
+            (cands, _) => cands,
+        };
         let shuffling = self.loop_window.is_some_and(|w| w.still_playing(player));
         let target = match self.armed_gait {
             Some(g @ (SHUFFLE_LEFT | SHUFFLE_RIGHT)) if cands[0] == STAND && shuffling => g,
@@ -665,6 +673,7 @@ pub(crate) fn drive_units(
         let frame = Frame {
             anims,
             motion,
+            idle: show.as_ref().and_then(|s| s.idle),
             bracket: current_bracket(&motion, drv.jump_arc),
             gait_held_aloft: falling
                 && (motion.flags & move_flags::FALLING_FAR != 0 || motion.vertical_speed != 0.0),
