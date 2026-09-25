@@ -104,7 +104,8 @@ pub struct UnitMotion {
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnitShow {
     /// Played once from its start, then taken: one told before it ends cuts it short. A body not
-    /// standing still plays most of them above its lower spine, its legs going on as they were.
+    /// standing still plays most of them above its lower spine, its legs going on as they were, and
+    /// a combat or cast one begun standing moves up there, where it stands, once the legs set off.
     pub play: Option<u16>,
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
@@ -285,8 +286,6 @@ fn takes_whole_body(id: u16) -> bool {
     )
 }
 
-/// The client lifts a one-shot of these off the whole body, onto the upper body, when the legs
-/// take up a locomotion while it plays.
 pub(crate) fn moves_up_when_the_legs_move(id: u16) -> bool {
     is_combat(id) || is_cast(id)
 }
@@ -296,7 +295,6 @@ fn is_cast(id: u16) -> bool {
     matches!(id, 2 | 32 | 33 | 53 | 54)
 }
 
-/// What the legs take up now is a locomotion: a bracket's entry when one opens, else the gait.
 pub(crate) fn legs_take_up_locomotion(motion: &UnitMotion, bracket: Option<Bracketed>) -> bool {
     let next = match bracket {
         Some(bracket) => bracket.entry_id(),

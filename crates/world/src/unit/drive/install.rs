@@ -308,7 +308,7 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
     let run = sampled(&mut app, human, stand_then_run, None, frames).locals_from_the_telling;
     let moved_up = sampled(&mut app, human, stand_then_run, swing, frames);
     let whole_body_human = (&skeleton, &whole_body_only);
-    let today =
+    let never_lifted =
         sampled(&mut app, whole_body_human, stand_then_run, swing, frames).locals_from_the_telling;
     let standing_still = sampled(&mut app, human, &|_| standing, swing, frames);
     assert!(
@@ -337,18 +337,18 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
     for f in runs_from..swing_ends {
         for &b in &legs {
             assert_eq!(
-                today[f][b], swing_whole[f][b],
-                "today, the legs stay in the swing"
+                never_lifted[f][b], swing_whole[f][b],
+                "never lifted, the legs stay in the swing"
             );
         }
     }
     let control_off_the_run = legs
         .iter()
-        .filter(|&&b| today[legs_ran_into_the_run][b] != run[legs_ran_into_the_run][b])
+        .filter(|&&b| never_lifted[legs_ran_into_the_run][b] != run[legs_ran_into_the_run][b])
         .count();
     assert!(
         control_off_the_run > 0,
-        "today's whole-body swing keeps the legs off the run"
+        "a whole-body swing never lifted keeps the legs off the run"
     );
 
     let upper = turned_above_the_spine(&anims, standing_still.swung_seq);
@@ -372,7 +372,7 @@ fn a_swing_begun_standing_moves_up_when_the_body_runs_and_the_legs_take_the_run(
     eprintln!(
         "runs from frame {runs_from}; the {} leg bones the run moves are its own bit for bit from \
          frame {first_on_the_run:?} (asserted from {legs_ran_into_the_run}) to {frames}, and \
-         today's stay the swing's to its end ({control_off_the_run} off the run at frame \
+         a swing never lifted keeps them to its end ({control_off_the_run} off the run at frame \
          {legs_ran_into_the_run}); the {} upper bones the swing turns follow it to its end, each \
          at most {worst_share:.4} of the way back to the run",
         legs.len(),

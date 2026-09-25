@@ -192,11 +192,9 @@ impl UnitDriver {
         if let Mode::ShowPlayed(id) = self.mode
             && !oneshot_finished(player, anims, id)
         {
-            // The client lifts it only as the movement flags change, so a special attack begun
-            // on the run keeps the whole body until the body turns or stops.
-            let legs_move_off = f.motion.flags != self.flags_under_whole_body_one_shot
-                && legs_take_up_locomotion(&f.motion, f.bracket);
-            if !(legs_move_off && self.move_up_to_upper_body(tr, player, anims, id)) {
+            let flags_changed = f.motion.flags != self.flags_under_whole_body_one_shot;
+            let legs_move_off = flags_changed && legs_take_up_locomotion(&f.motion, f.bracket);
+            if !(legs_move_off && self.move_up_where_it_stands(tr, player, anims, id)) {
                 return true;
             }
             self.mode = Mode::Gait;
@@ -270,8 +268,7 @@ impl UnitDriver {
         self.upper_body_one_shot = Some(node);
     }
 
-    /// The client moves the one-shot as it stands, mid-clip and with no cross-fade.
-    fn move_up_to_upper_body(
+    fn move_up_where_it_stands(
         &mut self,
         tr: &AnimationTransitions,
         player: &mut AnimationPlayer,
