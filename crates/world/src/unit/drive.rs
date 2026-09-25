@@ -8,11 +8,14 @@ use bevy::prelude::*;
 use super::motion::anim::{SHUFFLE_LEFT, SHUFFLE_RIGHT, STAND};
 use super::motion::{
     Bracketed, DEFAULT_WALK_SPEED, Mode, UnitMotion, UnitShow, current_bracket, gait_candidates,
-    jump_land_pick, move_flags, playback_rate, scaled_rate,
+    jump_land_pick, move_flags, playback_rate, plays_on_upper_body, scaled_rate,
 };
 use crate::rig::{AnimClip, AnimRng, ModelAnimations};
 
 const MIN_JUMP_LAUNCH_SPEED: f32 = 0.5;
+/// A one-shot's weight above the lower spine against the gait's 1, which still shows through.
+const UPPER_BODY_WEIGHT: f32 = 8.0;
+const UPPER_BODY_RELEASE_SECS: f32 = 0.150;
 
 /// A unit's animation state across frames.
 #[derive(Component, Default)]
@@ -24,6 +27,29 @@ pub struct UnitDriver {
     last_vertical_speed: f32,
     was_falling: bool,
     frozen_airborne: Option<AnimationNodeIndex>,
+    /// The one-shot playing above the lower spine.
+    upper_body: Option<AnimationNodeIndex>,
+    upper_body_fade: Option<UpperBodyFade>,
+}
+
+/// The upper body's cross-fade from `out`, or from the gait when `None`, to what plays there now.
+#[derive(Clone, Copy)]
+struct UpperBodyFade {
+    out: Option<AnimationNodeIndex>,
+    left: f32,
+    secs: f32,
+}
+
+impl UpperBodyFade {
+    /// How much of what fades out still shows, eased from 1 to 0.
+    fn outgoing(self) -> f32 {
+        let t = if self.secs > 0.0 {
+            (self.left / self.secs).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (3.0 - 2.0 * t) * t * t
+    }
 }
 
 /// A looping clip armed on the base track, and the passes it plays before it is rolled again.
@@ -129,6 +155,7 @@ impl UnitDriver {
     fn game_holds_body(
         &mut self,
         mut show: Mut<'_, UnitShow>,
+        motion: &UnitMotion,
         tr: &mut AnimationTransitions,
         player: &mut AnimationPlayer,
         anims: &ModelAnimations,
@@ -136,11 +163,24 @@ impl UnitDriver {
     ) -> bool {
         if let Some(id) = show.play
             && show.play.take().is_some()
-            && resolved_clip(anims, id).is_some()
+            && let Some(head) = resolved_clip(anims, id)
         {
-            self.play(tr, player, anims, id, false, rng);
-            self.mode = Mode::ShowPlayed(id);
-            return true;
+            let (c, repeat) = roll_oneshot(anims, head, rng);
+            if let Some(upper) = c.upper_node.filter(|_| plays_on_upper_body(id, motion)) {
+                self.play_on_upper_body(player, upper, repeat, c.blend_time);
+                if matches!(self.mode, Mode::ShowPlayed(_)) {
+                    self.mode = Mode::Gait;
+                    self.armed_gait = None;
+                }
+            } else {
+                if self.upper_body.is_some() {
+                    self.fade_upper_body(player, c.blend_time);
+                }
+                self.loop_window = None;
+                play_clip(tr, player, c, repeat, 1.0);
+                self.mode = Mode::ShowPlayed(id);
+                return true;
+            }
         }
         if let Mode::ShowPlayed(id) = self.mode
             && !oneshot_finished(player, anims, id)
@@ -191,6 +231,80 @@ impl UnitDriver {
             if let Some(active) = player.animation_mut(head.node) {
                 active.seek_to(head.duration);
             }
+        }
+    }
+
+    /// Plays `node` from its start above the lower spine, faded in over `blend_secs` from what
+    /// showed there.
+    fn play_on_upper_body(
+        &mut self,
+        player: &mut AnimationPlayer,
+        node: AnimationNodeIndex,
+        repeat: RepeatAnimation,
+        blend_secs: f32,
+    ) {
+        self.fade_upper_body(player, blend_secs);
+        if let Some(fade) = &mut self.upper_body_fade
+            && fade.out == Some(node)
+        {
+            fade.out = None;
+        }
+        player.start(node).set_repeat(repeat).set_weight(0.0);
+        self.upper_body = Some(node);
+    }
+
+    /// Fades what plays above the lower spine out over `secs`. A fade still nearer its start than
+    /// its end runs on instead, and what it would have faded out stops at once.
+    fn fade_upper_body(&mut self, player: &mut AnimationPlayer, secs: f32) {
+        let out = self.upper_body.take();
+        if self.upper_body_fade.is_some_and(|f| f.outgoing() > 0.5) {
+            if let Some(node) = out {
+                player.stop(node);
+            }
+            return;
+        }
+        if let Some(older) = self.upper_body_fade.take().and_then(|f| f.out) {
+            player.stop(older);
+        }
+        self.upper_body_fade = Some(UpperBodyFade {
+            out,
+            left: secs,
+            secs,
+        });
+    }
+
+    /// A one-shot that has played out on the upper body holds its last frame while it fades onto
+    /// the gait.
+    fn advance_upper_body(&mut self, player: &mut AnimationPlayer, dt: f32) {
+        if let Some(node) = self.upper_body
+            && player
+                .animation(node)
+                .is_none_or(ActiveAnimation::is_finished)
+        {
+            self.fade_upper_body(player, UPPER_BODY_RELEASE_SECS);
+        }
+        let Some(mut fade) = self.upper_body_fade else {
+            return;
+        };
+        fade.left = (fade.left - dt).max(0.0);
+        let (w, out_share) = (UPPER_BODY_WEIGHT, fade.outgoing());
+        if let Some(active) = fade.out.and_then(|n| player.animation_mut(n)) {
+            active.set_weight(if self.upper_body.is_some() {
+                w * out_share
+            } else {
+                w * out_share / (1.0 + w * (1.0 - out_share))
+            });
+        }
+        if let Some(active) = self.upper_body.and_then(|n| player.animation_mut(n)) {
+            active.set_weight(w * (1.0 - out_share));
+        }
+        if fade.left > 0.0 {
+            self.upper_body_fade = Some(fade);
+        } else {
+            if let Some(node) = fade.out {
+                player.stop(node);
+            }
+            self.upper_body_fade = None;
         }
     }
 
@@ -461,7 +575,11 @@ type Driven<'w, 's> = Query<
     ),
 >;
 
-pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_>) {
+pub(crate) fn drive_units(
+    time: Res<'_, Time>,
+    mut rng: ResMut<'_, AnimRng>,
+    mut units: Driven<'_, '_>,
+) {
     for (mut drv, anims, mut player, mut tr, motion, show, transform) in &mut units {
         let motion = motion.copied().unwrap_or_default();
         let falling = motion.flags & move_flags::FALLING != 0;
@@ -481,14 +599,18 @@ pub(crate) fn drive_units(mut rng: ResMut<'_, AnimRng>, mut units: Driven<'_, '_
             model_scale: transform.scale.x,
         };
         drv.advance_window(anims, &mut tr, &mut player, &mut rng);
-        let shown =
-            show.is_some_and(|s| drv.game_holds_body(s, &mut tr, &mut player, anims, &mut rng));
+        let shown = show.is_some_and(|s| {
+            drv.game_holds_body(s, &motion, &mut tr, &mut player, anims, &mut rng)
+        });
         if !shown {
             drv.run(&frame, &mut tr, &mut player, &mut rng);
         }
         drv.sync_rate(&tr, &mut player, anims, motion.speed, frame.model_scale);
+        drv.advance_upper_body(&mut player, time.delta_secs());
     }
 }
 
+#[cfg(test)]
+mod install;
 #[cfg(test)]
 mod tests;

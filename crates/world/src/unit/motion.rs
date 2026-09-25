@@ -96,7 +96,8 @@ pub struct UnitMotion {
 /// What a game has a unit show over how it moves, in `AnimationData.dbc` ids.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnitShow {
-    /// Played once from its start, then taken: one told before it ends cuts it short.
+    /// Played once from its start, then taken: one told before it ends cuts it short. A body that
+    /// moves or sits plays most of them above its lower spine, the legs keeping to their gait.
     pub play: Option<u16>,
     /// Held until the game lets it go: a clip that loops keeps looping, and one that does not
     /// stands at its last frame.
@@ -242,6 +243,36 @@ pub(crate) fn current_bracket(motion: &UnitMotion, jump_arc: bool) -> Option<Bra
     } else {
         None
     }
+}
+
+/// Whether one-shot `id` plays above the lower spine, leaving the legs to the gait, rather than on
+/// the whole body: it does while the legs are taken, by moving, turning, swimming or a stand
+/// state, or, for a combat animation, by the air.
+pub(crate) fn plays_on_upper_body(id: u16, motion: &UnitMotion) -> bool {
+    use move_flags::{ANY_MOVE, FALLING, SWIMMING, TURN_LEFT, TURN_RIGHT};
+    if takes_whole_body(id) || !may_play_on_upper_body(id) {
+        return false;
+    }
+    motion.flags & (ANY_MOVE | TURN_LEFT | TURN_RIGHT | SWIMMING) != 0
+        || motion.stand_state != StandState::STAND
+        || (is_combat(id) && motion.flags & FALLING != 0)
+}
+
+/// Only these ever play above the lower spine: the wounds, attacks, parries, casts, emotes and
+/// the like.
+fn may_play_on_upper_body(id: u16) -> bool {
+    matches!(id,
+        2 | 8..=10 | 14..=36 | 46..=49 | 51..=90 | 105..=113 | 117..=118 | 122..=138 | 185..=186
+            | 195)
+}
+
+fn is_combat(id: u16) -> bool {
+    matches!(id, 10 | 16..=24 | 30 | 36 | 57..=59 | 85..=88 | 95 | 117 | 118)
+}
+
+/// Death and the special attacks, which take the whole body whatever it does.
+fn takes_whole_body(id: u16) -> bool {
+    matches!(id, 1 | 6 | 131 | 132 | 57 | 58 | 118)
 }
 
 const SPEED_SCALED_IDS: &[u16] = &[
@@ -400,6 +431,39 @@ mod tests {
             assert_eq!((p.entry_id(), p.loop_id(), p.stand_up_id()), ids);
         }
         assert_eq!(Bracketed::Jump.stand_up_id(), None);
+    }
+
+    #[test]
+    fn a_one_shot_takes_the_whole_body_standing_still_and_the_upper_body_on_the_move() {
+        const ATTACK_UNARMED: u16 = 16;
+        const COMBAT_WOUND: u16 = 9;
+        const DEATH: u16 = 1;
+        const SPECIAL_1H: u16 = 57;
+        let body = |flags, stand_state| UnitMotion {
+            flags,
+            stand_state,
+            ..UnitMotion::default()
+        };
+        let upright = StandState::STAND;
+        assert!(!plays_on_upper_body(ATTACK_UNARMED, &body(0, upright)));
+        for doing in [
+            body(FORWARD, upright),
+            body(BACKWARD | STRAFE_LEFT, upright),
+            body(TURN_RIGHT, upright),
+            body(SWIMMING, upright),
+            body(FALLING, upright),
+            body(0, StandState::SIT),
+        ] {
+            assert!(plays_on_upper_body(ATTACK_UNARMED, &doing), "{doing:?}");
+        }
+        assert!(plays_on_upper_body(COMBAT_WOUND, &body(FORWARD, upright)));
+        assert!(
+            !plays_on_upper_body(COMBAT_WOUND, &body(FALLING, upright)),
+            "the air gives only combat to the upper body"
+        );
+        for id in [DEATH, SPECIAL_1H, JUMP_START, RUN] {
+            assert!(!plays_on_upper_body(id, &body(FORWARD, upright)), "{id}");
+        }
     }
 
     #[test]

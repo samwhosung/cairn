@@ -22,6 +22,8 @@ pub use compose::{PosePost, RigFinalize};
 pub use global_seq::GlobalSeqDrive;
 pub use palette::{BONE_BYTES, MAX_PALETTE_BONES, MAX_RIG_SLOTS, RigPalettes, RigSkin};
 pub use pose::RigPose;
+#[cfg(test)]
+pub(crate) use pose::plugin as pose_evaluation;
 pub use rng::AnimRng;
 pub use source::{PoseBone, PoseClip, PoseNode, PoseSource, PoseTrack};
 

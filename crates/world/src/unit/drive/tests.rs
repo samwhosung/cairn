@@ -52,17 +52,33 @@ fn app() -> App {
 }
 
 fn body(app: &mut App, rows: &[Row]) -> Entity {
-    let handles: Vec<_> = rows
+    spawn_body(app, rows, false)
+}
+
+/// A body whose every clip can also play above its lower spine.
+fn upper_bodied(app: &mut App, rows: &[Row]) -> Entity {
+    spawn_body(app, rows, true)
+}
+
+fn spawn_body(app: &mut App, rows: &[Row], upper: bool) -> Entity {
+    let mut graph = AnimationGraph::new();
+    let root = graph.root;
+    let nodes: Vec<_> = rows
         .iter()
         .map(|r| {
             let mut c = AnimationClip::default();
             c.set_duration(r.1);
-            app.world_mut()
+            let clip = app
+                .world_mut()
                 .resource_mut::<Assets<AnimationClip>>()
-                .add(c)
+                .add(c);
+            let node = graph.add_clip(clip.clone(), 1.0, root);
+            (
+                node,
+                upper.then(|| graph.add_clip_with_mask(clip, 1, 1.0, root)),
+            )
         })
         .collect();
-    let (graph, nodes) = AnimationGraph::from_clips(handles);
     let graph = app
         .world_mut()
         .resource_mut::<Assets<AnimationGraph>>()
@@ -71,11 +87,11 @@ fn body(app: &mut App, rows: &[Row]) -> Entity {
         .iter()
         .zip(&nodes)
         .enumerate()
-        .map(|(i, (r, &node))| AnimClip {
+        .map(|(i, (r, &(node, upper_node)))| AnimClip {
             anim_id: r.0,
             seq_index: i,
             node,
-            upper_node: None,
+            upper_node,
             looping: r.2,
             duration: r.1,
             move_speed: r.3,
@@ -394,13 +410,17 @@ fn as_a_character_plays(requested: u16) -> u16 {
 }
 
 fn fighter(app: &mut App) -> Entity {
+    dressed_fighter(app, body)
+}
+
+fn dressed_fighter(app: &mut App, spawn: fn(&mut App, &[Row]) -> Entity) -> Entity {
     let mut rows = WALKER.to_vec();
     rows.extend([
         (ATTACK_UNARMED, 1.0, false, 0.0, 0x7fff, (0, 0)),
         (DEATH, 2.0, false, 0.0, 0x7fff, (0, 0)),
         (SIT_GROUND, 2.0, true, 0.0, 0x7fff, (0, 0)),
     ]);
-    let unit = body(app, &rows);
+    let unit = spawn(app, &rows);
     let mut e = app.world_mut().entity_mut(unit);
     let mut anims = e.get_mut::<ModelAnimations>().expect("animations");
     anims.playable_animation_lookup = (0..=SIT_GROUND)
@@ -527,4 +547,109 @@ fn a_show_the_model_lacks_leaves_the_gait_to_it() {
         (playing(&app, unit).0, playing(&app, unit).2),
         (Some(RUN), Mode::Gait)
     );
+}
+
+/// The clip playing above the lower spine: its id, weight and seek.
+fn upper_body(app: &App, unit: Entity) -> Option<(u16, f32, f32)> {
+    let e = app.world().entity(unit);
+    let player = e.get::<AnimationPlayer>()?;
+    e.get::<ModelAnimations>()?.clips.iter().find_map(|c| {
+        let active = player.animation(c.upper_node?)?;
+        Some((c.anim_id, active.weight(), active.seek_time()))
+    })
+}
+
+fn swing_blends_in_over(app: &mut App, unit: Entity, secs: f32) {
+    let mut e = app.world_mut().entity_mut(unit);
+    let mut anims = e.get_mut::<ModelAnimations>().expect("animations");
+    for c in anims
+        .clips
+        .iter_mut()
+        .filter(|c| c.anim_id == ATTACK_UNARMED)
+    {
+        c.blend_time = secs;
+    }
+}
+
+#[test]
+fn a_one_shot_on_the_run_plays_above_the_lower_spine_and_the_run_goes_on_under_it() {
+    let mut app = app();
+    let unit = dressed_fighter(&mut app, upper_bodied);
+    swing_blends_in_over(&mut app, unit, 0.2);
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 1);
+    let run_on = (Some(RUN), Mode::Gait);
+    assert_eq!((playing(&app, unit).0, playing(&app, unit).2), run_on);
+    let (id, weight, _) = upper_body(&app, unit).expect("the swing above the lower spine");
+    assert!(id == ATTACK_UNARMED && weight < 0.1, "fading in: {weight}");
+    frames(&mut app, 9);
+    let (_, weight, _) = upper_body(&app, unit).expect("the swing");
+    assert!((weight - 4.0).abs() < 1e-3, "half way in: {weight}");
+    frames(&mut app, 40);
+    let (_, weight, seek) = upper_body(&app, unit).expect("the swing");
+    assert!(
+        (weight - 8.0).abs() < 1e-6 && (seek - 0.5).abs() < 0.011,
+        "{weight} at {seek}"
+    );
+    assert_eq!((playing(&app, unit).0, playing(&app, unit).2), run_on);
+    frames(&mut app, 58);
+    let (_, weight, seek) = upper_body(&app, unit).expect("its last frame, fading");
+    assert!(
+        seek >= 1.0 && weight > 0.0 && weight < 8.0,
+        "{weight} at {seek}"
+    );
+    frames(&mut app, 12);
+    assert_eq!(upper_body(&app, unit), None, "faded onto the run");
+    assert_eq!((playing(&app, unit).0, playing(&app, unit).2), run_on);
+}
+
+#[test]
+fn standing_still_a_one_shot_takes_the_whole_body_and_one_on_the_run_cuts_it_short() {
+    let mut app = app();
+    let unit = dressed_fighter(&mut app, upper_bodied);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 1);
+    let swung = (Some(ATTACK_UNARMED), Mode::ShowPlayed(ATTACK_UNARMED));
+    assert_eq!((playing(&app, unit).0, playing(&app, unit).2), swung);
+    assert_eq!(upper_body(&app, unit), None);
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 20);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        swung,
+        "running does not cut it"
+    );
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 1);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(RUN), Mode::Gait),
+        "one told on the run cuts it short and the legs take the run"
+    );
+    assert_eq!(
+        upper_body(&app, unit).map(|(id, _, seek)| (id, seek)),
+        Some((ATTACK_UNARMED, 0.01))
+    );
+}
+
+#[test]
+fn a_whole_body_one_shot_fades_out_the_upper_bodys() {
+    let mut app = app();
+    let unit = dressed_fighter(&mut app, upper_bodied);
+    moving(&mut app, unit, FORWARD, 7.0, 0.0);
+    frames(&mut app, 2);
+    told(&mut app, unit, Some(ATTACK_UNARMED), None);
+    frames(&mut app, 30);
+    assert!(upper_body(&app, unit).is_some());
+    told(&mut app, unit, Some(DEATH), None);
+    frames(&mut app, 1);
+    assert_eq!(
+        (playing(&app, unit).0, playing(&app, unit).2),
+        (Some(DEATH), Mode::ShowPlayed(DEATH)),
+        "death takes the whole body, running or not"
+    );
+    assert_eq!(upper_body(&app, unit), None);
 }
