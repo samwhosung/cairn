@@ -50,15 +50,25 @@ impl PartialEq for Place {
     }
 }
 
+/// How far a commit goes before it counts as made.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Flush {
+    /// Past a loss of power.
+    #[default]
+    Drive,
+    /// Into the system: past a crash of the process, not of the machine.
+    System,
+}
+
 /// Whether the writer keeps its word, that a tick's results leave only once its changes are
-/// durable. The others are controls that break it.
+/// committed. The others are controls that break it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Saving {
     #[default]
     Held,
-    /// Each tick's results leave at once, and its changes are committed only once the next tick
-    /// that saves anything has let its results out: a kill always loses a tick whose results are
-    /// out.
+    /// Each tick's results leave without waiting on its commit, which comes only once the next
+    /// tick that saves anything has let its results out: from the first tick that saves, a kill
+    /// always loses a tick whose results are out.
     Early,
     /// The first player's row handed over at or after this tick is never written.
     Drops(u32),
@@ -178,9 +188,10 @@ impl Roster {
         }
     }
 
-    /// Gives the player named `name` body `n`, and returns what it saved.
-    pub fn bind(&mut self, n: u32, name: &str) -> Option<Vec<u8>> {
-        let &i = self.by_name.get(name)?;
+    pub fn bind(&mut self, n: u32, name: &str) {
+        let Some(&i) = self.by_name.get(name) else {
+            return;
+        };
         if let Some(old) = self.known[i].body.replace(n) {
             self.bodies[old as usize] = None;
         }
@@ -188,7 +199,11 @@ impl Roster {
             self.bodies.resize(n as usize + 1, None);
         }
         self.bodies[n as usize] = Some(i);
-        self.known[i].player.saved.clone()
+    }
+
+    pub fn saved(&self, name: &str) -> Option<&[u8]> {
+        let &i = self.by_name.get(name)?;
+        self.known[i].player.saved.as_deref()
     }
 
     pub fn leave(&mut self, n: u32, body: &Body) {

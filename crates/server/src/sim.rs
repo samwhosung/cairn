@@ -182,8 +182,10 @@ impl Sim {
             }
         }
         for admitted in admission.admitted {
-            if let Some(saved) = roster.bind(admitted.id, world.name(admitted.id)) {
-                restored.push((admitted.id, saved));
+            let name = world.name(admitted.id);
+            roster.bind(admitted.id, name);
+            if let Some(saved) = roster.saved(name) {
+                restored.push((admitted.id, saved.to_vec()));
             }
             let outbox = match batches {
                 Batches::Send(shared) => shared.take_outbox(admitted.conn),
@@ -286,7 +288,7 @@ impl Sim {
                 relays,
                 clients,
                 game: game.as_deref(),
-                hold_until_durable: writer.is_some(),
+                hold_until_committed: writer.is_some(),
             };
             let phase = &phases[REPLICATE];
             observers

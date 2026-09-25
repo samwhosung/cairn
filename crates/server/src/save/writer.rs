@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use rusqlite::hooks::Wal;
 
 use super::file::{self, Opened};
-use super::{Batch, Saving};
+use super::{Batch, Flush, Saving};
 use crate::net::Held;
 
 const CHECKPOINT_EVERY: u32 = 20;
@@ -31,14 +31,13 @@ fn on_wal(_: &Wal, pages: c_int) -> rusqlite::Result<()> {
 pub struct Commit {
     pub tick: u32,
     pub rows: u32,
-    /// The values written, at eight bytes a number and a name's length.
+    /// The values written: each column at eight bytes, a name at its length.
     pub value_bytes: u32,
     /// The bytes the write-ahead log took: whole pages.
     pub wal_bytes: u32,
-    /// From the tick handing its changes over to their being durable.
-    pub durable_ns: u64,
+    pub since_handed_ns: u64,
     /// The transaction alone, from its first statement to the end of its commit.
-    pub commit_ns: u64,
+    pub transaction_ns: u64,
 }
 
 struct Handed {
@@ -99,7 +98,8 @@ impl Writer {
         }
     }
 
-    /// Hands over a tick's results, which leave once every change handed over before is durable.
+    /// Hands over a tick's results, which leave once every change handed over before them is
+    /// committed, unless the writer lets them out early.
     pub fn release(&self, tick: u32, held: Vec<Held>) {
         self.send(Job::Release(tick, held));
     }
@@ -136,7 +136,7 @@ impl Writer {
         std::mem::take(&mut state(&self.shared).commits)
     }
 
-    /// Makes everything handed over durable, lets out every result, and closes the file.
+    /// Commits everything handed over, lets out every result, and closes the file.
     pub fn finish(mut self) -> Result<Vec<Commit>, String> {
         self.stop();
         let mut s = state(&self.shared);
@@ -197,11 +197,11 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     };
     let (kick, kicked) = mpsc::channel::<()>();
     let checkpointer = {
-        let (path, shared, durable) = (path.clone(), shared.clone(), opened.durable);
+        let (path, shared, flush) = (path.clone(), shared.clone(), opened.flush);
         std::thread::Builder::new()
             .name("checkpoint".into())
             .spawn(move || {
-                if let Err(why) = checkpoint(&path, durable, &kicked) {
+                if let Err(why) = checkpoint(&path, flush, &kicked) {
                     fail(&shared, why);
                 }
             })
@@ -209,17 +209,14 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     let (mut out, mut next): (Option<Handed>, Option<Handed>) = (None, None);
     let (mut dropped, mut made, mut pages) = (false, 0u32, 0);
     let mut commit = |conn: &mut Connection, Handed { batch, at: handed }: Handed| {
-        let skip = match saving {
-            Saving::Drops(from)
-                if !dropped && batch.tick >= from && !batch.game_rows.is_empty() =>
-            {
-                1
-            }
-            _ => 0,
+        let drop_first_game_row = match saving {
+            Saving::Drops(from) => !dropped && batch.tick >= from && !batch.game_rows.is_empty(),
+            Saving::Held | Saving::Early => false,
         };
-        dropped |= skip > 0;
+        dropped |= drop_first_game_row;
         let started = Instant::now();
-        let wrote = file::write(conn, opened.table.as_ref(), &batch, skip).map_err(at)?;
+        let table = opened.table.as_ref();
+        let wrote = file::write(conn, table, &batch, drop_first_game_row).map_err(at)?;
         let now = WAL_PAGES.get();
         let taken = if now >= pages { now - pages } else { now };
         pages = now;
@@ -232,8 +229,8 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
             rows: wrote.rows,
             value_bytes: wrote.value_bytes,
             wal_bytes: taken.unsigned_abs() * page_bytes,
-            durable_ns: handed.elapsed().as_nanos() as u64,
-            commit_ns: started.elapsed().as_nanos() as u64,
+            since_handed_ns: handed.elapsed().as_nanos() as u64,
+            transaction_ns: started.elapsed().as_nanos() as u64,
         });
         Ok::<(), String>(())
     };
@@ -277,10 +274,10 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     }
 }
 
-fn checkpoint(path: &Path, durable: bool, kicked: &mpsc::Receiver<()>) -> Result<(), String> {
+fn checkpoint(path: &Path, flush: Flush, kicked: &mpsc::Receiver<()>) -> Result<(), String> {
     let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
     let conn = Connection::open(path).map_err(at)?;
-    let sql = format!("{} PRAGMA busy_timeout = 5000;", file::syncs(durable));
+    let sql = format!("{} PRAGMA busy_timeout = 5000;", file::flush_pragmas(flush));
     conn.execute_batch(&sql).map_err(at)?;
     while kicked.recv().is_ok() {
         while kicked.try_recv().is_ok() {}

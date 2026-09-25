@@ -9,7 +9,9 @@ use crate::record::Record;
 use crate::show::{BodyShow, Poses, Shows};
 use crate::space::Space;
 use crate::table::{Pair, Rows};
-use crate::{Anim, Bytes, Game, Id, Kind, Kinds, Letter, Spot, Table, Tables, Tick, World, canon};
+use crate::{
+    Anim, Bytes, Game, Id, Kind, Kinds, Letter, SavedTables, Spot, Table, Tick, World, canon,
+};
 
 pub(crate) const NEVER: Tick = Tick::MAX;
 const ROUNDS: u8 = 2;
@@ -55,7 +57,7 @@ pub struct Engine<G: Game> {
     delivery: Delivery,
     tick: Tick,
     kinds: Vec<TypeId>,
-    tables: Tables,
+    tables: SavedTables,
     prevs: Vec<Box<dyn Any + Send + Sync>>,
     lives: Vec<Box<dyn Rows<G>>>,
     next_n: Vec<u32>,
@@ -229,7 +231,7 @@ impl<G: Game> Engine<G> {
     }
 }
 
-pub(crate) fn tables<G: Game>() -> Tables {
+pub(crate) fn tables<G: Game>() -> SavedTables {
     let mut declared = Kinds {
         tables: vec![Pair::of::<G::Player>()],
     };
@@ -237,10 +239,10 @@ pub(crate) fn tables<G: Game>() -> Tables {
     tables_of(&declared)
 }
 
-fn tables_of<G: Game>(declared: &Kinds<G>) -> Tables {
-    Tables {
+fn tables_of<G: Game>(declared: &Kinds<G>) -> SavedTables {
+    SavedTables {
         players: declared.tables[0].schema,
-        others: declared.tables[1..]
+        other_kinds: declared.tables[1..]
             .iter()
             .filter_map(|t| t.schema)
             .collect(),
@@ -366,7 +368,7 @@ impl<G: Game> Hosted for Engine<G> {
         self.poses.held(n)
     }
 
-    fn tables(&self) -> &Tables {
+    fn tables(&self) -> &SavedTables {
         &self.tables
     }
 

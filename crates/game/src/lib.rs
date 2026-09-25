@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 pub use bytes::Bytes;
-pub use columns::{Column, Columns, Field, Scalar, Schema, Sql, Tables, Value};
+pub use columns::{Column, Columns, Field, SavedTables, Scalar, Schema, Sql, Value};
 pub use engine::Engine;
 pub use hosted::{BodyOrder, Delivery, Hosted, Loaded, Stages, Took, Turn, load};
 pub use knobs::{Knob, Knobs, KnobsFile, Line};

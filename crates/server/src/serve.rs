@@ -10,12 +10,12 @@ use crate::limits::Limits;
 use crate::log::{Header, LogWriter, LoggedGame};
 use crate::net::Shared;
 use crate::replicate::View;
-use crate::save::{Opened, Roster, Saving, Writer};
+use crate::save::{Flush, Opened, Roster, Saving, Writer};
 use crate::sim::{Batches, Sim};
 use crate::stats::{SaveCost, Summary, TickStats, process_cpu_ns};
 use crate::world::{InputOrder, Spawn};
 
-const MAX_TICKS_UNRELEASED: u32 = 20;
+const MAX_UNRELEASED_MS: u32 = 1000;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -35,9 +35,7 @@ pub struct Config {
     /// The file the world starts from and saves each tick's changes to; with none, the world is
     /// kept only in memory.
     pub world: Option<PathBuf>,
-    /// Whether a tick's transaction reaches the drive before its results leave, not only the
-    /// system: a test's file need not.
-    pub durable: bool,
+    pub flush: Flush,
     pub saving: Saving,
     /// Where to write every tick's inputs and world hash, for replay.
     pub record: Option<PathBuf>,
@@ -57,7 +55,7 @@ impl Config {
             return Ok(None);
         };
         let game = self.game.as_ref().map(|g| (g.name(), g.tables()));
-        crate::save::open(path, game, self.durable)
+        crate::save::open(path, game, self.flush)
             .map(Some)
             .map_err(io::Error::other)
     }
@@ -99,7 +97,7 @@ impl Default for Config {
             view: View::default(),
             game: None,
             world: None,
-            durable: true,
+            flush: Flush::Drive,
             saving: Saving::default(),
             record: None,
             window: None,
@@ -183,7 +181,8 @@ pub(crate) fn run(cfg: &Config, shared: &Shared, opened: Option<Opened>) -> io::
             if let Some(why) = writer.failed() {
                 return Err(io::Error::other(why));
             }
-            if let Some(back) = st.tick.checked_sub(MAX_TICKS_UNRELEASED) {
+            let most = (MAX_UNRELEASED_MS / u32::from(cfg.tick_ms.max(1))).max(1);
+            if let Some(back) = st.tick.checked_sub(most) {
                 let waited = writer.wait_released(back).map_err(io::Error::other)?;
                 st.wait_ns = waited.as_nanos() as u64;
             }

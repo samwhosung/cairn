@@ -59,7 +59,7 @@ impl Link {
 
 impl Stepper {
     /// A world on `cfg`, from its file when it names one, saving to it; each tick's results
-    /// reach the links once its changes are durable.
+    /// reach the links once its changes are committed, unless `cfg.saving` lets them out early.
     pub fn new(cfg: &Config, order: InputOrder, delivery: Delivery) -> io::Result<Self> {
         cfg.check()?;
         let opened = cfg.open_world()?;
@@ -176,8 +176,8 @@ impl Stepper {
     }
 
     /// Where the world's file differs from the world's saved state, by a full scan of each, after
-    /// the last tick, whose changes [`Stepper::tick`] waited on; `None` also when the world keeps
-    /// no file.
+    /// the last tick, whose changes [`Stepper::tick`] waited on unless the writer lets results
+    /// out early; a scan that fails is a difference, and a world that keeps no file has none.
     pub fn file_differs(&self) -> Option<String> {
         let writer = self.sim.writer()?;
         let schema = self.sim.game().and_then(|g| g.tables().players);
@@ -188,7 +188,7 @@ impl Stepper {
         first_difference(&self.sim.keeping(), &file)
     }
 
-    /// Saves where every player stands, makes every change durable and closes the world's file.
+    /// Saves where every player stands, commits every change and closes the world's file.
     pub fn finish(mut self) -> Result<(), String> {
         self.sim.stop();
         self.sim

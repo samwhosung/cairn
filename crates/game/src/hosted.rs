@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{Anim, Engine, Game, Id, Knobs, KnobsFile, Line, Record, Shows, Spot, Tables, Tick};
+use crate::{
+    Anim, Engine, Game, Id, Knobs, KnobsFile, Line, Record, SavedTables, Shows, Spot, Tick,
+};
 
 /// The order each row applies a round's letters in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,7 +70,7 @@ pub trait Hosted: Send + Sync {
     /// The pose a player's body holds now.
     fn held(&self, n: u32) -> Option<Anim>;
 
-    fn tables(&self) -> &Tables;
+    fn tables(&self) -> &SavedTables;
 
     /// A player's sent fields, encoded.
     fn shown(&self, n: u32) -> Option<&[u8]>;
@@ -94,7 +96,7 @@ pub struct Loaded {
     knobs: KnobsFile,
     over: Vec<Line>,
     seed: u64,
-    tables: Tables,
+    tables: SavedTables,
     start: Arc<Start>,
 }
 
@@ -116,7 +118,7 @@ impl Loaded {
         self.seed
     }
 
-    pub fn tables(&self) -> &Tables {
+    pub fn tables(&self) -> &SavedTables {
         &self.tables
     }
 

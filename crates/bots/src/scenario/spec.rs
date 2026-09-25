@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use game::{KnobsFile, Line, Loaded};
 use protocol::flags;
-use server::{Limits, Saving, View};
+use server::{Flush, Limits, Saving, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
 use super::shown::{Drops, Nth};
@@ -26,7 +26,7 @@ pub struct Spec {
     pub expects: Vec<Expect>,
     pub game: Option<Loaded>,
     pub world: WorldFile,
-    pub durable: bool,
+    pub flush: Flush,
     pub saving: Saving,
 }
 
@@ -107,7 +107,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         expects: text.expects,
         game: None,
         world: WorldFile::Temporary,
-        durable: false,
+        flush: Flush::System,
         saving: Saving::Held,
     };
     let mut drafts: Vec<Draft> = Vec::new();
@@ -284,7 +284,13 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
             spec.world = WorldFile::At(path);
         }
         "world.drops" => spec.saving = Saving::Drops(whole(v)?),
-        "world.durable" => spec.durable = yes(v)?,
+        "world.flush" => {
+            spec.flush = match v {
+                "drive" => Flush::Drive,
+                "system" => Flush::System,
+                _ => return Err(format!("no flush `{v}`: drive or system")),
+            };
+        }
         key => {
             let knob = if let Some(k) = key.strip_prefix("limits.") {
                 limits_knob(&mut spec.limits, k)

@@ -164,12 +164,10 @@ impl Columns for () {
     }
 }
 
-/// The tables a game's kinds save into.
 #[derive(Clone, Debug, Default)]
-pub struct Tables {
+pub struct SavedTables {
     pub players: Option<Schema>,
-    /// Those of its other kinds that save anything.
-    pub others: Vec<Schema>,
+    pub other_kinds: Vec<Schema>,
 }
 
 /// A saved table whatever its row's type: the server keeps a game's saved fields as bytes and
@@ -200,8 +198,8 @@ impl Schema {
         (self.values)(bytes)
     }
 
-    /// The bytes of a row whose columns hold `values`; `None` unless they are one value a field,
-    /// each one its field can hold.
+    /// The bytes of a row whose columns hold `values`; `None` unless they are one value for each
+    /// column, each one its field can hold.
     pub fn bytes(&self, values: &[Value]) -> Option<Vec<u8>> {
         (self.bytes)(values)
     }

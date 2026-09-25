@@ -26,7 +26,7 @@ pub use limits::{Limits, Why, ground_between};
 pub use net::InProcess;
 pub use protocol::Movement;
 pub use replicate::{PastReach, Tier, View};
-pub use save::{Commit, Keeping, Kept, Place, Player, Saving, default_world, read, scan};
+pub use save::{Commit, Flush, Keeping, Kept, Place, Player, Saving, default_world, read, scan};
 pub use serve::{Config, Window};
 pub use stats::{
     PHASES, SaveCost, Summary, TickStats, load_average, process_cpu_ns, thread_cpu_ns,

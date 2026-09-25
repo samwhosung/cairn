@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use game::{Bytes, Columns, Schema, Tables};
+use game::{Bytes, Columns, SavedTables, Schema};
 
 use super::*;
 
@@ -39,7 +39,6 @@ mod real {
     }
 }
 
-/// A test's own directory of worlds, gone once the test is done with it.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -61,21 +60,21 @@ impl Drop for Scratch {
     }
 }
 
-fn players<S: Columns>() -> Tables {
-    Tables {
+fn players<S: Columns>() -> SavedTables {
+    SavedTables {
         players: Schema::of::<S>(),
-        others: Vec::new(),
+        other_kinds: Vec::new(),
     }
 }
 
 fn opened<S: Columns>(path: &Path) -> Result<Opened, String> {
-    open(path, Some(("tally", &players::<S>())), true)
+    open(path, Some(("tally", &players::<S>())), Flush::Drive)
 }
 
 fn save(opened: Opened, batch: Batch) {
     let writer = Writer::start(opened, Saving::Held).expect("a writer");
     writer.save(batch);
-    writer.finish().expect("its changes durable");
+    writer.finish().expect("its changes committed");
 }
 
 fn saved<S: Columns>(o: &Opened, name: &str) -> Option<S> {
@@ -179,21 +178,31 @@ fn a_world_is_its_games_of_its_layout_and_one_servers() {
     let dir = Scratch::new("its-own");
     let path = dir.world("world");
     ada_kills(&path, 1);
-    let other = open(&path, Some(("other", &players::<older::Score>())), true);
+    let other = open(
+        &path,
+        Some(("other", &players::<older::Score>())),
+        Flush::Drive,
+    );
     let said = other.map(drop).expect_err("another game");
     assert!(
         said.contains("a world of tally, and this server runs other"),
         "{said}"
     );
-    let none = open(&path, None, true).map(drop).expect_err("no game");
-    assert!(none.contains("this server runs no game"), "{none}");
-    let sparks = Tables {
-        players: None,
-        others: Schema::of::<older::Score>().into_iter().collect(),
-    };
-    let said = open(&dir.world("sparks"), Some(("sparks", &sparks)), true)
+    let none = open(&path, None, Flush::Drive)
         .map(drop)
-        .expect_err("a kind other than players that saves");
+        .expect_err("no game");
+    assert!(none.contains("this server runs no game"), "{none}");
+    let sparks = SavedTables {
+        players: None,
+        other_kinds: Schema::of::<older::Score>().into_iter().collect(),
+    };
+    let said = open(
+        &dir.world("sparks"),
+        Some(("sparks", &sparks)),
+        Flush::Drive,
+    )
+    .map(drop)
+    .expect_err("a kind other than players that saves");
     assert!(
         said.contains("a world keeps only its players' yet"),
         "{said}"

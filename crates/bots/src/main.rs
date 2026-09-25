@@ -53,9 +53,10 @@ A scenario file is lines of `key = value` and `expect PATH OP VALUE`, `#` starti
 and `bots.NAME.count` with the rest of `bots.NAME.*` a group of bots: its script, pace, spawn and
 lies. `game` names a game to run (melee), `game.knobs` a knobs file in place of its own,
 `game.overlay` a file laid on them, and `knobs.KEY` one knob. The world is kept in a file of the
-run's own, removed after it; `world = FILE` keeps it in FILE, beside the scenario, which must not
-exist yet, and `world = none` in memory. `world.durable = yes` has each commit reach the drive,
-not only the system; `world.drops = TICK`, a control, has the writer leave out a player's row.
+run's own, removed after it; `world = FILE` keeps it in FILE, beside the file that sets it, which
+must not exist yet, and `world = none` in memory. `world.flush = drive` has each commit reach the
+drive, not only the system; `world.drops = TICK`, a control, has the writer leave out one row of
+the game's table, the first it is handed at or after TICK.
 An expectation reads a number of the verdict: `NAME.FIELD` a group's, any other path the
 scenario's.
 

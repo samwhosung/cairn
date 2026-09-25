@@ -254,7 +254,7 @@ pub struct Scene<'a> {
     pub relays: &'a Relays,
     pub clients: &'a Shared,
     pub game: Option<&'a dyn Hosted>,
-    pub hold_until_durable: bool,
+    pub hold_until_committed: bool,
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -327,7 +327,7 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
     built.bytes = out.len() as u64;
     o.size_hint = out.len();
     if let Some(outbox) = &o.outbox {
-        if scene.hold_until_durable {
+        if scene.hold_until_committed {
             o.held = Some(outbox.hold(out));
         } else {
             outbox.send(out);

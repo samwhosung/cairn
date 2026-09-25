@@ -1,11 +1,11 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 
-use game::{Schema, Tables, Value};
+use game::{SavedTables, Schema, Value};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 
-use super::{Batch, Keeping, Kept, Place, Player};
+use super::{Batch, Flush, Keeping, Kept, Place, Player};
 
 const LAYOUT_VERSION: i64 = 1;
 const OWN: [&str; 3] = ["world", "player", "position"];
@@ -13,7 +13,7 @@ const WAL_LIMIT_BYTES: i64 = 64 << 20;
 
 pub struct Opened {
     pub path: PathBuf,
-    pub(super) durable: bool,
+    pub(super) flush: Flush,
     pub(super) conn: Connection,
     pub(super) _lock: File,
     pub(super) table: Option<Table>,
@@ -69,12 +69,11 @@ fn at(path: &Path) -> impl Fn(rusqlite::Error) -> String + '_ {
     move |e| format!("{}: {e}", path.display())
 }
 
-/// Opens the world at `path`, making it if there is none, for a server running the game named
-/// with its tables, or none. Refuses a file another server keeps, one of another game or of a
-/// later layout, and one whose saved fields this build cannot read; a field of the players'
-/// table added since the file was written, or the table itself, is added to it. A commit is
-/// durable once it reaches the drive, or, not `durable`, the system.
-pub fn open(path: &Path, game: Option<(&str, &Tables)>, durable: bool) -> Result<Opened, String> {
+pub fn open(
+    path: &Path,
+    game: Option<(&str, &SavedTables)>,
+    flush: Flush,
+) -> Result<Opened, String> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -90,7 +89,7 @@ pub fn open(path: &Path, game: Option<(&str, &Tables)>, durable: bool) -> Result
     conn.execute_batch(&format!(
         "{} PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WAL_LIMIT_BYTES};
          PRAGMA busy_timeout = 5000;",
-        syncs(durable)
+        flush_pragmas(flush)
     ))
     .map_err(at(path))?;
     let tx = conn
@@ -111,7 +110,7 @@ pub fn open(path: &Path, game: Option<(&str, &Tables)>, durable: bool) -> Result
     tx.commit().map_err(at(path))?;
     Ok(Opened {
         path: path.to_path_buf(),
-        durable,
+        flush,
         conn,
         _lock: lock,
         table,
@@ -119,12 +118,14 @@ pub fn open(path: &Path, game: Option<(&str, &Tables)>, durable: bool) -> Result
     })
 }
 
-/// macOS reaches the drive only with `fullfsync`, which other systems ignore.
-pub(super) fn syncs(durable: bool) -> &'static str {
-    if durable {
-        "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;"
-    } else {
-        "PRAGMA synchronous = OFF;"
+pub(super) fn flush_pragmas(flush: Flush) -> &'static str {
+    match flush {
+        // macOS's fsync leaves a write in the drive's cache, where a loss of power takes it;
+        // `fullfsync` flushes that too, and other systems ignore it.
+        Flush::Drive => {
+            "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;"
+        }
+        Flush::System => "PRAGMA synchronous = OFF;",
     }
 }
 
@@ -147,11 +148,11 @@ fn lock(path: &Path) -> Result<File, String> {
     }
 }
 
-fn players_table(path: &Path, game: Option<(&str, &Tables)>) -> Result<Option<Table>, String> {
+fn players_table(path: &Path, game: Option<(&str, &SavedTables)>) -> Result<Option<Table>, String> {
     let Some((name, tables)) = game else {
         return Ok(None);
     };
-    if let Some(other) = tables.others.first() {
+    if let Some(other) = tables.other_kinds.first() {
         return Err(format!(
             "{}: {name} saves `{}` rows of a kind other than its players', and a world keeps only \
              its players' yet",
@@ -451,13 +452,11 @@ pub(super) struct Wrote {
     pub value_bytes: u32,
 }
 
-/// Writes `batch` in one transaction, durable once this returns, leaving out `skip` rows of the
-/// game's.
 pub(super) fn write(
     conn: &mut Connection,
     table: Option<&Table>,
     batch: &Batch,
-    skip: usize,
+    drop_first_game_row: bool,
 ) -> rusqlite::Result<Wrote> {
     let mut wrote = Wrote::default();
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -470,6 +469,7 @@ pub(super) fn write(
         }
         if let Some(t) = table {
             let mut s = tx.prepare_cached(&t.upsert)?;
+            let skip = usize::from(drop_first_game_row);
             for (id, bytes) in batch.game_rows.iter().skip(skip) {
                 let values = t.schema.values(bytes).ok_or_else(|| {
                     rusqlite::Error::ToSqlConversionFailure(

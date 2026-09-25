@@ -216,8 +216,8 @@ pub struct SaveCost {
     pub wal_bytes_per_tick: f64,
     /// Percentiles 50, 99 and 100 of a transaction, ms.
     pub commit: [f64; 3],
-    /// Percentiles 50, 99 and 100 of a tick's changes becoming durable once handed over, ms.
-    pub durable: [f64; 3],
+    /// Percentiles 50, 99 and 100 of a tick's changes committed after they were handed over, ms.
+    pub since_handed: [f64; 3],
     /// Percentiles 50, 99 and 100 of the wait of the ticks that waited on their results, ms.
     pub wait: [f64; 3],
 }
@@ -235,8 +235,8 @@ impl SaveCost {
             rows_per_tick: ticks.iter().fold(0.0, |a, t| a + f64::from(t.saved_rows)) / n,
             bytes_per_tick: per_tick(|c| c.value_bytes),
             wal_bytes_per_tick: per_tick(|c| c.wal_bytes),
-            commit: ms(|c| c.commit_ns),
-            durable: ms(|c| c.durable_ns),
+            commit: ms(|c| c.transaction_ns),
+            since_handed: ms(|c| c.since_handed_ns),
             wait: p50_p99_max_ms(waits),
         }
     }
@@ -303,7 +303,7 @@ impl Summary {
             .map(|w| format!("{w:?}").to_lowercase())
             .collect();
         format!(
-            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | movements/s per client | of them turns / states | moves and turns by tier, near / middle / far | B per movement | shared % of bytes out | refused: {} | stale | deferred | kicked / appears without a slot | process % of a core | world hash | load | saved rows / KB / WAL KB a tick | commits | commit p50 / p99 ms | durable p50 / p99 ms | tick's wait p50 / p99 / max ms |",
+            "| run | players | threads | ticks | ideal p50 ms | ideal p99 | ideal max | CPU p50 ms | CPU p99 | wall p50 ms | wall p99 | CPU by phase: {}, ms | out KB/s per client | in B/s per client | out MB/s | claims/s per client | movements/s per client | of them turns / states | moves and turns by tier, near / middle / far | B per movement | shared % of bytes out | refused: {} | stale | deferred | kicked / appears without a slot | process % of a core | world hash | load | saved rows / KB / WAL KB a tick | commits | commit p50 / p99 ms | committed after hand-off p50 / p99 ms | tick's wait p50 / p99 / max ms |",
             PHASES.join(" / "),
             why.join(" / ")
         )
@@ -330,8 +330,8 @@ impl Summary {
             v.commits,
             v.commit[0],
             v.commit[1],
-            v.durable[0],
-            v.durable[1],
+            v.since_handed[0],
+            v.since_handed[1],
             v.wait[0],
             v.wait[1],
             v.wait[2],
