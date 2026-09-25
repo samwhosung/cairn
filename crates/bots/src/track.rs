@@ -414,7 +414,7 @@ impl Planner<'_> {
     }
 }
 
-/// None if the track has no runs long enough to lie on.
+/// Empty if the track has no runs long enough to lie on.
 pub fn crowd_liar_lies(track: &Track, start_ms: u32) -> Vec<Lie> {
     let long_run = |after: u32, ms: u32| {
         track.legs.iter().find(|l| {
