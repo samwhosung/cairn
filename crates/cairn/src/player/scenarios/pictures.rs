@@ -599,6 +599,15 @@ fn the_walker_swings_standing_and_on_the_run() {
     p.wait(0.3);
     p.orbit(from_its_side, 5.0);
     p.shoot("swing-2-running");
+    p.key(KeyCode::KeyW, ButtonState::Released);
+    p.orbit(-from_its_side, 5.0);
+    p.wait(1.5);
+    swing(&mut p);
+    p.wait(0.2);
+    p.key(KeyCode::KeyW, ButtonState::Pressed);
+    p.wait(0.35);
+    p.orbit(from_its_side, 5.0);
+    p.shoot("swing-3-standing-then-running");
 }
 
 #[test]
