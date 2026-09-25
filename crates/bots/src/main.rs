@@ -1,10 +1,12 @@
-//! A crowd of bot clients for the server, walking Elwynn's terrain from one process and checking what they are shown.
+//! Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict.
 
 mod bot;
 mod check;
 mod ground;
+mod lie;
 mod mover;
 mod region;
+mod scenario;
 mod track;
 
 use std::collections::BTreeMap;
@@ -18,7 +20,7 @@ use std::time::{Duration, Instant};
 use crate::bot::{Crowd, Roles, now_ms};
 use crate::check::{Counters, PercentilesMs};
 use crate::ground::Ground;
-use crate::region::Scenario;
+use crate::region::Place;
 
 const USAGE: &str = "\
 usage: bots [--addr HOST:PORT | --in-process] [--scenario goldshire|elwynn] [--count N]
@@ -40,6 +42,7 @@ The terrain is read from the install at $WOW_DATA (or --wow-data DIR).";
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        Some("scenario") => return scenario::main(&args[1..]),
         Some("spawns") => spawns(&args[1..]),
         Some("header") => {
             println!("{REPORT_HEADER}");
@@ -50,7 +53,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}\n\n{USAGE}");
+            eprintln!("{e}\n\n{USAGE}\n{}", scenario::USAGE);
             ExitCode::FAILURE
         }
     }
@@ -82,28 +85,28 @@ fn num<T: std::str::FromStr>(f: &Flags, name: &str, default: T) -> Result<T, Str
     })
 }
 
-fn place(f: &Flags) -> Result<(Scenario, Ground), String> {
+fn place(f: &Flags) -> Result<(Place, Ground), String> {
     let name = f.get("scenario").map_or("goldshire", String::as_str);
-    let scenario = region::scenario(name).ok_or(format!("no scenario {name}"))?;
-    let data = f
-        .get("wow-data")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("WOW_DATA").map(PathBuf::from))
-        .ok_or("set WOW_DATA to the install's Data directory")?;
-    let chain = mpq::Chain::open(&data).map_err(|e| format!("{}: {e}", data.display()))?;
-    let ground = Ground::load(&chain, "Azeroth", scenario.tiles_x, scenario.tiles_y)?;
-    Ok((scenario, ground))
+    let place = region::place(name).ok_or(format!("no scenario {name}"))?;
+    let data = f.get("wow-data").map(PathBuf::from);
+    let ground = place.ground(install(data)?.as_ref())?;
+    Ok((place, ground))
+}
+
+/// The install's archives, at `data` or at `$WOW_DATA`.
+fn install(data: Option<PathBuf>) -> Result<Option<mpq::Chain>, String> {
+    let Some(data) = data.or_else(|| std::env::var_os("WOW_DATA").map(PathBuf::from)) else {
+        return Ok(None);
+    };
+    mpq::Chain::open(&data)
+        .map(Some)
+        .map_err(|e| format!("{}: {e}", data.display()))
 }
 
 fn spawns(args: &[String]) -> Result<(), String> {
     let f = flags(args, &[])?;
-    let (scenario, ground) = place(&f)?;
-    let list = region::spawns(
-        &scenario,
-        &ground,
-        num(&f, "count", 100)?,
-        num(&f, "seed", 1)?,
-    )?;
+    let (place, ground) = place(&f)?;
+    let list = region::spawns(&place, &ground, num(&f, "count", 100)?, num(&f, "seed", 1)?)?;
     for s in list {
         println!("{} {} {} {}", s.pos[0], s.pos[1], s.pos[2], s.facing);
     }
@@ -112,7 +115,7 @@ fn spawns(args: &[String]) -> Result<(), String> {
 
 fn load(args: &[String]) -> Result<(), String> {
     let f = flags(args, &["in-process", "unchecked"])?;
-    let (scenario, ground) = place(&f)?;
+    let (place, ground) = place(&f)?;
     let count: usize = num(&f, "count", 100)?;
     let settle: u64 = num(&f, "settle", 10)?;
     let secs: u64 = num(&f, "secs", 30)?;
@@ -122,7 +125,7 @@ fn load(args: &[String]) -> Result<(), String> {
     };
     let running = if f.contains_key("in-process") {
         let cfg = server::Config {
-            spawns: region::spawns(&scenario, &ground, count, 1)?,
+            spawns: region::spawns(&place, &ground, count, 1)?,
             tick_threads: num(&f, "server-threads", 1)?,
             io_threads: 1,
             rules: server::Rules {
@@ -144,7 +147,7 @@ fn load(args: &[String]) -> Result<(), String> {
             .map_err(|_| "--addr wants HOST:PORT")?,
     };
     let walks_end_ms = now_ms() + ((settle + secs + 120) * 1000) as u32;
-    let crowd = Arc::new(Crowd::new(scenario, ground, count * 2, roles, walks_end_ms));
+    let crowd = Arc::new(Crowd::new(place, ground, count * 2, roles, walks_end_ms));
     let mut rt = tokio::runtime::Builder::new_multi_thread();
     if let Ok(n) = num::<usize>(&f, "threads", 0)
         && n > 0

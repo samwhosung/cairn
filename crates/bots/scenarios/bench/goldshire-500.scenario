@@ -1,0 +1,4 @@
+# Five minutes of 500 bots in Goldshire: how fast a scenario runs as the rules grow.
+base = ../goldshire.scenario
+seconds = 300
+bots.walkers.count = 490

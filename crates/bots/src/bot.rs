@@ -16,9 +16,10 @@ use tokio::sync::mpsc;
 
 use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic, UnsentJudged};
 use crate::ground::Ground;
-use crate::mover::{Mover, Told};
-use crate::region::Scenario;
-use crate::track::{Track, plan};
+use crate::lie::Lie;
+use crate::mover::Mover;
+use crate::region::Place;
+use crate::track::{RUN, Track, Walk, crowd_liar_lies, plan};
 
 const FRAME_MS: u64 = 50;
 const JOIN_GRACE_MS: u32 = 2000;
@@ -41,6 +42,7 @@ fn ms_at(at: Instant) -> u32 {
 #[derive(Default)]
 struct Member {
     track: OnceLock<Track>,
+    lies: AtomicBool,
     joined_ms: AtomicU32,
     gone: AtomicBool,
     claims: Mutex<VecDeque<Claimed>>,
@@ -69,7 +71,7 @@ impl Roles {
 }
 
 pub struct Crowd {
-    pub scenario: Scenario,
+    pub place: Place,
     pub ground: Ground,
     by_id: Vec<Member>,
     pub roles: Roles,
@@ -81,15 +83,9 @@ pub struct Crowd {
 }
 
 impl Crowd {
-    pub fn new(
-        scenario: Scenario,
-        ground: Ground,
-        room: usize,
-        roles: Roles,
-        walks_end_ms: u32,
-    ) -> Self {
+    pub fn new(place: Place, ground: Ground, room: usize, roles: Roles, walks_end_ms: u32) -> Self {
         Self {
-            scenario,
+            place,
             ground,
             by_id: (0..room).map(|_| Member::default()).collect(),
             roles,
@@ -103,6 +99,12 @@ impl Crowd {
 
     fn track(&self, id: u32) -> Option<&Track> {
         self.by_id.get(id as usize)?.track.get()
+    }
+
+    fn lies(&self, id: u32) -> bool {
+        self.by_id
+            .get(id as usize)
+            .is_some_and(|m| m.lies.load(Ordering::Relaxed))
     }
 
     fn claimed(&self, id: u32, m: &Movement) {
@@ -129,11 +131,12 @@ impl Crowd {
         claims.iter().rev().find(|c| c.pos == pos).map(|c| c.time)
     }
 
+    /// The track of an honest bot that has been in for the join's grace and is still in.
     fn settled(&self, id: u32, now: u32) -> Option<&Track> {
         let m = self.by_id.get(id as usize)?;
         let joined = m.joined_ms.load(Ordering::Relaxed);
         let gone = m.gone.load(Ordering::Relaxed);
-        (joined != 0 && !gone && now >= joined + JOIN_GRACE_MS)
+        (joined != 0 && !gone && !self.lies(id) && now >= joined + JOIN_GRACE_MS)
             .then(|| m.track.get())
             .flatten()
     }
@@ -176,24 +179,29 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         pos: welcome.spawn.pos,
         facing: welcome.spawn.facing,
     };
-    let track = plan(
-        &crowd.scenario,
-        &crowd.ground,
-        &spawn,
-        now + 100,
-        crowd.walks_end_ms,
-        u64::from(welcome.id) + 1,
+    let walk = Walk {
+        start_ms: now + 100,
+        until_ms: crowd.walks_end_ms,
+        seed: u64::from(welcome.id) + 1,
+        run: RUN,
         liar,
-    );
+    };
+    let track = plan(&crowd.place, &crowd.ground, &spawn, &walk);
+    let lies = if liar {
+        crowd_liar_lies(&track, walk.start_ms)
+    } else {
+        Vec::new()
+    };
     let id = welcome.id;
     crowd.claimed(id, &welcome.spawn);
     let member = &crowd.by_id[id as usize];
+    member.lies.store(!lies.is_empty(), Ordering::Relaxed);
     let _ = member.track.set(track);
     member.joined_ms.store(now, Ordering::Relaxed);
     crowd.traffic.welcomed.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::unbounded_channel();
     let seen = Arc::new(AtomicU32::new(welcome.tick));
-    let writer = tokio::spawn(write(id, spawn, w, crowd.clone(), rx, seen.clone()));
+    let writer = tokio::spawn(write(id, spawn, lies, w, crowd.clone(), rx, seen.clone()));
     let mut reader = Reader {
         me: id,
         welcome,
@@ -255,6 +263,7 @@ async fn welcomed(r: &mut OwnedReadHalf, frames: &mut Frames) -> Option<Welcome>
 async fn write(
     id: u32,
     spawn: Spawn,
+    lies: Vec<Lie>,
     mut w: OwnedWriteHalf,
     crowd: Arc<Crowd>,
     mut corrections: mpsc::UnboundedReceiver<u32>,
@@ -263,7 +272,7 @@ async fn write(
     let Some(track) = crowd.track(id) else {
         return;
     };
-    let mut mover = Mover::new(spawn.pos, spawn.facing);
+    let mut mover = Mover::new(spawn.pos, spawn.facing, lies, false);
     let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let (mut claims, mut bytes) = (Vec::<Movement>::new(), Vec::new());
@@ -275,7 +284,10 @@ async fn write(
             mover.correct(seq);
         }
         claims.clear();
-        if mover.frame(frame_at, track, &crowd.ground, &mut claims) == Told::Lie {
+        if mover
+            .frame(frame_at, track, &crowd.ground, &mut claims)
+            .lied
+        {
             Checks::count(&crowd.checks.lying_frames);
         }
         bytes.clear();
@@ -438,8 +450,7 @@ impl Reader {
 
     fn corrected(&self, seq: u32) {
         let checks = &self.crowd.checks;
-        let liar = self.crowd.track(self.me).is_some_and(|t| t.lie.is_some());
-        Checks::count(if liar {
+        Checks::count(if self.crowd.lies(self.me) {
             &checks.liar_corrections
         } else {
             &checks.honest_corrections
@@ -457,7 +468,7 @@ impl Reader {
             return;
         };
         let e = dist(ground(relayed.yards()), track.xy(time));
-        let judged = if track.lie.is_some() {
+        let judged = if crowd.lies(id) {
             &mut self.unsent.relayed_liars
         } else {
             &mut self.unsent.relayed_honest
@@ -491,11 +502,9 @@ impl Reader {
             return;
         }
         let crowd = &self.crowd;
-        if let (Some(before), Some(me), Some(them)) = (
-            before,
-            crowd.track(self.me),
-            crowd.settled(id, now).filter(|t| t.lie.is_none()),
-        ) {
+        if let (Some(before), Some(me), Some(them)) =
+            (before, crowd.track(self.me), crowd.settled(id, now))
+        {
             let truth = them.xy(now);
             let t = crowd.limits.tier(dist(me.xy(now), truth));
             let bound = crowd.limits.view_lag_bound_yd(t);
@@ -529,7 +538,7 @@ impl Reader {
             let Some(them) = self.crowd.settled(id, now) else {
                 continue;
             };
-            if id == self.me || them.lie.is_some() {
+            if id == self.me {
                 continue;
             }
             let truth = them.xy(now);

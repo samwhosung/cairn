@@ -1386,6 +1386,7 @@ dependencies = [
  "libm",
  "mpq",
  "protocol",
+ "rayon",
  "server",
  "terrain",
  "tokio",

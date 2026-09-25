@@ -1,6 +1,6 @@
 [package]
 name = "bots"
-description = "Bot clients for the server: a crowd walking Elwynn's terrain from one process, each checking what it is shown"
+description = "Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ dbc = { path = "../dbc" }
 libm = "0.2"
 mpq = { path = "../mpq" }
 protocol = { path = "../protocol" }
+rayon = "1.12"
 server = { path = "../server" }
 terrain = { path = "../terrain" }
 wdt = { path = "../wdt" }

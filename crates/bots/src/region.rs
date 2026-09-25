@@ -44,13 +44,21 @@ pub enum Region {
     },
 }
 
+/// Where bots walk: a region of a map, the map's tiles that hold it, and how far one leg of a walk
+/// may reach. A place with no tiles stands on level ground built in code.
 #[derive(Clone, Copy, Debug)]
-pub struct Scenario {
+pub struct Place {
     pub name: &'static str,
     pub region: Region,
-    pub tiles_x: (u32, u32),
-    pub tiles_y: (u32, u32),
+    pub tiles: Option<Tiles>,
     pub leg_reach: f32,
+}
+
+/// The map's tiles `x.0..=x.1` by `y.0..=y.1`.
+#[derive(Clone, Copy, Debug)]
+pub struct Tiles {
+    pub x: (u32, u32),
+    pub y: (u32, u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,30 +67,55 @@ pub struct Square {
     pub half_side: f32,
 }
 
-pub fn scenario(name: &str) -> Option<Scenario> {
+pub fn place(name: &str) -> Option<Place> {
+    let goldshire_tiles = Tiles {
+        x: (30, 32),
+        y: (48, 50),
+    };
     match name {
-        "goldshire" => Some(Scenario {
+        "goldshire" => Some(Place {
             name: "goldshire",
             region: Region::Disk {
                 centre: GOLDSHIRE,
                 radius: 50.0,
             },
-            tiles_x: (30, 32),
-            tiles_y: (48, 50),
+            tiles: Some(goldshire_tiles),
             leg_reach: 60.0,
         }),
-        "elwynn" => Some(Scenario {
+        "elwynn" => Some(Place {
             name: "elwynn",
             region: Region::Zone {
                 area_id: ELWYNN_AREA_ID,
                 bounds_lo: [-10_200.0, -1734.0],
                 bounds_hi: [-8000.0, 1067.0],
             },
-            tiles_x: (30, 35),
-            tiles_y: (47, 51),
+            tiles: Some(Tiles {
+                x: (30, 35),
+                y: (47, 51),
+            }),
             leg_reach: 150.0,
         }),
+        "flat" => Some(Place {
+            name: "flat",
+            region: Region::Disk {
+                centre: [0.0, 0.0],
+                radius: 50.0,
+            },
+            tiles: None,
+            leg_reach: 60.0,
+        }),
         _ => None,
+    }
+}
+
+impl Place {
+    /// The ground this place stands on: its tiles from the install, or level ground.
+    pub fn ground(&self, chain: Option<&mpq::Chain>) -> Result<Ground, String> {
+        match (self.tiles, chain) {
+            (None, _) => Ok(Ground::flat(0.0)),
+            (Some(t), Some(chain)) => Ground::load(chain, "Azeroth", t.x, t.y),
+            (Some(_), None) => Err(format!("{} stands on the install", self.name)),
+        }
     }
 }
 
@@ -129,12 +162,7 @@ impl Region {
     }
 }
 
-pub fn spawns(
-    s: &Scenario,
-    ground: &Ground,
-    count: usize,
-    seed: u64,
-) -> Result<Vec<Spawn>, String> {
+pub fn spawns(s: &Place, ground: &Ground, count: usize, seed: u64) -> Result<Vec<Spawn>, String> {
     let mut rng = XorShift64Star::new(seed);
     (0..count)
         .map(|_| {
