@@ -14,7 +14,7 @@ const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
-             [--connect HOST:PORT | --host [PORT]] [--name NAME]
+             [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
              [--game NAME [--knobs FILE] [--overlay FILE]]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
@@ -23,7 +23,10 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          connects there appears beside the host. NAME is who the others see, the race's name
          by default. --game runs a game's rules (melee) on the window's own server, on its
          own knobs or the --knobs FILE, with an --overlay FILE laid on them; the window shows
-         what the game has each body do, and takes where the game puts the player
+         what the game has each body do, and takes where the game puts the player. --world
+         keeps the window's own world in FILE and starts from it, the players known by name; a
+         host keeps it by default where the server does (see server --help), and a window alone
+         keeps nothing unless told
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
@@ -58,7 +61,7 @@ button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, 
 where the camera is if the server lets the player teleport, as the window's own server
 does; Ctrl+Shift+F again walks on from where the body stood.";
 
-const FLAGS: [&str; 25] = [
+const FLAGS: [&str; 26] = [
     "age",
     "at",
     "az",
@@ -84,6 +87,7 @@ const FLAGS: [&str; 25] = [
     "size",
     "skin",
     "time",
+    "world",
 ];
 /// The playable races by their `ChrRaces` id, 1 first.
 const RACES: [&str; 8] = [
@@ -116,6 +120,8 @@ pub struct Joining {
     pub how: Join,
     pub name: String,
     pub game: Option<GameChoice>,
+    /// The file the window's own server keeps its world in.
+    pub world: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,11 +287,11 @@ fn shot_joins_nothing(given: &BTreeMap<String, String>, host: Option<u16>) -> Re
     if given.contains_key("name") {
         return Err("--name is for joining: --connect or --host".into());
     }
-    if ["game", "knobs", "overlay"]
+    if ["game", "knobs", "overlay", "world"]
         .iter()
         .any(|k| given.contains_key(*k))
     {
-        return Err("--game, --knobs and --overlay are for the window".into());
+        return Err("--game, --knobs, --overlay and --world are for the window".into());
     }
     Ok(())
 }
@@ -331,6 +337,12 @@ fn join(
         }
         None => None,
     };
+    let world = match given.remove("world") {
+        Some(_) if matches!(how, Join::Connect(_)) => {
+            return Err("--world keeps the window's own world: alone or --host".into());
+        }
+        world => world.map(PathBuf::from),
+    };
     match (given.remove("name"), how) {
         (Some(_), Join::Alone) => Err("--name is for joining: --connect or --host".into()),
         (Some(name), _) if name.trim().is_empty() => Err("--name wants a name".into()),
@@ -338,6 +350,7 @@ fn join(
             how,
             name: name.map_or_else(|| look.race_title(), |n| n.trim().to_owned()),
             game,
+            world,
         }),
     }
 }
@@ -528,6 +541,7 @@ mod tests {
             how: Join::Alone,
             name: "Human".into(),
             game: None,
+            world: None,
         };
         assert_eq!(args.mode, Mode::Window(alone));
         assert!(!args.start_flying);
@@ -617,6 +631,7 @@ mod tests {
                 how,
                 name: name.into(),
                 game: None,
+                world: None,
             })
         };
         assert_eq!(joining(""), as_(Join::Alone, "Human"));
@@ -655,6 +670,26 @@ mod tests {
             "--connect 127.0.0.1:7000 --game melee",
             "--knobs a.knobs",
             "shot --game melee --out a.png",
+        ] {
+            assert!(parsed(wrong).is_err(), "{wrong}");
+        }
+    }
+
+    #[test]
+    fn a_window_keeps_its_own_world_where_it_is_told() {
+        let world = |line: &str| match parsed(line).expect("parses").mode {
+            Mode::Window(joining) => joining.world,
+            Mode::Shot(_) => None,
+        };
+        assert_eq!(world("--host"), None, "the default is the binary's to give");
+        assert_eq!(world("--world a.sqlite"), Some(PathBuf::from("a.sqlite")));
+        assert_eq!(
+            world("--host --game melee --world b.sqlite"),
+            Some(PathBuf::from("b.sqlite"))
+        );
+        for wrong in [
+            "--connect 127.0.0.1:7000 --world a.sqlite",
+            "shot --world a.sqlite --out a.png",
         ] {
             assert!(parsed(wrong).is_err(), "{wrong}");
         }

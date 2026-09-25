@@ -30,13 +30,19 @@ fn main() -> AppExit {
         println!("{}", args::USAGE);
         return AppExit::Success;
     }
-    let args = match args::parse(argv) {
+    let mut args = match args::parse(argv) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("cairn: {e}\n\n{}", args::USAGE);
             return AppExit::from_code(2);
         }
     };
+    if let args::Mode::Window(joining) = &mut args.mode
+        && matches!(joining.how, args::Join::Host(_))
+        && joining.world.is_none()
+    {
+        joining.world = server::default_world(joining.game.as_ref().map(|g| g.name.as_str()));
+    }
     let Some(data) = std::env::var_os("WOW_DATA") else {
         eprintln!("cairn: set WOW_DATA to the Data directory of a WoW 1.12.1 install");
         return AppExit::from_code(2);

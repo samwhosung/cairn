@@ -198,6 +198,7 @@ pub fn join(
     let game = game.transpose().map_err(CannotHost)?;
     let served = |port: Option<u16>| server::Config {
         game: game.clone(),
+        world: joining.world.clone(),
         ..own_server(port, map, start, heading)
     };
     let net = match joining.how {
