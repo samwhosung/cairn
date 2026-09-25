@@ -128,6 +128,13 @@ impl<G: Game> Out<G> {
         self.show(Show::Hold(pose));
     }
 
+    /// Idles the body of the player this row is in `anim` where it would stand, until it is idled
+    /// in another or stops with `None`: it still moves as it would, and a held pose wins. Whoever
+    /// comes to see the body is shown what it idles in.
+    pub fn idle(&mut self, anim: Option<Anim>) {
+        self.show(Show::Idle(anim));
+    }
+
     fn show(&mut self, show: Show) {
         if self.me.is_player() {
             self.shows.push(BodyShow {

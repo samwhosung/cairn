@@ -7,11 +7,14 @@ const LIE_DOWN: u32 = 2;
 const GET_UP: u32 = 3;
 const HAUNT: u32 = 4;
 const SIT_AND_WAVE: u32 = 5;
+const MAKE_READY: u32 = 6;
+const CALM_DOWN: u32 = 7;
 
 const ATTACK: Anim = Anim(16);
 const WOUND: Anim = Anim(9);
 const DEAD: Anim = Anim(6);
 const SIT: Anim = Anim(97);
+const READY: Anim = Anim(25);
 
 struct Mime;
 
@@ -67,6 +70,8 @@ impl Kind<Mime> for Player {
                     out.play(WOUND);
                     out.hold(Some(DEAD));
                 }
+                MAKE_READY => out.idle(Some(READY)),
+                CALM_DOWN => out.idle(None),
                 _ => {}
             }
         }
@@ -149,5 +154,41 @@ fn a_row_with_no_body_shows_nothing_and_a_held_pose_is_part_of_the_world() {
         e.hash(),
         lying.hash(),
         "and once let go, the world is as before"
+    );
+}
+
+#[test]
+fn a_body_idles_until_it_stops_told_as_it_changes_and_apart_from_its_pose() {
+    let mut e = engine();
+    tick(&mut e, 0, &[]);
+    let before = e.hash();
+    let ready = tick(
+        &mut e,
+        1,
+        &[(0, MAKE_READY), (1, LIE_DOWN), (1, MAKE_READY)],
+    );
+    assert_eq!(ready.idled, [(0, Some(READY)), (1, Some(READY))]);
+    assert_eq!(ready.held, [(1, Some(DEAD))]);
+    assert_eq!(
+        (e.idling(0), e.idling(1), e.held(0), e.held(1)),
+        (Some(READY), Some(READY), None, Some(DEAD))
+    );
+    assert_ne!(e.hash(), before, "an idle is part of the world");
+    let again = tick(
+        &mut e,
+        2,
+        &[(0, MAKE_READY), (2, MAKE_READY), (2, CALM_DOWN)],
+    );
+    assert_eq!(
+        again,
+        Shows::default(),
+        "the idle it already has, and one stopped in the tick it began"
+    );
+    let calm = tick(&mut e, 3, &[(0, CALM_DOWN), (1, CALM_DOWN), (1, GET_UP)]);
+    assert_eq!((calm.idled.len(), calm.held.len()), (2, 1));
+    assert_eq!(
+        e.hash(),
+        before,
+        "stopped and let go, the world is as it was"
     );
 }

@@ -426,6 +426,9 @@ impl Pass<'_> {
         if let Some(pose) = game.held(id) {
             write_show(self.out, Whose::Slot(slot), Show::Hold(Some(pose.0)));
         }
+        if let Some(idle) = game.idling(id) {
+            write_show(self.out, Whose::Slot(slot), Show::Idle(Some(idle.0)));
+        }
     }
 
     /// All three are by id, and those that came were sent their whole state as they appeared.
@@ -453,10 +456,15 @@ impl Pass<'_> {
                 write_show(self.out, whose, Show::Play(anim.0));
             }
         }
+        let told_as_it_appeared = |n: u32| came.binary_search(&n).is_ok();
         for &(n, pose) in &shows.held {
-            let posed_as_it_appeared = came.binary_search(&n).is_ok();
-            if let Some(whose) = whose(n).filter(|_| !posed_as_it_appeared) {
+            if let Some(whose) = whose(n).filter(|_| !told_as_it_appeared(n)) {
                 write_show(self.out, whose, Show::Hold(pose.map(|a| a.0)));
+            }
+        }
+        for &(n, idle) in &shows.idled {
+            if let Some(whose) = whose(n).filter(|_| !told_as_it_appeared(n)) {
+                write_show(self.out, whose, Show::Idle(idle.map(|a| a.0)));
             }
         }
     }

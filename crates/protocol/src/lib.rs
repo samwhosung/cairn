@@ -34,4 +34,4 @@ pub use movement::{Jump, Movement, flags};
 pub use pos::{Angle, Pos, STEPS_PER_YD, Wrapped};
 pub use relay::{Changed, Intro, Relay, State};
 
-pub const VERSION: u16 = 5;
+pub const VERSION: u16 = 6;

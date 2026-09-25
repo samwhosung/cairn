@@ -7,8 +7,11 @@ use server::{Config, Input, InputOrder, Link, Spawn, Stamped, Stepper};
 const SWING: u32 = 1;
 const LIE_DOWN: u32 = 2;
 const GET_UP: u32 = 3;
+const MAKE_READY: u32 = 4;
+const CALM_DOWN: u32 = 5;
 const ATTACK: u16 = 16;
 const DEAD: u16 = 6;
+const READY: u16 = 25;
 
 struct Mime;
 
@@ -51,6 +54,8 @@ impl Kind<Mime> for Player {
                 SWING => out.play(Anim(ATTACK)),
                 LIE_DOWN => out.hold(Some(Anim(DEAD))),
                 GET_UP => out.hold(None),
+                MAKE_READY => out.idle(Some(Anim(READY))),
+                CALM_DOWN => out.idle(None),
                 _ => {}
             }
         }
@@ -116,8 +121,7 @@ fn act(conn: u32, input: Input) -> Stamped {
     }
 }
 
-#[test]
-fn a_body_is_shown_to_whoever_sees_it_and_its_player_and_a_pose_comes_with_the_appear() {
+fn four_clients() -> (Stepper, Vec<Client>) {
     let spawns = [0.0, 10.0, 500.0, 5.0].map(|x| Spawn {
         pos: [x, 0.0, 0.0],
         facing: 0.0,
@@ -128,14 +132,20 @@ fn a_body_is_shown_to_whoever_sees_it_and_its_player_and_a_pose_comes_with_the_a
         game: Some(game::load::<Mime>(None, &[], 1).expect("a game")),
         ..Config::default()
     };
-    let mut stepper =
+    let stepper =
         Stepper::new(&cfg, InputOrder::Canonical, Delivery::Canonical).expect("a stepper");
-    let mut clients: Vec<Client> = (0..4)
+    let clients: Vec<Client> = (0..4)
         .map(|conn| Client {
             link: stepper.connect(conn),
             slots: HashMap::new(),
         })
         .collect();
+    (stepper, clients)
+}
+
+#[test]
+fn a_body_is_shown_to_whoever_sees_it_and_its_player_and_a_pose_comes_with_the_appear() {
+    let (mut stepper, mut clients) = four_clients();
     let (a, b, c, late) = (0, 1, 2, 3);
     let ticks = [
         vec![join(a), join(b), join(c)],
@@ -204,4 +214,58 @@ fn a_body_is_shown_to_whoever_sees_it_and_its_player_and_a_pose_comes_with_the_a
         "c, out of everyone's view, is shown only to itself"
     );
     assert_eq!(stepper.pose_of(b), None);
+}
+
+#[test]
+fn what_a_body_idles_in_is_told_to_whoever_sees_it_and_its_player_and_comes_with_the_appear() {
+    let (mut stepper, mut clients) = four_clients();
+    let (a, b, late) = (0, 1, 3);
+    let ticks = [
+        vec![join(a), join(b), join(2)],
+        vec![act(b, Input::Action(MAKE_READY))],
+        vec![join(late)],
+        vec![act(b, Input::Action(CALM_DOWN))],
+    ];
+    let mut seen = Vec::new();
+    for inputs in &ticks {
+        stepper.tick(inputs);
+        seen.push(clients.iter_mut().map(Client::shown).collect::<Vec<_>>());
+        if seen.len() == 3 {
+            let view = stepper.in_view(late).expect("a view");
+            let b_there = view.iter().find(|v| v.id == b).expect("b in view");
+            assert_eq!(b_there.idle, Some(READY), "the stepper says b idles ready");
+            assert_eq!(stepper.idle_of(b), Some(READY));
+        }
+    }
+    let nothing: Vec<(On, Show)> = Vec::new();
+    let idled = |on, anim| vec![(on, Show::Idle(anim))];
+    assert_eq!(
+        seen[1],
+        [
+            idled(On::Other(b), Some(READY)),
+            idled(On::Own, Some(READY)),
+            nothing.clone(),
+            nothing.clone()
+        ],
+        "the one far off is not told"
+    );
+    assert_eq!(
+        seen[2][late as usize],
+        idled(On::Other(b), Some(READY)),
+        "the late one sees b ready as it appears"
+    );
+    assert_eq!(
+        seen[2][a as usize], nothing,
+        "and no one else is told again"
+    );
+    assert_eq!(
+        seen[3],
+        [
+            idled(On::Other(b), None),
+            idled(On::Own, None),
+            nothing.clone(),
+            idled(On::Other(b), None)
+        ]
+    );
+    assert_eq!(stepper.idle_of(b), None);
 }

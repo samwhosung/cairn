@@ -70,6 +70,9 @@ pub trait Hosted: Send + Sync {
     /// The pose a player's body holds now.
     fn held(&self, n: u32) -> Option<Anim>;
 
+    /// The animation a player's body idles in now.
+    fn idling(&self, n: u32) -> Option<Anim>;
+
     fn tables(&self) -> &SavedTables;
 
     /// A player's sent fields, encoded.

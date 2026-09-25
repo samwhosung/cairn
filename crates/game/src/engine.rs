@@ -368,6 +368,10 @@ impl<G: Game> Hosted for Engine<G> {
         self.poses.held(n)
     }
 
+    fn idling(&self, n: u32) -> Option<Anim> {
+        self.poses.idling(n)
+    }
+
     fn tables(&self) -> &SavedTables {
         &self.tables
     }

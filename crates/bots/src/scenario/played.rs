@@ -2,6 +2,7 @@ use game::Loaded;
 use server::Stepper;
 
 use super::client::Client;
+use super::shown::OwnShows;
 
 const CHAIN_START: u64 = 0xcbf2_9ce4_8422_2325;
 const CHAIN_PRIME: u64 = 0x0100_0000_01b3;
@@ -17,6 +18,7 @@ pub struct Played {
     pub first_shown_mismatch: Option<String>,
     pub plays_told: u64,
     pub poses_told: u64,
+    pub idles_told: u64,
     pub plays_out_of_view: u64,
 }
 
@@ -32,6 +34,7 @@ impl Played {
             first_shown_mismatch: None,
             plays_told: 0,
             poses_told: 0,
+            idles_told: 0,
             plays_out_of_view: 0,
         }
     }
@@ -50,8 +53,11 @@ impl Played {
             };
             let to_it = stepper.played_to(c.conn);
             self.plays_out_of_view += (played - to_it.len()) as u64;
-            let own_pose = stepper.pose_of(c.conn);
-            if let Some(what) = c.shown.first_difference(tick, &view, own_pose, &to_it) {
+            let own = OwnShows {
+                pose: stepper.pose_of(c.conn),
+                idle: stepper.idle_of(c.conn),
+            };
+            if let Some(what) = c.shown.first_difference(tick, &view, &own, &to_it) {
                 self.shown_mismatches += 1;
                 self.first_shown_mismatch
                     .get_or_insert_with(|| format!("tick {tick}: bot {}: {what}", c.conn));
@@ -66,6 +72,7 @@ impl Played {
         for c in clients {
             self.plays_told += c.shown.plays_told();
             self.poses_told += c.shown.poses_told();
+            self.idles_told += c.shown.idles_told();
         }
     }
 }

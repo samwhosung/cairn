@@ -11,6 +11,7 @@ pub mod anim {
     pub const DEAD: Anim = Anim(6);
     pub const COMBAT_WOUND: Anim = Anim(9);
     pub const ATTACK_UNARMED: Anim = Anim(16);
+    pub const READY_UNARMED: Anim = Anim(25);
 }
 
 /// What a tick had the players' bodies show, by body.
@@ -20,12 +21,15 @@ pub struct Shows {
     pub played: Vec<(u32, Anim)>,
     /// Each pose that changed, by body: the one now held, or `None` once let go.
     pub held: Vec<(u32, Option<Anim>)>,
+    /// Each idle that changed, by body: the one it now idles in, or `None` once it stops.
+    pub idled: Vec<(u32, Option<Anim>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Show {
     Play(Anim),
     Hold(Option<Anim>),
+    Idle(Option<Anim>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,6 +42,7 @@ pub(crate) struct BodyShow {
 #[derive(Default)]
 pub(crate) struct Poses {
     held: Vec<Option<Anim>>,
+    idling: Vec<Option<Anim>>,
     pub tick: Shows,
 }
 
@@ -46,6 +51,7 @@ impl Poses {
         let n = n as usize;
         if self.held.len() <= n {
             self.held.resize(n + 1, None);
+            self.idling.resize(n + 1, None);
         }
     }
 
@@ -53,32 +59,44 @@ impl Poses {
         self.held.get(n as usize).copied().flatten()
     }
 
-    pub fn all(&self) -> &[Option<Anim>] {
-        &self.held
+    pub fn idling(&self, n: u32) -> Option<Anim> {
+        self.idling.get(n as usize).copied().flatten()
+    }
+
+    pub fn all(&self) -> (&[Option<Anim>], &[Option<Anim>]) {
+        (&self.held, &self.idling)
     }
 
     pub fn settle(&mut self, mut shows: Vec<BodyShow>) {
         self.tick.played.clear();
         self.tick.held.clear();
+        self.tick.idled.clear();
         shows.sort_by_key(|s| (s.body, s.phase));
         let mut i = 0;
         while i < shows.len() {
             let n = shows[i].body;
-            let was = self.held(n);
-            let mut now = was;
+            let (was_held, was_idling) = (self.held(n), self.idling(n));
+            let (mut held, mut idling) = (was_held, was_idling);
             while let Some(&BodyShow { body, show, .. }) = shows.get(i)
                 && body == n
             {
                 match show {
                     Show::Play(anim) => self.tick.played.push((n, anim)),
-                    Show::Hold(pose) => now = pose,
+                    Show::Hold(pose) => held = pose,
+                    Show::Idle(anim) => idling = anim,
                 }
                 i += 1;
             }
-            if now != was {
+            if (held, idling) != (was_held, was_idling) {
                 self.join(n);
-                self.held[n as usize] = now;
-                self.tick.held.push((n, now));
+            }
+            if held != was_held {
+                self.held[n as usize] = held;
+                self.tick.held.push((n, held));
+            }
+            if idling != was_idling {
+                self.idling[n as usize] = idling;
+                self.tick.idled.push((n, idling));
             }
         }
     }

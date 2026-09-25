@@ -13,6 +13,7 @@ pub struct Drops {
     pub state: Option<Nth>,
     pub play: Option<Nth>,
     pub hold: Option<Nth>,
+    pub idle: Option<Nth>,
 }
 
 #[derive(Default)]
@@ -20,21 +21,30 @@ struct Held {
     id: u32,
     state: Option<Vec<u8>>,
     pose: Option<u16>,
+    idle: Option<u16>,
 }
 
 #[derive(Default)]
 pub struct Shown {
     by_slot: BTreeMap<u16, Held>,
     own_pose: Option<u16>,
+    own_idle: Option<u16>,
     tick: Option<u32>,
     latest_plays: Vec<(Whose, u16)>,
-    told: [u64; 3],
+    told: [u64; 4],
     drops: Drops,
 }
 
 const STATE: usize = 0;
 const PLAYED: usize = 1;
 const HELD: usize = 2;
+const IDLED: usize = 3;
+
+/// What the server has a bot's own body hold and idle in.
+pub struct OwnShows {
+    pub pose: Option<u16>,
+    pub idle: Option<u16>,
+}
 
 impl Shown {
     pub fn dropping(drops: Drops) -> Self {
@@ -96,6 +106,22 @@ impl Shown {
                         }
                     }
                 }
+                Record::Show {
+                    whose,
+                    show: Show::Idle(idle),
+                } => {
+                    if self.dropped(IDLED) {
+                        continue;
+                    }
+                    match whose {
+                        Whose::Own => self.own_idle = idle,
+                        Whose::Slot(slot) => {
+                            if let Some(held) = self.by_slot.get_mut(&slot) {
+                                held.idle = idle;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -103,7 +129,12 @@ impl Shown {
 
     fn dropped(&mut self, what: usize) -> bool {
         self.told[what] += 1;
-        let drop = [self.drops.state, self.drops.play, self.drops.hold][what];
+        let drop = [
+            self.drops.state,
+            self.drops.play,
+            self.drops.hold,
+            self.drops.idle,
+        ][what];
         drop.is_some_and(|Nth(n)| n.get() == self.told[what])
     }
 
@@ -115,11 +146,15 @@ impl Shown {
         self.told[HELD]
     }
 
+    pub fn idles_told(&self) -> u64 {
+        self.told[IDLED]
+    }
+
     pub fn first_difference(
         &self,
         tick: u32,
         view: &[InView<'_>],
-        own_pose: Option<u16>,
+        own: &OwnShows,
         played: &[(Whose, u16)],
     ) -> Option<String> {
         let mut ours = self.by_slot.iter();
@@ -128,6 +163,7 @@ impl Shown {
             id,
             state,
             pose,
+            idle,
         } in view
         {
             match ours.next() {
@@ -135,12 +171,13 @@ impl Shown {
                     if s == slot
                         && held.id == id
                         && held.state.as_deref() == Some(state)
-                        && held.pose == pose => {}
+                        && held.pose == pose
+                        && held.idle == idle => {}
                 Some((&s, held)) => {
                     return Some(format!(
-                        "slot {s} holds {} as {:?} posed {:?}, and the server shows {id} there as \
-                         {state:?} posed {pose:?}",
-                        held.id, held.state, held.pose
+                        "slot {s} holds {} as {:?} posed {:?} idling {:?}, and the server shows \
+                         {id} there as {state:?} posed {pose:?} idling {idle:?}",
+                        held.id, held.state, held.pose, held.idle
                     ));
                 }
                 None => {
@@ -156,10 +193,16 @@ impl Shown {
                 held.id
             ));
         }
-        if self.own_pose != own_pose {
+        if self.own_pose != own.pose {
             return Some(format!(
-                "its own body is posed {:?}, and the server holds it {own_pose:?}",
-                self.own_pose
+                "its own body is posed {:?}, and the server holds it {:?}",
+                self.own_pose, own.pose
+            ));
+        }
+        if self.own_idle != own.idle {
+            return Some(format!(
+                "its own body idles in {:?}, and the server idles it in {:?}",
+                self.own_idle, own.idle
             ));
         }
         let ours: &[(Whose, u16)] = if self.tick == Some(tick) {

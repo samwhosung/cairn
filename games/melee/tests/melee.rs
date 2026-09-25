@@ -84,11 +84,13 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
     let wounded = Shows {
         played: vec![(0, anim::ATTACK_UNARMED), (1, anim::COMBAT_WOUND)],
         held: vec![],
+        idled: vec![],
     };
     assert_eq!(shown[..3], [wounded.clone(), wounded.clone(), wounded]);
     let killed = Shows {
         played: vec![(0, anim::ATTACK_UNARMED), (1, anim::DEATH)],
         held: vec![(1, Some(anim::DEAD))],
+        idled: vec![],
     };
     assert_eq!(
         shown[3], killed,
@@ -97,6 +99,7 @@ fn a_swing_plays_the_attack_a_hit_the_wound_and_the_dead_lie_until_they_rise() {
     let missed = Shows {
         played: vec![(0, anim::ATTACK_UNARMED)],
         held: vec![],
+        idled: vec![],
     };
     assert!(
         shown[4..23].iter().all(|s| *s == missed),

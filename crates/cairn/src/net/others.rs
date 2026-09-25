@@ -221,6 +221,7 @@ pub fn apply_show(shown: &mut UnitShow, show: Show) {
     match show {
         Show::Play(anim) => shown.play = Some(anim),
         Show::Hold(pose) => shown.pose = pose,
+        Show::Idle(idle) => shown.idle = idle,
     }
 }
 

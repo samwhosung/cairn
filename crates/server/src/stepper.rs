@@ -30,6 +30,7 @@ pub struct InView<'a> {
     pub id: u32,
     pub state: &'a [u8],
     pub pose: Option<u16>,
+    pub idle: Option<u16>,
 }
 
 /// A client's end of its connection to a [`Stepper`]: the frames the server sent it, in order.
@@ -137,11 +138,13 @@ impl Stepper {
             .map(|(slot, id)| {
                 let state = game.and_then(|g| g.shown(id)).unwrap_or_default();
                 let pose = game.and_then(|g| g.held(id)).map(|a| a.0);
+                let idle = game.and_then(|g| g.idling(id)).map(|a| a.0);
                 InView {
                     slot,
                     id,
                     state,
                     pose,
+                    idle,
                 }
             })
             .collect();
@@ -152,6 +155,11 @@ impl Stepper {
     /// The pose the game has observer `id`'s own body hold.
     pub fn pose_of(&self, id: u32) -> Option<u16> {
         self.sim.game()?.held(id).map(|a| a.0)
+    }
+
+    /// What the game has observer `id`'s own body idle in.
+    pub fn idle_of(&self, id: u32) -> Option<u16> {
+        self.sim.game()?.idling(id).map(|a| a.0)
     }
 
     /// The animations this tick played on the bodies in observer `id`'s view and on its own, by

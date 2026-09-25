@@ -23,6 +23,8 @@ const SHOW_OWN: u8 = 8;
 const PLAY: u8 = 0;
 const HOLD: u8 = 1;
 const LET_GO: u8 = 2;
+const IDLE: u8 = 3;
+const STOP_IDLING: u8 = 4;
 
 /// How many slots a client's view has: one for each entity in it.
 pub const SLOTS: u16 = 1 << KIND_SHIFT;
@@ -92,6 +94,9 @@ pub enum Show {
     Play(u16),
     /// The body holds this pose until it is told another, or lets it go with `None`.
     Hold(Option<u16>),
+    /// The body idles in this animation where it would stand, until it is told another, or stops
+    /// with `None`.
+    Idle(Option<u16>),
 }
 
 impl Show {
@@ -101,6 +106,8 @@ impl Show {
             PLAY => Ok(Self::Play(anim)),
             HOLD => Ok(Self::Hold(Some(anim))),
             LET_GO => Ok(Self::Hold(None)),
+            IDLE => Ok(Self::Idle(Some(anim))),
+            STOP_IDLING => Ok(Self::Idle(None)),
             other => Err(Error::UnknownShow(other)),
         }
     }
@@ -340,6 +347,8 @@ pub fn write_show(out: &mut Vec<u8>, whose: Whose, show: Show) {
         Show::Play(anim) => (PLAY, anim),
         Show::Hold(Some(anim)) => (HOLD, anim),
         Show::Hold(None) => (LET_GO, 0),
+        Show::Idle(Some(anim)) => (IDLE, anim),
+        Show::Idle(None) => (STOP_IDLING, 0),
     };
     out.push(how);
     out.extend_from_slice(&anim.to_le_bytes());
@@ -509,6 +518,10 @@ mod tests {
             (Whose::Own, Show::Play(9)),
             (Whose::Own, Show::Hold(Some(6))),
             (Whose::Own, Show::Hold(None)),
+            (Whose::Slot(4), Show::Idle(Some(25))),
+            (Whose::Slot(4), Show::Idle(None)),
+            (Whose::Own, Show::Idle(Some(25))),
+            (Whose::Own, Show::Idle(None)),
         ];
         let mut bytes = Vec::new();
         let start = begin_batch(&mut bytes, 5);
@@ -517,14 +530,14 @@ mod tests {
         }
         let unknown = bytes.len() + 3;
         write_show(&mut bytes, Whose::Slot(1), Show::Play(1));
-        bytes[unknown] = LET_GO + 1;
+        bytes[unknown] = STOP_IDLING + 1;
         finish_frame(&mut bytes, start);
         let (_, got) = records_of(&bytes);
         let mut want: Vec<Result<Record<'_>, Error>> = shows
             .into_iter()
             .map(|(whose, show)| Ok(Record::Show { whose, show }))
             .collect();
-        want.push(Err(Error::UnknownShow(LET_GO + 1)));
+        want.push(Err(Error::UnknownShow(STOP_IDLING + 1)));
         assert_eq!(got, want);
         let mut one = Vec::new();
         write_show(&mut one, Whose::Slot(2), Show::Play(16));
