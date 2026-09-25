@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use bevy::math::ops;
 use bevy::prelude::*;
 use bevy::time::Real;
-use protocol::{Appearance, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome};
+use protocol::{Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, VERSION, Welcome};
 use server::Spawn;
 use world::CurrentMap;
 use world::coords::{bevy_to_wow, wow_to_bevy};
@@ -257,30 +257,25 @@ fn receive(
             Ok(ServerMessage::Batch(batch)) => {
                 net.latest_tick = Some(batch.tick);
                 let tick_ms = net.welcomed.map_or(0, |w| u32::from(w.tick_ms));
-                let at = BatchContext {
+                let mut at = BatchContext {
                     server_ms: batch.tick.wrapping_mul(tick_ms),
-                    own_pos: bevy_to_wow(player.pos),
+                    read_around: bevy_to_wow(player.pos),
                     arrived_real_ms: real_ms_at(&real, arrived),
                     now_real_ms: real.elapsed_secs_f64() * 1000.0,
                     game_secs: time.elapsed_secs(),
                 };
-                for record in batch {
-                    match record {
-                        Ok(Record::Correct { seq, why, movement }) => {
-                            if let Some(claims) = &mut net.claims {
-                                claims.correct(&mut player, seq, why, &movement);
-                                warn!(
-                                    "the server put the player back at {:?}, {} times now: {why}",
-                                    movement.pos, claims.corrections
-                                );
-                            }
-                        }
-                        Ok(record) => net.others.take(&mut commands, record, &at),
-                        Err(e) => {
-                            let why = format!("the server sent a broken batch ({e})");
-                            return alone(&mut commands, &mut net, why);
-                        }
-                    }
+                let Net { claims, others, .. } = &mut *net;
+                let taken = take_batch(
+                    batch,
+                    &mut at,
+                    claims.as_mut(),
+                    others,
+                    &mut player,
+                    &mut commands,
+                );
+                if let Err(e) = taken {
+                    let why = format!("the server sent a broken batch ({e})");
+                    return alone(&mut commands, &mut net, why);
                 }
             }
             Err(e) => {
@@ -296,6 +291,32 @@ fn receive(
         net.seen_at = now;
         net.link.send(&ClientMessage::Seen(tick));
     }
+}
+
+fn take_batch(
+    batch: Batch<'_>,
+    at: &mut BatchContext,
+    mut claims: Option<&mut Claims>,
+    others: &mut Others,
+    player: &mut Player,
+    commands: &mut Commands<'_, '_>,
+) -> Result<(), protocol::Error> {
+    for record in batch {
+        match record? {
+            Record::Correct { seq, why, movement } => {
+                if let Some(claims) = claims.as_deref_mut() {
+                    claims.correct(player, seq, why, &movement);
+                    at.read_around = movement.pos;
+                    warn!(
+                        "the server put the player back at {:?}, {} times now: {why}",
+                        movement.pos, claims.corrections
+                    );
+                }
+            }
+            record => others.take(commands, record, at),
+        }
+    }
+    Ok(())
 }
 
 fn real_ms_at(real: &Time<Real>, instant: Instant) -> f64 {
@@ -327,7 +348,104 @@ fn beside(start: [f32; 3], heading: f32) -> Vec<Spawn> {
 
 #[cfg(test)]
 mod tests {
+    use protocol::{
+        Intro, LEN_BYTES, Movement, Relay, Why, begin_batch, finish_frame, write_appear,
+        write_correct, write_move,
+    };
+
     use super::*;
+
+    const STOOD: [f32; 3] = [-9000.0, 100.0, 50.0];
+    const NEIGHBOUR: u16 = 3;
+
+    fn at(x_east_of_where_it_stood: f32) -> Movement {
+        Movement {
+            pos: [STOOD[0] + x_east_of_where_it_stood, STOOD[1], STOOD[2]],
+            ..Movement::default()
+        }
+    }
+
+    struct Reader {
+        app: App,
+        claims: Claims,
+        others: Others,
+        player: Player,
+    }
+
+    impl Reader {
+        fn new() -> Self {
+            let mut app = App::new();
+            app.init_resource::<Time>();
+            let mut player = Player::default();
+            player.put(wow_to_bevy(STOOD), 0.0);
+            Self {
+                app,
+                claims: Claims::new(&at(0.0)),
+                others: Others::default(),
+                player,
+            }
+        }
+
+        fn take(&mut self, tick: u32, write: impl FnOnce(&mut Vec<u8>)) {
+            let mut bytes = Vec::new();
+            let start = begin_batch(&mut bytes, tick);
+            write(&mut bytes);
+            finish_frame(&mut bytes, start);
+            let Ok(ServerMessage::Batch(batch)) = ServerMessage::read(&bytes[LEN_BYTES..]) else {
+                panic!("a batch");
+            };
+            let real_ms = f64::from(tick) * 50.0;
+            let mut at = BatchContext {
+                server_ms: tick * 50,
+                read_around: bevy_to_wow(self.player.pos),
+                arrived_real_ms: real_ms,
+                now_real_ms: real_ms,
+                game_secs: 0.0,
+            };
+            let world = self.app.world_mut();
+            take_batch(
+                batch,
+                &mut at,
+                Some(&mut self.claims),
+                &mut self.others,
+                &mut self.player,
+                &mut world.commands(),
+            )
+            .expect("a whole batch");
+            world.flush();
+        }
+
+        fn neighbour_east_of_where_it_stood(&mut self) -> f32 {
+            let world = self.app.world_mut();
+            let mut remotes = world.query::<&RemoteMotion>();
+            let [m] = remotes.iter(world).collect::<Vec<_>>()[..] else {
+                panic!("one neighbour");
+            };
+            m.wow_pos[0] - STOOD[0]
+        }
+    }
+
+    #[test]
+    fn a_batch_is_read_after_its_correction_where_the_player_was_put_back() {
+        let mut r = Reader::new();
+        r.take(20, |out| {
+            let intro = Intro::new(7, "Neighbour", &Appearance::default());
+            write_appear(out, NEIGHBOUR, &intro, &Relay::of(&at(10.0)));
+        });
+        assert!((r.neighbour_east_of_where_it_stood() - 10.0).abs() < 0.01);
+        r.player.put(wow_to_bevy(at(500.0).pos), 0.0);
+        r.take(21, |out| {
+            write_correct(out, 1, Why::Teleport, &at(0.0));
+            write_move(out, NEIGHBOUR, &Relay::of(&at(11.0)));
+        });
+        let back = bevy_to_wow(r.player.pos);
+        assert!((back[0] - STOOD[0]).abs() < 0.01, "put back to {back:?}");
+        let east = r.neighbour_east_of_where_it_stood();
+        assert!(
+            (east - 11.0).abs() < 0.01,
+            "the neighbour read {east} yd east"
+        );
+    }
 
     #[test]
     fn the_second_player_stands_to_the_hosts_right_and_the_third_to_its_left() {

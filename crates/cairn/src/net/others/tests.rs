@@ -46,7 +46,7 @@ fn a_move_mid_arc_keeps_the_relayed_launch_and_counts_its_fall_on_the_servers_cl
 fn take(app: &mut App, others: &mut Others, record: Record<'_>, server_ms: u32, real_ms: f64) {
     let at = BatchContext {
         server_ms,
-        own_pos: [100.0, 50.0, 10.0],
+        read_around: [100.0, 50.0, 10.0],
         arrived_real_ms: real_ms,
         now_real_ms: real_ms,
         game_secs: app.world().resource::<Time>().elapsed_secs(),

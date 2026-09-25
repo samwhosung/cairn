@@ -43,11 +43,11 @@ struct Relayed {
 }
 
 impl Relayed {
-    fn of(entity: Entity, state: &State, server_ms: u32, own_pos: [f32; 3]) -> Self {
+    fn of(entity: Entity, state: &State, server_ms: u32, read_around: [f32; 3]) -> Self {
         let falling = state.flags & flags::FALLING != 0;
         Self {
             entity,
-            wow_pos: state.pos.around(own_pos).yards(),
+            wow_pos: state.pos.around(read_around).yards(),
             facing: state.facing.radians(),
             flags: state.flags,
             pitch: if state.flags & flags::SWIMMING != 0 {
@@ -96,7 +96,7 @@ pub struct Faults {
 
 pub struct BatchContext {
     pub server_ms: u32,
-    pub own_pos: [f32; 3],
+    pub read_around: [f32; 3],
     pub arrived_real_ms: f64,
     pub now_real_ms: f64,
     pub game_secs: f32,
@@ -117,7 +117,7 @@ impl Others {
                 }
                 info!("{name} comes into view");
                 let entity = commands.spawn_empty().id();
-                let relayed = Relayed::of(entity, &state, at.server_ms, at.own_pos);
+                let relayed = Relayed::of(entity, &state, at.server_ms, at.read_around);
                 let mv = relayed.relay_move(at.server_ms);
                 commands.entity(entity).insert((
                     OtherPlayer {
@@ -141,14 +141,14 @@ impl Others {
                 }
             }
             Record::Move { slot, pos, facing } => self.relay(commands, slot, at, |r| {
-                r.wow_pos = pos.around(at.own_pos).yards();
+                r.wow_pos = pos.around(at.read_around).yards();
                 r.facing = facing.radians();
             }),
             Record::Turn { slot, facing } => self.relay(commands, slot, at, |r| {
                 r.facing = facing.radians();
             }),
             Record::State { slot, state } => self.relay(commands, slot, at, |r| {
-                *r = Relayed::of(r.entity, &state, at.server_ms, at.own_pos);
+                *r = Relayed::of(r.entity, &state, at.server_ms, at.read_around);
             }),
             Record::Correct { .. } => {}
         }

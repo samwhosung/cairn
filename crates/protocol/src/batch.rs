@@ -102,7 +102,8 @@ impl fmt::Display for Why {
 }
 
 /// One tick's news for one client: its records, read one by one as the batch is iterated. The
-/// tick is the time of every record in it.
+/// tick is the time of every record in it. Every entity's position in it reads right around where
+/// the server holds the client's own mover, which a correction, coming first, names.
 pub struct Batch<'a> {
     pub tick: u32,
     records: Reader<'a>,
