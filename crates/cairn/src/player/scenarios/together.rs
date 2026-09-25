@@ -55,9 +55,10 @@ fn runner(server: SocketAddr, look: CharacterLook) -> Runner {
         while cued.try_recv().is_err() {
             w.run(1);
         }
-        let go = Instant::now();
+        let clock = |w: &Walker| w.app.world().resource::<Time<Virtual>>().elapsed();
+        let go = clock(&w);
         for (at, act) in RUN_AND_JUMP {
-            while go.elapsed().as_secs_f32() < at {
+            while clock(&w).saturating_sub(go).as_secs_f32() < at {
                 w.run(1);
             }
             match act {
