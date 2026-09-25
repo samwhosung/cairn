@@ -362,6 +362,18 @@ impl Walker {
     /// Puts the feet at a WoW position, at rest, asks the server to put them there too, and settles
     /// there.
     pub fn teleport(&mut self, wow: Vec3) {
+        self.place(wow);
+        self.settle();
+    }
+
+    /// [`Walker::teleport`] for one frame, with the game clock held until the next settle.
+    pub fn hop(&mut self, wow: Vec3) {
+        self.place(wow);
+        hold_game_clocks(&mut [&mut *self]);
+        self.hold();
+    }
+
+    fn place(&mut self, wow: Vec3) {
         let mut player = self.app.world_mut().resource_mut::<Player>();
         player.pos = wow_to_bevy(wow.to_array());
         player.vel_y = 0.0;
@@ -369,7 +381,6 @@ impl Walker {
         player.airborne_since = None;
         player.settling = true;
         self.app.world_mut().write_message(Teleported);
-        self.settle();
     }
 
     /// Flies, as Ctrl+Shift+F does, with the camera over `xy` until the collision there has come,

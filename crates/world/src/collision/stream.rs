@@ -21,7 +21,8 @@ use crate::view::{FARCLIP, WorldCamera};
 use crate::wdt::WdtIndex;
 
 /// Whether the collision around the camera has arrived: every tile of the window is built or
-/// known to be missing, every placement's hull is in, and nothing waits to attach.
+/// known to be missing, every tile it let go is gone, every placement's hull is in, and nothing
+/// waits to attach.
 #[derive(Resource, Default, Debug)]
 pub struct CollisionResidency {
     pending: usize,
@@ -39,11 +40,14 @@ impl CollisionResidency {
         self.indexed
     }
 
-    /// Tiles, hulls, welds and colliders still on their way.
+    /// Tiles still to come or go, and hulls, welds and colliders still on their way.
     pub fn pending(&self) -> usize {
         self.pending
     }
 }
+
+type Change = u64;
+type TileId = Change;
 
 enum TileState {
     Unspawned(Handle<TileCollision>),
@@ -52,10 +56,11 @@ enum TileState {
 }
 
 struct Tile {
+    coords: (u32, u32),
     state: TileState,
     entities: Vec<Entity>,
     placements: BTreeSet<u32>,
-    requested: u64,
+    let_go: Option<Change>,
 }
 
 impl Tile {
@@ -64,14 +69,34 @@ impl Tile {
     }
 }
 
+enum Hull<A: Asset> {
+    Unasked(String),
+    Asked(Handle<A>),
+}
+
+impl<A: Asset> Hull<A> {
+    fn ask(&mut self, server: &AssetServer) {
+        if let Self::Unasked(url) = self {
+            *self = Self::Asked(server.load(std::mem::take(url)));
+        }
+    }
+
+    fn handle(&self) -> Option<&Handle<A>> {
+        match self {
+            Self::Asked(handle) => Some(handle),
+            Self::Unasked(_) => None,
+        }
+    }
+}
+
 enum PlacementModel {
     M2 {
-        hull: Handle<M2Hull>,
+        hull: Hull<M2Hull>,
         welded: bool,
-        inherited: bool,
+        passed_on_at: Option<Change>,
     },
     Wmo {
-        hull: Handle<WmoHull>,
+        hull: Hull<WmoHull>,
         doodad_set: u16,
     },
 }
@@ -80,19 +105,29 @@ struct Placement {
     model: Option<PlacementModel>,
     transform: Transform,
     refs: u32,
-    owner: (u32, u32),
+    owner: TileId,
     entities: Vec<Entity>,
     unwelded_props: Vec<(Handle<M2Hull>, Transform)>,
+}
+
+enum Step {
+    Arrive(TileId),
+    LetGo { asked: TileId, at: Change },
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct CollisionStreamer {
     wdt: Option<Handle<WdtIndex>>,
     indexed: bool,
-    tiles: BTreeMap<(u32, u32), Tile>,
+    tiles_by_ask: BTreeMap<TileId, Tile>,
     placements: BTreeMap<u32, Placement>,
     wanted: Vec<(u32, u32)>,
-    requests: u64,
+    last_change: Change,
+}
+
+fn next_change(last: &mut Change) -> Change {
+    *last += 1;
+    *last
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,36 +157,33 @@ pub(super) fn stream_collision(
     let [x, y, _] = crate::coords::bevy_to_wow(camera.translation);
     let window = Window::at(FARCLIP, x, y);
 
-    let released: Vec<(u32, u32)> = streamer
-        .tiles
-        .keys()
-        .copied()
-        .filter(|&key| !window.keeps(key))
-        .collect();
-    for key in released {
-        release(&mut commands, streamer, key);
+    for tile in streamer.tiles_by_ask.values_mut() {
+        if tile.let_go.is_none() && !window.keeps(tile.coords) {
+            tile.let_go = Some(next_change(&mut streamer.last_change));
+        }
     }
-
     streamer.wanted = window
         .tiles()
         .filter(|&(x, y)| index.has_tile(x, y))
         .collect();
-    for &(tx, ty) in &streamer.wanted {
-        let requests = &mut streamer.requests;
-        streamer.tiles.entry((tx, ty)).or_insert_with(|| {
-            *requests += 1;
-            Tile {
+    for &coords in &streamer.wanted {
+        if streamer.held(coords).is_none() {
+            let (tx, ty) = coords;
+            let tile = Tile {
+                coords,
                 state: TileState::Unspawned(server.load(format!(
                     "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
                 ))),
                 entities: Vec::new(),
                 placements: BTreeSet::new(),
-                requested: *requests,
-            }
-        });
+                let_go: None,
+            };
+            let asked = next_change(&mut streamer.last_change);
+            streamer.tiles_by_ask.insert(asked, tile);
+        }
     }
 
-    for tile in streamer.tiles.values_mut() {
+    for tile in streamer.tiles_by_ask.values_mut() {
         if let TileState::Unspawned(handle) = &tile.state
             && tiles.get(handle).is_none()
             && let LoadState::Failed(e) = server.load_state(handle)
@@ -160,42 +192,68 @@ pub(super) fn stream_collision(
             tile.state = TileState::Failed;
         }
     }
-    let every_request_arrived = !streamer.tiles.values().any(|t| t.in_flight(&tiles));
-    let mut batch: Vec<(u64, (u32, u32))> = Vec::new();
-    if every_request_arrived {
-        batch.extend(
-            streamer
-                .tiles
-                .iter()
-                .filter(|(_, t)| matches!(t.state, TileState::Unspawned(_)))
-                .map(|(&key, t)| (t.requested, key)),
-        );
+    if !streamer.tiles_by_ask.values().any(|t| t.in_flight(&tiles)) {
+        apply_changes(&mut commands, &tiles, streamer);
     }
-    batch.sort_unstable();
-    for (_, key) in batch {
-        let Some(tile) = streamer.tiles.get_mut(&key) else {
-            continue;
-        };
-        let TileState::Unspawned(handle) = &tile.state else {
-            continue;
-        };
-        let handle = handle.clone();
-        let Some(tc) = tiles.get(&handle) else {
-            continue;
-        };
-        tile.entities = spawn_tile(&mut commands, tc);
-        tile.state = TileState::Built(handle);
-        for d in &tc.doodads {
-            register_doodad(streamer, &server, d, key);
+}
+
+fn apply_changes(
+    commands: &mut Commands<'_, '_>,
+    tiles: &Assets<TileCollision>,
+    streamer: &mut CollisionStreamer,
+) {
+    let mut steps: BTreeMap<Change, Step> = BTreeMap::new();
+    for (&asked, tile) in &streamer.tiles_by_ask {
+        if matches!(tile.state, TileState::Unspawned(_)) {
+            steps.insert(asked, Step::Arrive(asked));
         }
-        for w in &tc.wmos {
-            register_wmo(streamer, &server, w, key);
+        if let Some(at) = tile.let_go {
+            steps.insert(at, Step::LetGo { asked, at });
+        }
+    }
+    for step in steps.into_values() {
+        match step {
+            Step::Arrive(asked) => arrive(commands, tiles, streamer, asked),
+            Step::LetGo { asked, at } => release(commands, streamer, asked, at),
         }
     }
 }
 
-fn release(commands: &mut Commands<'_, '_>, streamer: &mut CollisionStreamer, key: (u32, u32)) {
-    let Some(tile) = streamer.tiles.remove(&key) else {
+fn arrive(
+    commands: &mut Commands<'_, '_>,
+    tiles: &Assets<TileCollision>,
+    streamer: &mut CollisionStreamer,
+    asked: TileId,
+) {
+    let Some(tile) = streamer.tiles_by_ask.get_mut(&asked) else {
+        return;
+    };
+    let TileState::Unspawned(handle) = &tile.state else {
+        return;
+    };
+    let handle = handle.clone();
+    let Some(tc) = tiles.get(&handle) else {
+        return;
+    };
+    if tile.let_go.is_none() {
+        tile.entities = spawn_tile(commands, tc);
+    }
+    tile.state = TileState::Built(handle);
+    for d in &tc.doodads {
+        register_doodad(streamer, d, asked);
+    }
+    for w in &tc.wmos {
+        register_wmo(streamer, w, asked);
+    }
+}
+
+fn release(
+    commands: &mut Commands<'_, '_>,
+    streamer: &mut CollisionStreamer,
+    asked: TileId,
+    at: Change,
+) {
+    let Some(tile) = streamer.tiles_by_ask.remove(&asked) else {
         return;
     };
     despawn_all(commands, tile.entities);
@@ -209,30 +267,31 @@ fn release(commands: &mut Commands<'_, '_>, streamer: &mut CollisionStreamer, ke
         } else if streamer
             .placements
             .get(&uid)
-            .is_some_and(|p| p.owner == key)
+            .is_some_and(|p| p.owner == asked)
         {
-            rehome(streamer, uid);
+            pass_on(streamer, uid, at);
         }
     }
 }
 
-fn rehome(streamer: &mut CollisionStreamer, uid: u32) {
+fn pass_on(streamer: &mut CollisionStreamer, uid: u32, at: Change) {
     let heir = streamer
-        .tiles
+        .tiles_by_ask
         .iter()
-        .filter(|(_, t)| t.placements.contains(&uid))
-        .min_by_key(|(_, t)| t.requested)
-        .map(|(&key, _)| key);
+        .find(|(_, t)| t.placements.contains(&uid))
+        .map(|(&asked, _)| asked);
     let (Some(heir), Some(p)) = (heir, streamer.placements.get_mut(&uid)) else {
         return;
     };
     p.owner = heir;
     if let Some(PlacementModel::M2 {
-        welded, inherited, ..
+        welded,
+        passed_on_at,
+        ..
     }) = &mut p.model
     {
         *welded = false;
-        *inherited = true;
+        *passed_on_at = Some(at);
     }
 }
 
@@ -308,16 +367,23 @@ fn spawn_wmo_liquids(
 impl CollisionStreamer {
     pub(super) fn terrain_z_under(&self, tiles: &Assets<TileCollision>, at: Vec3) -> Option<f32> {
         let wow = bevy_to_wow(at);
-        let key = wdt::world_to_tile(wow[0], wow[1]);
-        let TileState::Built(handle) = &self.tiles.get(&key)?.state else {
-            return None;
-        };
+        let coords = wdt::world_to_tile(wow[0], wow[1]);
+        let handle = self.tiles_by_ask.values().find_map(|t| match &t.state {
+            TileState::Built(handle) if t.coords == coords => Some(handle),
+            _ => None,
+        })?;
         terrain::terrain_height_at(&tiles.get(handle)?.ground, wow)
+    }
+
+    fn held(&self, coords: (u32, u32)) -> Option<&Tile> {
+        self.tiles_by_ask
+            .values()
+            .find(|t| t.coords == coords && t.let_go.is_none())
     }
 }
 
-fn claim(streamer: &mut CollisionStreamer, uid: u32, tile: (u32, u32)) -> bool {
-    let Some(t) = streamer.tiles.get_mut(&tile) else {
+fn claim(streamer: &mut CollisionStreamer, uid: u32, tile: TileId) -> bool {
+    let Some(t) = streamer.tiles_by_ask.get_mut(&tile) else {
         return false;
     };
     if !t.placements.insert(uid) {
@@ -330,12 +396,7 @@ fn claim(streamer: &mut CollisionStreamer, uid: u32, tile: (u32, u32)) -> bool {
     true
 }
 
-fn register_doodad(
-    streamer: &mut CollisionStreamer,
-    server: &AssetServer,
-    d: &Doodad,
-    tile: (u32, u32),
-) {
+fn register_doodad(streamer: &mut CollisionStreamer, d: &Doodad, tile: TileId) {
     if !claim(streamer, d.unique_id, tile) {
         return;
     }
@@ -343,9 +404,9 @@ fn register_doodad(
         d.unique_id,
         Placement {
             model: Some(PlacementModel::M2 {
-                hull: server.load(m2_url(&d.model)),
+                hull: Hull::Unasked(m2_url(&d.model)),
                 welded: false,
-                inherited: false,
+                passed_on_at: None,
             }),
             transform: Transform {
                 translation: wow_to_bevy(d.position),
@@ -360,12 +421,7 @@ fn register_doodad(
     );
 }
 
-fn register_wmo(
-    streamer: &mut CollisionStreamer,
-    server: &AssetServer,
-    w: &WmoInstance,
-    tile: (u32, u32),
-) {
+fn register_wmo(streamer: &mut CollisionStreamer, w: &WmoInstance, tile: TileId) {
     if !claim(streamer, w.unique_id, tile) {
         return;
     }
@@ -373,7 +429,7 @@ fn register_wmo(
         w.unique_id,
         Placement {
             model: Some(PlacementModel::Wmo {
-                hull: server.load(wmo_url(&w.model)),
+                hull: Hull::Unasked(wmo_url(&w.model)),
                 doodad_set: w.doodad_set,
             }),
             transform: Transform {
@@ -397,7 +453,16 @@ pub(super) fn spawn_placement_colliders(
     mut streamer: ResMut<'_, CollisionStreamer>,
 ) {
     for p in streamer.placements.values_mut() {
-        if let Some(PlacementModel::Wmo { hull, doodad_set }) = &p.model {
+        match &mut p.model {
+            Some(PlacementModel::M2 { hull, .. }) => hull.ask(&server),
+            Some(PlacementModel::Wmo { hull, .. }) => hull.ask(&server),
+            None => {}
+        }
+        if let Some(PlacementModel::Wmo {
+            hull: Hull::Asked(hull),
+            doodad_set,
+        }) = &p.model
+        {
             if let Some(wmo) = wmos.get(hull) {
                 p.entities
                     .extend(spawn_wmo(&mut commands, wmo, &p.transform));
@@ -451,21 +516,23 @@ fn weld_owned_doodads(
     streamer: &mut CollisionStreamer,
 ) {
     let CollisionStreamer {
-        tiles, placements, ..
+        tiles_by_ask,
+        placements,
+        ..
     } = streamer;
-    let mut groups: BTreeMap<((u32, u32), bool), Vec<u32>> = BTreeMap::new();
+    let mut groups: BTreeMap<(TileId, Option<Change>), Vec<u32>> = BTreeMap::new();
     for (&uid, p) in placements.iter() {
         if let Some(PlacementModel::M2 {
             welded: false,
-            inherited,
+            passed_on_at,
             ..
         }) = p.model
         {
-            groups.entry((p.owner, inherited)).or_default().push(uid);
+            groups.entry((p.owner, passed_on_at)).or_default().push(uid);
         }
     }
     for ((owner, _), uids) in groups {
-        let Some(tile) = tiles.get_mut(&owner) else {
+        let Some(tile) = tiles_by_ask.get_mut(&owner).filter(|t| t.let_go.is_none()) else {
             continue;
         };
         let doodad = |uid: &u32| match placements.get(uid) {
@@ -473,20 +540,20 @@ fn weld_owned_doodads(
                 model: Some(PlacementModel::M2 { hull, .. }),
                 transform,
                 ..
-            }) => Some((hull, transform)),
+            }) => Some((hull.handle(), transform)),
             _ => None,
         };
         if !uids
             .iter()
             .filter_map(doodad)
-            .all(|(hull, _)| resolved(server, m2s, hull))
+            .all(|(hull, _)| hull.is_some_and(|hull| resolved(server, m2s, hull)))
         {
             continue;
         }
         let hulls = uids
             .iter()
             .filter_map(doodad)
-            .filter_map(|(hull, at)| hull_data(m2s, hull, at));
+            .filter_map(|(hull, at)| hull_data(m2s, hull?, at));
         tile.entities
             .extend(weld(hulls).into_iter().map(|b| spawn_batch(commands, b)));
         for uid in &uids {
@@ -559,30 +626,36 @@ pub(super) fn publish_residency(
     let unspawned_tiles = streamer
         .wanted
         .iter()
-        .filter(|key| {
+        .filter(|&&coords| {
             streamer
-                .tiles
-                .get(key)
+                .held(coords)
                 .is_none_or(|t| matches!(t.state, TileState::Unspawned(_)))
         })
+        .count();
+    let leaving_tiles = streamer
+        .tiles_by_ask
+        .values()
+        .filter(|t| t.let_go.is_some())
         .count();
     let unwelded: usize = streamer
         .placements
         .values()
         .map(|p| {
-            let waiting = |hull: &Handle<M2Hull>| 1 + usize::from(!resolved(&server, &m2s, hull));
+            let waiting = |hull: Option<&Handle<M2Hull>>| {
+                1 + usize::from(hull.is_none_or(|hull| !resolved(&server, &m2s, hull)))
+            };
             let model = match &p.model {
                 None | Some(PlacementModel::M2 { welded: true, .. }) => 0,
-                Some(PlacementModel::M2 { hull, .. }) => waiting(hull),
+                Some(PlacementModel::M2 { hull, .. }) => waiting(hull.handle()),
                 Some(PlacementModel::Wmo { .. }) => 1,
             };
             model
                 + p.unwelded_props
                     .iter()
-                    .map(|(hull, _)| waiting(hull))
+                    .map(|(hull, _)| waiting(Some(hull)))
                     .sum::<usize>()
         })
         .sum();
-    residency.pending = unspawned_tiles + unwelded + pending.count();
+    residency.pending = unspawned_tiles + leaving_tiles + unwelded + pending.count();
     residency.indexed = streamer.indexed;
 }

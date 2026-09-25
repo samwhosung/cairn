@@ -557,6 +557,47 @@ fn a_fence_on_a_tile_border_stands_after_either_tile_leaves() {
     }
 }
 
+fn trimeshes(w: &mut Walker) -> Vec<u64> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    use avian3d::prelude::Collider;
+
+    let world = w.app.world_mut();
+    let mut fingerprints: Vec<u64> = world
+        .query::<&Collider>()
+        .iter(world)
+        .filter_map(|c| c.shape().as_trimesh())
+        .map(|mesh| {
+            let mut hasher = DefaultHasher::new();
+            for v in mesh.vertices() {
+                [v.x, v.y, v.z].map(f32::to_bits).hash(&mut hasher);
+            }
+            mesh.indices().hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect();
+    fingerprints.sort_unstable();
+    fingerprints
+}
+
+#[test]
+fn hops_a_frame_apart_leave_the_colliders_that_settled_hops_do() {
+    let hops = [PAST_THE_BORDER, 0.0, -PAST_THE_BORDER, 0.0, PAST_THE_BORDER]
+        .map(|y| Vec3::new(BORDER_FENCE[0][0], y, 500.0));
+    let Some(mut settled) = Walker::on_ground(GOLDSHIRE, 0.0, 60.0) else {
+        return;
+    };
+    for at in hops {
+        settled.teleport(at);
+    }
+    let mut brisk = Walker::on_ground(GOLDSHIRE, 0.0, 60.0).expect("a second walker");
+    for at in hops {
+        brisk.hop(at);
+    }
+    brisk.settle();
+    assert_eq!(trimeshes(&mut settled), trimeshes(&mut brisk));
+}
+
 /// Goldshire's crossroads, north of the inn.
 const GOLDSHIRE: [f32; 2] = [-9450.0, 60.0];
 
