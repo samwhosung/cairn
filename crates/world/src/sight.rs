@@ -229,6 +229,7 @@ fn batch_hit(
         .as_ref()
         .map_or(Vec3::ZERO, |b| wow_to_bevy(b.pivot));
     let two_sided = g.two_sided || g.billboard.is_some();
+    let at_rest = Vec2::from(g.uv_anim.as_ref().map_or([0.0; 2], |a| a.sample(0.0)));
     let mut coverage = None;
     let mut best = None;
     for tri in g.indices.as_chunks::<3>().0 {
@@ -255,7 +256,9 @@ fn batch_hit(
                         .map_or(Vec2::ZERO, |uv| Vec2::from(*uv))
                 };
                 let [ua, ub, uc] = tri.map(uv);
-                let at = ua * (1.0 - hit.second - hit.third) + ub * hit.second + uc * hit.third;
+                let on_mesh =
+                    ua * (1.0 - hit.second - hit.third) + ub * hit.second + uc * hit.third;
+                let at = on_mesh + at_rest;
                 alpha.sample(at.x, at.y, g.wrap_x, g.wrap_y) >= ALPHA_KEY_REF
             }
             Ok(Some(Coverage::Full)) | Err(_) => true,
