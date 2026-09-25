@@ -13,17 +13,17 @@ fn flat_triangle() -> [Vec3; 3] {
 }
 
 fn met(hit: Option<Hit>) -> Option<f32> {
-    hit.map(|h| h.t)
+    hit.map(|h| h.distance)
 }
 
 #[test]
 fn a_face_is_met_from_its_front_and_from_behind_only_when_two_sided() {
     let up_facing = flat_triangle();
     let hit = triangle_hit(DOWN, up_facing, false).expect("met from above");
-    assert!((hit.t - 5.0).abs() < 1e-6, "{}", hit.t);
+    assert!((hit.distance - 5.0).abs() < 1e-6, "{}", hit.distance);
     let [a, b, c] = up_facing;
     assert_eq!(met(triangle_hit(DOWN, [a, c, b], false)), None, "its back");
-    assert_eq!(met(triangle_hit(DOWN, [a, c, b], true)), Some(hit.t));
+    assert_eq!(met(triangle_hit(DOWN, [a, c, b], true)), Some(hit.distance));
     let beside = up_facing.map(|p| p + Vec3::new(1.5, 1.5, 0.0));
     assert_eq!(met(triangle_hit(DOWN, beside, true)), None, "outside it");
     assert_eq!(met(triangle_hit(Vec3::Z, up_facing, true)), None, "behind");
@@ -34,18 +34,22 @@ fn a_hit_weighs_the_corners_it_lies_between() {
     let [a, b, c] = flat_triangle();
     let off = Vec3::new(-1.5, -0.25, 0.0);
     let hit = triangle_hit(DOWN, [a, b, c].map(|p| p + off), false).expect("met");
-    assert!((hit.u - 0.75).abs() < 1e-6 && (hit.v - 0.125).abs() < 1e-6);
+    assert!((hit.second - 0.75).abs() < 1e-6 && (hit.third - 0.125).abs() < 1e-6);
 }
 
 #[test]
 fn a_box_is_entered_where_the_ray_first_crosses_it() {
     let (lo, hi) = (Vec3::splat(-1.0), Vec3::splat(1.0));
     let from = Vec3::new(-5.0, 0.0, 0.0);
-    assert_eq!(slab(from, Vec3::X, lo, hi, 100.0), Some(4.0));
-    assert_eq!(slab(from, Vec3::X, lo, hi, 3.0), None, "past the limit");
-    assert_eq!(slab(from, Vec3::Y, lo, hi, 100.0), None, "beside it");
+    assert_eq!(box_entry(from, Vec3::X, lo, hi, 100.0), Some(4.0));
     assert_eq!(
-        slab(Vec3::ZERO, Vec3::X, lo, hi, 100.0),
+        box_entry(from, Vec3::X, lo, hi, 3.0),
+        None,
+        "past the limit"
+    );
+    assert_eq!(box_entry(from, Vec3::Y, lo, hi, 100.0), None, "beside it");
+    assert_eq!(
+        box_entry(Vec3::ZERO, Vec3::X, lo, hi, 100.0),
         Some(0.0),
         "inside"
     );
@@ -98,8 +102,7 @@ fn a_chunk_is_met_on_its_faces_and_not_where_it_has_none() {
     );
 }
 
-/// A square of two faces a yard across, five yards below its origin, facing up.
-fn square(blend: ModelBlend) -> Candidate {
+fn square_facing_up_five_yards_down(blend: ModelBlend) -> Candidate {
     let corners = [
         [0.0, 0.0, -5.0],
         [1.0, 0.0, -5.0],
@@ -126,17 +129,43 @@ fn a_batch_is_met_where_it_paints_and_seen_through_where_it_does_not() {
     let mut paints = CoverageReader::new(&chain);
     let from = wow_to_bevy([0.5, 0.25, 0.0]);
     let down = wow_to_bevy([0.0, 0.0, -1.0]);
-    let opaque = batch_hit(&square(ModelBlend::Opaque), from, down, 100.0, &mut paints);
+    let opaque = batch_hit(
+        &square_facing_up_five_yards_down(ModelBlend::Opaque),
+        from,
+        down,
+        100.0,
+        &mut paints,
+    );
     assert!(opaque.is_some_and(|t| (t - 5.0).abs() < 1e-5), "{opaque:?}");
     assert_eq!(
-        batch_hit(&square(ModelBlend::Opaque), from, down, 4.0, &mut paints),
+        batch_hit(
+            &square_facing_up_five_yards_down(ModelBlend::Opaque),
+            from,
+            down,
+            4.0,
+            &mut paints
+        ),
         None
     );
-    let untextured_cutout = square(ModelBlend::AlphaTest);
+    let untextured_cutout = square_facing_up_five_yards_down(ModelBlend::AlphaTest);
     assert_eq!(
         batch_hit(&untextured_cutout, from, down, 100.0, &mut paints),
         None
     );
-    let modulates = square(ModelBlend::Mod);
+    let modulates = square_facing_up_five_yards_down(ModelBlend::Mod);
     assert_eq!(batch_hit(&modulates, from, down, 100.0, &mut paints), None);
+}
+
+#[test]
+fn a_batch_placed_at_twice_its_size_is_met_at_the_distance_in_the_world() {
+    let chain = Chain::default();
+    let mut paints = CoverageReader::new(&chain);
+    let twice = Candidate {
+        to_mesh: Affine3A::from_scale(Vec3::splat(2.0)).inverse(),
+        ..square_facing_up_five_yards_down(ModelBlend::Opaque)
+    };
+    let from = wow_to_bevy([1.0, 0.5, 0.0]);
+    let down = wow_to_bevy([0.0, 0.0, -1.0]);
+    let met = batch_hit(&twice, from, down, 100.0, &mut paints);
+    assert!(met.is_some_and(|t| (t - 10.0).abs() < 1e-5), "{met:?}");
 }

@@ -29,7 +29,7 @@ use crate::placements::{PlacedModel, Placement, Placements};
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
 use crate::probes::Probes;
 use crate::ribbons::{RibbonSeq, spawn_ribbon};
-use crate::sight::{Meetable, Seen, file_of};
+use crate::sight::{Meetable, Seen, install_path};
 use crate::stream::Streamer;
 use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::WmoModel;
@@ -89,7 +89,7 @@ impl Furnishing {
             entities: Vec::new(),
             forms: Vec::new(),
             unique_id,
-            file: file_of(url),
+            file: install_path(url),
         }
     }
 }
@@ -152,12 +152,12 @@ pub(crate) fn furnish(
         } = &mut f.model
             && let Some(m) = wmos.get(&*handle)
         {
-            let building = (f.unique_id, &f.file);
             *props = Some(resolve_props(
                 m,
                 *doodad_set,
                 &f.transform,
-                building,
+                f.unique_id,
+                &f.file,
                 &server,
             ));
         }
@@ -301,7 +301,7 @@ impl Spawner<'_, '_, '_, '_> {
                     file: f.file.clone(),
                     unique_id: f.unique_id,
                 };
-                let seen = |_| doodad.clone();
+                let seen_by_batch = |_| doodad.clone();
                 let placed = self.doodad(
                     m,
                     id,
@@ -311,7 +311,7 @@ impl Spawner<'_, '_, '_, '_> {
                     None,
                     None,
                     &mut f.forms,
-                    &seen,
+                    &seen_by_batch,
                 );
                 let mut ents = placed.batches;
                 self.doodad_lights(m, &f.transform, None, &mut ents);
@@ -330,13 +330,13 @@ impl Spawner<'_, '_, '_, '_> {
                     return;
                 };
                 let form = self.forms(handle.id().untyped(), &m.submeshes);
-                let seen = |i: usize| Seen::Building {
+                let seen_by_batch = |i: usize| Seen::Building {
                     file: f.file.clone(),
                     unique_id: f.unique_id,
                     group: m.submesh_group.get(i).copied().unwrap_or_default(),
                 };
                 let (at, into) = (&f.transform, &mut f.entities);
-                let building = self.building(handle, *name_set, m, &form, at, &seen, into);
+                let building = self.building(handle, *name_set, m, &form, at, &seen_by_batch, into);
                 f.forms.push(form);
                 let site = PropSite {
                     building,
@@ -376,7 +376,7 @@ impl Spawner<'_, '_, '_, '_> {
         building: Option<Entity>,
         room: Option<&WmoGroupVis>,
         placement_forms: &mut Vec<Arc<[Handle<Mesh>]>>,
-        seen: &dyn Fn(usize) -> Seen,
+        seen_by_batch: &dyn Fn(usize) -> Seen,
     ) -> PlacedDoodad {
         let (radius, center) = m.fade_sphere(transform.scale.x);
         let fade = DrawSetGate {
@@ -409,7 +409,7 @@ impl Spawner<'_, '_, '_, '_> {
             light,
             radius,
             local_center: center,
-            seen,
+            seen_by_batch,
         };
         let batches = self.batches(&m.submeshes, form, &placed, rig.as_mut());
         let effects = self.spawn_effects(m, transform, &fade, rig.as_mut());
@@ -502,7 +502,7 @@ impl Spawner<'_, '_, '_, '_> {
         m: &WmoModel,
         form: &[Handle<Mesh>],
         transform: &Transform,
-        seen: &dyn Fn(usize) -> Seen,
+        seen_by_batch: &dyn Fn(usize) -> Seen,
         out: &mut Vec<Entity>,
     ) -> Entity {
         let instance = self
@@ -523,7 +523,7 @@ impl Spawner<'_, '_, '_, '_> {
             light: DoodadLight::Sky(GroundShade::Lit),
             radius: f32::INFINITY,
             local_center: Vec3::ZERO,
-            seen,
+            seen_by_batch,
         };
         let batches = self.batches(&m.submeshes, form, &placed, None);
         for (&entity, &group) in batches.iter().zip(&m.submesh_group) {
@@ -619,7 +619,7 @@ impl Spawner<'_, '_, '_, '_> {
             });
             let meetable = Meetable {
                 geometry: g.clone(),
-                seen: (placed.seen)(i),
+                seen: (placed.seen_by_batch)(i),
             };
             let mut e = self.commands.spawn((
                 Mesh3d(mesh.clone()),
@@ -714,6 +714,5 @@ struct Placed<'a> {
     light: DoodadLight,
     radius: f32,
     local_center: Vec3,
-    /// What each batch shows, by its index.
-    seen: &'a dyn Fn(usize) -> Seen,
+    seen_by_batch: &'a dyn Fn(usize) -> Seen,
 }

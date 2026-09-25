@@ -1,6 +1,3 @@
-//! The doodads a building places inside itself: resolved from its root, lit as its rooms light
-//! them, and spawned with it.
-
 use std::sync::Arc;
 
 use bevy::prelude::*;
@@ -13,7 +10,7 @@ use crate::model_material::GroundShade;
 use crate::placements::prop_placements;
 use crate::portal::WmoGroupVis;
 use crate::probes::{ProbeSlot, Probes, PropLobeLight, fold_interior_probe};
-use crate::sight::{Seen, file_of};
+use crate::sight::{Seen, install_path};
 use crate::stream::Streamer;
 use crate::wmo::{DoodadBase, WmoModel};
 
@@ -40,12 +37,12 @@ pub(super) struct PropSite<'a> {
     pub(super) adts: &'a Assets<AdtTile>,
 }
 
-/// `building` is the placement's unique id and file.
 pub(super) fn resolve_props(
     wmo: &WmoModel,
     doodad_set: u16,
     world: &Transform,
-    building: (u32, &Arc<str>),
+    unique_id: u32,
+    file: &Arc<str>,
     server: &AssetServer,
 ) -> Vec<Prop> {
     prop_placements(wmo, doodad_set, world)
@@ -74,9 +71,9 @@ pub(super) fn resolve_props(
                 _ => PropLight::Exterior,
             };
             let seen = Seen::Prop {
-                file: file_of(&p.url),
-                building: building.1.clone(),
-                unique_id: building.0,
+                file: install_path(&p.url),
+                building: file.clone(),
+                unique_id,
                 doodad: p.doodad,
             };
             Prop {

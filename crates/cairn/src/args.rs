@@ -68,10 +68,11 @@ button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, 
 where the camera is if the server lets the player teleport, as the window's own server
 does; Ctrl+Shift+F again walks on from where the body stood.
 
-Ctrl+Shift+N leaves a note about the spot under the pointer, or the middle of the window
-while a held button hides the pointer: the frame with the spot ringed, and the camera it
-was drawn from, what the spot shows and the commands that open the view again. Each note
-is a directory named by its time (UTC) in the user's data directory (on macOS
+Ctrl+Shift+N leaves a note about the spot under the pointer, or about the middle of the
+window while a held button hides the pointer or it is off the window: a directory named
+by its time (UTC) holding frame.png, the frame with the spot ringed, and note.txt, the
+camera it was drawn from, what the spot shows and the commands that open the view again.
+Notes go in the user's data directory (on macOS
 ~/Library/Application Support/cairn/notes), or in --notes DIR.";
 
 const FLAGS: [&str; 27] = [
@@ -127,7 +128,6 @@ pub struct Args {
     pub display: Option<Fixture>,
     pub world_age: Duration,
     pub look: Look,
-    /// Where the window's notes go; the binary gives the default.
     pub notes: Option<PathBuf>,
 }
 

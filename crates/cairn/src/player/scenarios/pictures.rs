@@ -384,7 +384,6 @@ impl Painter {
         }
     }
 
-    /// One frame at the step, and what its update cost.
     pub(super) fn timed_frame(&mut self) -> Duration {
         self.pace.wait(STEP);
         let t = Instant::now();

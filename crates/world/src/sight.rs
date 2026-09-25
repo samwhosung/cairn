@@ -51,16 +51,13 @@ pub struct Sighting {
     pub tile: (u32, u32),
 }
 
-/// A model batch as a ray meets it.
 #[derive(Component, Clone)]
 pub(crate) struct Meetable {
-    /// The batch's triangles in the model's own space.
     pub(crate) geometry: Arc<RenderSubmesh>,
     pub(crate) seen: Seen,
 }
 
-/// The install path of an asset the world loads.
-pub(crate) fn file_of(url: &str) -> Arc<str> {
+pub(crate) fn install_path(url: &str) -> Arc<str> {
     Arc::from(url.strip_prefix(&format!("{MPQ_SOURCE}://")).unwrap_or(url))
 }
 
@@ -82,18 +79,19 @@ pub struct Sight<'w, 's> {
 
 impl Sight<'_, '_> {
     /// A ray from `origin` along `dir`, in Bevy's axes, out to `reach`. The terrain's nearest face
-    /// is found now, and the model batches drawn this frame that the ray enters nearer than it are
-    /// kept for [`Ray::first`], which can run on any thread.
+    /// is found now, and the model batches the ray enters nearer than it are kept for
+    /// [`Ray::first`], which can run on any thread. Cast after `PostUpdate`'s visibility check,
+    /// they are the batches drawn this frame.
     pub fn cast(&self, origin: Vec3, dir: Dir3, reach: f32) -> Ray {
         let mut terrain: Option<(f32, Seen, (u32, u32))> = None;
-        let (o, d) = (
+        let (from_wow, dir_wow) = (
             Vec3::from(bevy_to_wow(origin)),
             Vec3::from(bevy_to_wow(*dir)),
         );
         for (tile, handle) in self.streamer.arrived() {
             for chunk in self.tiles.get(handle).into_iter().flat_map(|t| &t.chunks) {
                 let limit = terrain.as_ref().map_or(reach, |t| t.0);
-                if let Some(t) = chunk_hit(chunk, o, d, limit) {
+                if let Some(t) = chunk_hit(chunk, from_wow, dir_wow, limit) {
                     let seen = Seen::Terrain {
                         chunk: (chunk.index_x, chunk.index_y),
                     };
@@ -113,7 +111,7 @@ impl Sight<'_, '_> {
                 to_mesh.transform_vector3(*dir),
             );
             let enters = match bound {
-                Some(b) => slab(o, d, b.min().into(), b.max().into(), limit),
+                Some(b) => box_entry(o, d, b.min().into(), b.max().into(), limit),
                 None => Some(0.0),
             };
             if let Some(enters) = enters {
@@ -131,7 +129,7 @@ impl Sight<'_, '_> {
             dir: *dir,
             terrain,
             reach,
-            batches,
+            by_entry: batches,
             chain: self.install.0.clone(),
         }
     }
@@ -143,8 +141,7 @@ pub struct Ray {
     dir: Vec3,
     terrain: Option<(f32, Seen, (u32, u32))>,
     reach: f32,
-    /// Nearest entry first.
-    batches: Vec<Candidate>,
+    by_entry: Vec<Candidate>,
     chain: Arc<Chain>,
 }
 
@@ -157,13 +154,15 @@ struct Candidate {
 
 impl Ray {
     /// The nearest face the ray meets. A face is met from the side it is drawn from, and a batch
-    /// that turns to the camera or is two-sided from either; a batch that cuts out or blends only
-    /// where its texture, read from the install, passes the client's alpha key. Bodies, liquids,
-    /// particles, the horizon and the sky are not met.
+    /// that turns to the camera or is two-sided from either. A batch that cuts out or blends is met
+    /// only where its texture, read from the install, passes the client's alpha key: nowhere when
+    /// it has no texture, everywhere when its texture does not read. A batch that multiplies what
+    /// is behind it is never met, and an animated one is met as it stands at rest. Bodies,
+    /// liquids, particles, the horizon and the sky are not met.
     pub fn first(self) -> Option<Sighting> {
         let mut paints = CoverageReader::new(&self.chain);
         let mut best = self.terrain.map(|(t, seen, tile)| (t, seen, Some(tile)));
-        for c in &self.batches {
+        for c in &self.by_entry {
             let limit = best.as_ref().map_or(self.reach, |b| b.0);
             if c.enters >= limit {
                 break;
@@ -185,34 +184,34 @@ impl Ray {
     }
 }
 
-/// A chunk's nearest front face along the ray, in WoW's axes, nearer than `limit`.
-fn chunk_hit(chunk: &ChunkMesh, o: Vec3, d: Vec3, limit: f32) -> Option<f32> {
+fn chunk_hit(chunk: &ChunkMesh, from_wow: Vec3, dir_wow: Vec3, limit: f32) -> Option<f32> {
     let nw = Vec3::from(*chunk.positions.first()?);
     let (lo, hi) = (nw - Vec3::new(CHUNK_SIZE, CHUNK_SIZE, 0.0), nw);
     let (floor, roof) = (f32::NEG_INFINITY, f32::INFINITY);
-    slab(o, d, lo.with_z(floor), hi.with_z(roof), limit)?;
+    box_entry(from_wow, dir_wow, lo.with_z(floor), hi.with_z(roof), limit)?;
     let (z_lo, z_hi) = chunk
         .positions
         .iter()
         .fold((roof, floor), |(a, b), p| (a.min(p[2]), b.max(p[2])));
-    slab(o, d, lo.with_z(z_lo), hi.with_z(z_hi), limit)?;
+    box_entry(from_wow, dir_wow, lo.with_z(z_lo), hi.with_z(z_hi), limit)?;
     let mut best = None;
     for tri in chunk.indices.as_chunks::<3>().0 {
-        let corner = |i: u32| chunk.positions.get(i as usize).map(|p| Vec3::from(*p) - o);
+        let corner = |i: u32| {
+            let p = chunk.positions.get(i as usize)?;
+            Some(Vec3::from(*p) - from_wow)
+        };
         let [Some(a), Some(b), Some(c)] = tri.map(corner) else {
             continue;
         };
-        if let Some(hit) = triangle_hit(d, [a, b, c], false)
-            && hit.t < best.unwrap_or(limit)
+        if let Some(hit) = triangle_hit(dir_wow, [a, b, c], false)
+            && hit.distance < best.unwrap_or(limit)
         {
-            best = Some(hit.t);
+            best = Some(hit.distance);
         }
     }
     best
 }
 
-/// A batch's nearest face along the ray that paints where it is met, nearer than `limit`. The ray
-/// is carried into the batch's own space, where its parameter is still distance in the world.
 fn batch_hit(
     c: &Candidate,
     origin: Vec3,
@@ -244,7 +243,7 @@ fn batch_hit(
         let Some(hit) = triangle_hit(d, [a, b, e], two_sided) else {
             continue;
         };
-        if hit.t >= best.unwrap_or(limit) {
+        if hit.distance >= best.unwrap_or(limit) {
             continue;
         }
         let painted = match coverage.get_or_insert_with(|| paints.coverage(g)) {
@@ -256,50 +255,51 @@ fn batch_hit(
                         .map_or(Vec2::ZERO, |uv| Vec2::from(*uv))
                 };
                 let [ua, ub, uc] = tri.map(uv);
-                let at = ua * (1.0 - hit.u - hit.v) + ub * hit.u + uc * hit.v;
+                let at = ua * (1.0 - hit.second - hit.third) + ub * hit.second + uc * hit.third;
                 alpha.sample(at.x, at.y, g.wrap_x, g.wrap_y) >= ALPHA_KEY_REF
             }
             Ok(Some(Coverage::Full)) | Err(_) => true,
         };
         if painted {
-            best = Some(hit.t);
+            best = Some(hit.distance);
         }
     }
     best
 }
 
-/// Where a ray meets a triangle: its distance, and the weights of the second and third corners.
 struct Hit {
-    t: f32,
-    u: f32,
-    v: f32,
+    distance: f32,
+    second: f32,
+    third: f32,
 }
 
-/// Where along `d` from the origin the triangle is met: from its front, the side it winds
-/// counter-clockwise to, unless it is `two_sided`.
-fn triangle_hit(d: Vec3, [a, b, c]: [Vec3; 3], two_sided: bool) -> Option<Hit> {
+fn triangle_hit(d: Vec3, from_origin: [Vec3; 3], two_sided: bool) -> Option<Hit> {
+    let [a, b, c] = from_origin;
     let (e1, e2) = (b - a, c - a);
     let p = d.cross(e2);
-    let det = e1.dot(p);
-    if det == 0.0 || (!two_sided && det < 0.0) {
+    let facing_the_ray = e1.dot(p);
+    if facing_the_ray == 0.0 || (!two_sided && facing_the_ray < 0.0) {
         return None;
     }
     let s = -a;
-    let u = s.dot(p) / det;
-    if !(0.0..=1.0).contains(&u) {
+    let second = s.dot(p) / facing_the_ray;
+    if !(0.0..=1.0).contains(&second) {
         return None;
     }
     let q = s.cross(e1);
-    let v = d.dot(q) / det;
-    if v < 0.0 || u + v > 1.0 {
+    let third = d.dot(q) / facing_the_ray;
+    if third < 0.0 || second + third > 1.0 {
         return None;
     }
-    let t = e2.dot(q) / det;
-    (t > 0.0).then_some(Hit { t, u, v })
+    let distance = e2.dot(q) / facing_the_ray;
+    (distance > 0.0).then_some(Hit {
+        distance,
+        second,
+        third,
+    })
 }
 
-/// Where the ray enters the box, if it does nearer than `limit`.
-fn slab(o: Vec3, d: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> Option<f32> {
+fn box_entry(o: Vec3, d: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> Option<f32> {
     let (mut near, mut far) = (0.0_f32, limit);
     for axis in 0..3 {
         let (o, d, lo, hi) = (o[axis], d[axis], lo[axis], hi[axis]);

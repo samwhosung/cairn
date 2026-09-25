@@ -282,8 +282,8 @@ impl Roster {
     }
 }
 
-/// The file a world is kept in unless told otherwise: in [`data_dir`], named after the game it
-/// runs, or `world` with none.
+/// The file a world is kept in unless told otherwise: in the `worlds` directory of [`data_dir`],
+/// named after the game it runs, or `world` with none.
 pub fn default_world(game: Option<&str>) -> Option<PathBuf> {
     let name = format!("{}.sqlite", game.unwrap_or("world"));
     Some(data_dir()?.join("worlds").join(name))

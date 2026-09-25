@@ -1,7 +1,3 @@
-//! Notes left in the window's headless harness: a note names what the pointer was over, and the
-//! camera it records draws that spot on the same pixel again, where the camera the follow rig
-//! asked for, before collision pulled it in, does not.
-
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -10,27 +6,106 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
-use world::coords::wow_to_bevy;
+use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::CharacterLook;
-use world::{CurrentMap, Install, PlacedModel, Placements, WorldCamera};
+use world::{CurrentMap, FOV_Y, Install, PlacedModel, Placements, WorldCamera};
 
 use super::INN_WALL;
 use super::pictures::{FACING_A_GOLDSHIRE_LAMPPOST, Painter, SIZE, STEP};
 use crate::args::{self, Mode};
 use crate::note::{Notes, Pointer};
 use crate::player::camera::CameraControl;
-use crate::player::state::Player;
-use crate::player::state::TURN_RATE;
+use crate::player::state::{Player, TURN_RATE};
 
 const WRITTEN_WITHIN: Duration = Duration::from_secs(60);
-/// The inn's chimney, behind the lamppost from where the lamppost's check stands.
-const CHIMNEY: UVec2 = UVec2::new(505, 100);
 const SHOT_WITHIN: Duration = Duration::from_secs(300);
+const INN_CHIMNEY_BEHIND_THE_LAMPPOST: UVec2 = UVec2::new(505, 100);
 
-/// Points at `at` and presses Ctrl+Shift+N: the note's directory and text, once written, with
-/// what the frames cost meanwhile.
-fn leave_note(p: &mut Painter, at: UVec2) -> (PathBuf, String) {
-    p.app.insert_resource(Pointer(Some(at)));
+struct Written {
+    dir: PathBuf,
+    text: String,
+}
+
+impl Written {
+    fn line(&self, key: &str) -> &str {
+        self.text
+            .lines()
+            .find_map(|l| l.strip_prefix(key))
+            .unwrap_or_else(|| panic!("the note has no {key} line"))
+    }
+
+    fn spot(&self) -> UVec2 {
+        let pixel = self.line("spot: pixel ").split_whitespace().next();
+        let xy = pixel.map(numbers).expect("a pixel");
+        UVec2::new(xy[0] as u32, xy[1] as u32)
+    }
+
+    fn point_wow(&self) -> [f32; 3] {
+        let at = self.line("at: ").split(", ").next().map(numbers);
+        at.as_deref()
+            .and_then(|at| <[f32; 3]>::try_from(at).ok())
+            .unwrap_or_else(|| panic!("the at line: {at:?}"))
+    }
+
+    fn see_it(&self) -> &str {
+        self.line("see it: cairn ")
+    }
+
+    fn camera(&self) -> NoteCamera {
+        let flags = self.line("camera: ");
+        let (eye, look) = flags
+            .strip_prefix("--eye ")
+            .and_then(|c| c.split_once(" --look "))
+            .expect("the camera's flags");
+        NoteCamera {
+            eye: Vec3::from_slice(&numbers(eye)),
+            look: Vec3::from_slice(&numbers(look)),
+        }
+    }
+
+    fn see_it_from(&self, camera: NoteCamera) -> String {
+        self.see_it()
+            .replace(self.line("camera: "), &camera.flags())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NoteCamera {
+    eye: Vec3,
+    look: Vec3,
+}
+
+impl NoteCamera {
+    fn flags(self) -> String {
+        let (e, l) = (self.eye, self.look);
+        format!(
+            "--eye {},{},{} --look {},{},{}",
+            e.x, e.y, e.z, l.x, l.y, l.z
+        )
+    }
+
+    fn turned_west(self, radians: f32) -> Self {
+        let look = self.eye + Quat::from_rotation_z(radians) * (self.look - self.eye);
+        Self { look, ..self }
+    }
+
+    fn backed_off(self, yards: f32) -> Self {
+        let back = (self.eye - self.look).normalize() * yards;
+        Self {
+            eye: self.eye + back,
+            look: self.look + back,
+        }
+    }
+}
+
+fn numbers(list: &str) -> Vec<f32> {
+    list.split(',')
+        .map(|n| n.trim().parse().expect("a number"))
+        .collect()
+}
+
+fn leave_note(p: &mut Painter, at: UVec2) -> Written {
+    p.app.insert_resource(Pointer::Over(at));
     let before = p.app.world().resource::<Notes>().written.len();
     let usual = (0..30).map(|_| p.timed_frame()).max().unwrap_or_default();
     let chord = [KeyCode::ControlLeft, KeyCode::ShiftLeft, KeyCode::KeyN];
@@ -60,37 +135,10 @@ fn leave_note(p: &mut Painter, at: UVec2) -> (PathBuf, String) {
         ms(usual),
         server::load_average()
     );
-    (dir, text)
+    Written { dir, text }
 }
 
-fn line<'a>(text: &'a str, key: &str) -> &'a str {
-    text.lines()
-        .find_map(|l| l.strip_prefix(key))
-        .unwrap_or_else(|| panic!("the note has no {key} line"))
-}
-
-fn numbers(list: &str) -> Vec<f32> {
-    list.split(',')
-        .map(|n| n.trim().parse().expect("a number"))
-        .collect()
-}
-
-/// The spot's pixel, and the world point the ray under it met.
-fn spot_and_point(text: &str) -> (UVec2, [f32; 3]) {
-    let pixel = line(text, "spot: pixel ")
-        .split_whitespace()
-        .next()
-        .map(numbers)
-        .expect("a pixel");
-    let at = line(text, "at: ").split(", ").next().map(numbers);
-    let Some([x, y, z]) = at.as_deref().and_then(|at| <[f32; 3]>::try_from(at).ok()) else {
-        panic!("the at line: {at:?}");
-    };
-    (UVec2::new(pixel[0] as u32, pixel[1] as u32), [x, y, z])
-}
-
-/// Where the painter's own camera draws a WoW point.
-fn drawn_at(p: &mut Painter, wow: [f32; 3]) -> Vec2 {
+fn drawn_by_the_painter(p: &mut Painter, wow: [f32; 3]) -> Vec2 {
     let world = p.app.world_mut();
     let (camera, placed) = world
         .query_filtered::<(&Camera, &GlobalTransform), With<WorldCamera>>()
@@ -101,30 +149,41 @@ fn drawn_at(p: &mut Painter, wow: [f32; 3]) -> Vec2 {
         .expect("in view")
 }
 
-/// The placement whose file holds `named` nearest `xy`: its unique id, file and where it stands.
-fn nearest_placed(p: &Painter, xy: [f32; 2], named: &str) -> (u32, String, Vec3) {
-    let placements = p.app.world().resource::<Placements>();
-    let at = |t: &Transform| Vec3::from(world::coords::bevy_to_wow(t.translation));
-    let mut near: Vec<(f32, u32, String, Vec3)> = placements
-        .iter()
-        .map(|(id, placed)| {
-            let (PlacedModel::Doodad { url } | PlacedModel::Building { url, .. }) = &placed.model;
-            let foot = at(&placed.transform);
-            let away = (foot.truncate() - Vec2::from(xy)).length();
-            (away, id, url.trim_start_matches("mpq://").to_owned(), foot)
-        })
-        .collect();
-    near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    let Some((away, id, file, foot)) = near.into_iter().find(|n| n.2.contains(named)) else {
-        panic!("nothing named {named} near {xy:?}");
-    };
-    eprintln!("{away:.2} yd away: unique id {id}, {file}");
-    (id, file, foot)
+struct Placed {
+    unique_id: u32,
+    file: String,
+    foot_wow: Vec3,
 }
 
-/// Runs `cairn shot` in this process on a note's `see it` flags, its frame written to `out`:
-/// where its camera draws the WoW point.
-fn reopen(see_it: &str, out: &Path, wow: [f32; 3]) -> Vec2 {
+fn nearest_placed(p: &Painter, xy: [f32; 2], file_holding: &str) -> Placed {
+    let placements = p.app.world().resource::<Placements>();
+    let mut near: Vec<(f32, Placed)> = placements
+        .iter()
+        .map(|(unique_id, placed)| {
+            let (PlacedModel::Doodad { url } | PlacedModel::Building { url, .. }) = &placed.model;
+            let foot_wow = Vec3::from(bevy_to_wow(placed.transform.translation));
+            let away = (foot_wow.truncate() - Vec2::from(xy)).length();
+            let file = url.trim_start_matches("mpq://").to_owned();
+            let placed = Placed {
+                unique_id,
+                file,
+                foot_wow,
+            };
+            (away, placed)
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.unique_id.cmp(&b.1.unique_id)));
+    let Some((away, placed)) = near.into_iter().find(|n| n.1.file.contains(file_holding)) else {
+        panic!("nothing holding {file_holding} near {xy:?}");
+    };
+    eprintln!(
+        "{away:.2} yd away: unique id {}, {}",
+        placed.unique_id, placed.file
+    );
+    placed
+}
+
+fn shoot_and_project(see_it: &str, out: &Path, wow: [f32; 3]) -> Vec2 {
     let argv = see_it.split_whitespace().map(str::to_owned);
     let mut args = args::parse(argv).expect("the note's flags parse");
     args.mode = Mode::Shot(out.to_path_buf());
@@ -156,8 +215,7 @@ fn pictures() -> PathBuf {
     PathBuf::from(std::env::var_os("CAIRN_PICTURES").expect("CAIRN_PICTURES"))
 }
 
-/// How far the spot's pixel centre is from where a camera draws its point, in pixels.
-fn miss(spot: UVec2, drawn: Vec2) -> f32 {
+fn pixels_off(spot: UVec2, drawn: Vec2) -> f32 {
     (spot.as_vec2() + 0.5 - drawn).abs().max_element()
 }
 
@@ -174,15 +232,18 @@ fn load(path: &Path) -> Image {
     .expect("a PNG")
 }
 
-/// The sideways shift of `b`, within `reach` pixels, that best matches `a` over the rows and
-/// columns given, and the mean channel difference there, out of 255.
-fn best_shift(
+struct Alignment {
+    shift_px: i32,
+    mean_channel_difference: f32,
+}
+
+fn best_sideways_alignment(
     a: &Image,
     b: &Image,
     cols: &[Range<u32>],
     rows: Range<u32>,
-    reach: i32,
-) -> (i32, f32) {
+    reach_px: i32,
+) -> Alignment {
     let (a, b, width) = (a.data.as_deref(), b.data.as_deref(), a.width());
     let (Some(a), Some(b)) = (a, b) else {
         panic!("frames without pixels");
@@ -207,29 +268,18 @@ fn best_shift(
         }
         sum as f32 / count as f32
     };
-    (-reach..=reach)
-        .map(|dx| (dx, apart(dx)))
-        .min_by(|p, q| p.1.total_cmp(&q.1).then(p.0.abs().cmp(&q.0.abs())))
+    (-reach_px..=reach_px)
+        .map(|shift_px| Alignment {
+            shift_px,
+            mean_channel_difference: apart(shift_px),
+        })
+        .min_by(|p, q| {
+            let by_difference = p
+                .mean_channel_difference
+                .total_cmp(&q.mean_channel_difference);
+            by_difference.then(p.shift_px.abs().cmp(&q.shift_px.abs()))
+        })
         .expect("a shift")
-}
-
-/// The note's `see it` flags with its camera turned about the eye by `yaw` radians, west of north.
-fn turned(text: &str, yaw: f32) -> String {
-    let camera = line(text, "camera: ");
-    let (eye, look) = camera
-        .strip_prefix("--eye ")
-        .and_then(|c| c.split_once(" --look "))
-        .expect("the camera's flags");
-    let (eye, look) = (
-        Vec3::from_slice(&numbers(eye)),
-        Vec3::from_slice(&numbers(look)),
-    );
-    let look = eye + Quat::from_rotation_z(yaw) * (look - eye);
-    let flags = format!(
-        "--eye {},{},{} --look {},{},{}",
-        eye.x, eye.y, eye.z, look.x, look.y, look.z
-    );
-    line(text, "see it: cairn ").replace(camera, &flags)
 }
 
 #[test]
@@ -242,20 +292,15 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     p.orbit(0.0, 8.0);
     p.tilt_up(-0.1);
     p.wait(2.0);
-    let (lamp, file, foot) = nearest_placed(&p, stand.xy, "lamppost");
-    let pole = foot + Vec3::Z * 3.0;
-    let aim = drawn_at(&mut p, pole.to_array()).as_uvec2();
-    let (_, text) = leave_note(&mut p, aim);
-    assert_eq!(
-        line(&text, "met: "),
-        format!("doodad, unique id {lamp}, {file}")
-    );
-    let (spot, point) = spot_and_point(&text);
-    assert_eq!(spot, aim);
-    let feet = Vec3::from(world::coords::bevy_to_wow(
-        p.app.world().resource::<Player>().pos,
-    ));
-    let walk = line(&text, "walk there: cairn ").split_whitespace();
+    let lamp = nearest_placed(&p, stand.xy, "lamppost");
+    let pole = lamp.foot_wow + Vec3::Z * 3.0;
+    let aim = drawn_by_the_painter(&mut p, pole.to_array()).as_uvec2();
+    let note = leave_note(&mut p, aim);
+    let named = format!("doodad, unique id {}, {}", lamp.unique_id, lamp.file);
+    assert_eq!(note.line("met: "), named);
+    assert_eq!(note.spot(), aim);
+    let feet = Vec3::from(bevy_to_wow(p.app.world().resource::<Player>().pos));
+    let walk = note.line("walk there: cairn ").split_whitespace();
     let stands = args::parse(walk.map(str::to_owned)).expect("the window takes them");
     let (above, aside) = (
         stands.pose.target.z - feet.z,
@@ -270,32 +315,35 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
         "where the body stood"
     );
 
-    let (inn, file, _) = nearest_placed(&p, stand.xy, ".wmo");
-    let (_, text) = leave_note(&mut p, CHIMNEY);
-    let met = line(&text, "met: ");
+    let inn = nearest_placed(&p, stand.xy, ".wmo");
+    let chimney = leave_note(&mut p, INN_CHIMNEY_BEHIND_THE_LAMPPOST);
+    let building = format!(
+        "building, unique id {}, {}, group ",
+        inn.unique_id, inn.file
+    );
     assert!(
-        met.starts_with(&format!("building, unique id {inn}, {file}, group ")),
-        "{met}"
+        chimney.line("met: ").starts_with(&building),
+        "{}",
+        chimney.line("met: ")
     );
 
     p.orbit(std::f32::consts::PI, 8.0);
     p.tilt_up(0.9);
     p.wait(1.0);
-    let (_, sky) = leave_note(&mut p, UVec2::new(SIZE.x - 60, 60));
-    assert!(line(&sky, "met: ").starts_with("nothing within the far clip"));
+    let sky = leave_note(&mut p, UVec2::new(SIZE.x - 60, 60));
+    assert!(sky.line("met: ").starts_with("nothing within the far clip"));
     drop(p);
 
     let out = pictures().join("notes-lamppost-reopened.png");
-    let drawn = reopen(line(&text, "see it: cairn "), &out, point);
-    let off = miss(spot, drawn);
+    let drawn = shoot_and_project(note.see_it(), &out, note.point_wow());
+    let off = pixels_off(note.spot(), drawn);
     eprintln!(
-        "the lamppost's point, noted at pixel {spot}, is drawn again at {drawn}: {off:.3} px"
+        "the lamppost's point, noted at pixel {}, is drawn again at {drawn}: {off:.3} px",
+        note.spot()
     );
     assert!(off <= 1.0, "{off} px");
 }
 
-/// Turning at the client's rate, the camera moves 53 px a frame: a note whose frame and camera
-/// were a frame apart would find its frame shifted that far from the shot of its camera.
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn a_note_taken_while_the_camera_turns_keeps_the_frame_its_camera_drew() {
@@ -308,31 +356,43 @@ fn a_note_taken_while_the_camera_turns_keeps_the_frame_its_camera_drew() {
     p.wait(2.0);
     p.key(KeyCode::KeyA, ButtonState::Pressed);
     p.wait(0.25);
-    let (dir, text) = leave_note(&mut p, UVec2::new(SIZE.x / 3, SIZE.y / 3));
+    let note = leave_note(&mut p, UVec2::new(SIZE.x / 3, SIZE.y / 3));
     p.key(KeyCode::KeyA, ButtonState::Released);
-    let (spot, point) = spot_and_point(&text);
     drop(p);
 
-    let noted = load(&dir.join("frame.png"));
+    let noted = load(&note.dir.join("frame.png"));
     let cols = [130..520, 760..1150];
-    let (rows, reach) = (60..300, 120);
+    let (rows, reach_px) = (60..300, 120);
     let out = pictures().join("notes-turning-reopened.png");
-    let drawn = reopen(line(&text, "see it: cairn "), &out, point);
-    let off = miss(spot, drawn);
-    let (shift, apart) = best_shift(&noted, &load(&out), &cols, rows.clone(), reach);
+    let drawn = shoot_and_project(note.see_it(), &out, note.point_wow());
+    let off = pixels_off(note.spot(), drawn);
+    let same = best_sideways_alignment(&noted, &load(&out), &cols, rows.clone(), reach_px);
     eprintln!(
-        "turning: noted at {spot}, drawn again at {drawn} ({off:.3} px); the frames match best \
-         shifted {shift} px, {apart:.2} apart"
+        "turning: noted at {}, drawn again at {drawn} ({off:.3} px); the frames match best \
+         shifted {} px, {:.2} apart",
+        note.spot(),
+        same.shift_px,
+        same.mean_channel_difference
     );
     assert!(off <= 1.0, "{off} px");
-    assert_eq!(shift, 0, "the note's frame is its camera's");
+    assert_eq!(same.shift_px, 0, "the note's frame is its camera's");
 
-    let a_frame_on = TURN_RATE * STEP.as_secs_f32();
+    let a_frame_of_turn = TURN_RATE * STEP.as_secs_f32();
+    let a_frame_of_turn_px = a_frame_of_turn / FOV_Y * SIZE.y as f32;
     let out = pictures().join("notes-turning-a-frame-on.png");
-    reopen(&turned(&text, a_frame_on), &out, point);
-    let (shift, apart) = best_shift(&noted, &load(&out), &cols, rows, reach);
-    eprintln!("the camera a frame on: the frames match best shifted {shift} px, {apart:.2} apart");
-    assert!(shift.abs() > 40, "a frame apart shows: {shift} px");
+    let a_frame_on = note.see_it_from(note.camera().turned_west(a_frame_of_turn));
+    shoot_and_project(&a_frame_on, &out, note.point_wow());
+    let apart = best_sideways_alignment(&noted, &load(&out), &cols, rows, reach_px);
+    eprintln!(
+        "the camera a frame on ({a_frame_of_turn_px:.1} px of turn): the frames match best \
+         shifted {} px, {:.2} apart",
+        apart.shift_px, apart.mean_channel_difference
+    );
+    assert!(
+        apart.shift_px.abs() as f32 > a_frame_of_turn_px / 2.0,
+        "a frame apart shows: {} px",
+        apart.shift_px
+    );
 }
 
 #[test]
@@ -354,42 +414,20 @@ fn a_camera_pulled_in_by_a_wall_is_noted_as_drawn_and_the_one_asked_for_misses()
         control.distance, control.boom_length
     );
     assert!(pulled_in > 5.0, "the wall pulls the camera in: {pulled_in}");
-    let aim = UVec2::new(SIZE.x / 5, SIZE.y / 3);
-    let (_, text) = leave_note(&mut p, aim);
-    let (spot, point) = spot_and_point(&text);
+    let note = leave_note(&mut p, UVec2::new(SIZE.x / 5, SIZE.y / 3));
     drop(p);
 
-    let see_it = line(&text, "see it: cairn ");
-    let drawn = reopen(see_it, &pictures().join("notes-wall-reopened.png"), point);
-    let off = miss(spot, drawn);
+    let (spot, point) = (note.spot(), note.point_wow());
+    let out = pictures().join("notes-wall-reopened.png");
+    let drawn = shoot_and_project(note.see_it(), &out, point);
+    let off = pixels_off(spot, drawn);
     eprintln!("noted at pixel {spot}, drawn again at {drawn}: {off:.3} px");
     assert!(off <= 1.0, "the camera as drawn: {off} px");
 
-    let camera = line(&text, "camera: ");
-    let (eye, look) = camera
-        .strip_prefix("--eye ")
-        .and_then(|c| c.split_once(" --look "))
-        .expect("the camera's flags");
-    let (eye, look) = (
-        Vec3::from_slice(&numbers(eye)),
-        Vec3::from_slice(&numbers(look)),
-    );
-    let asked = eye - (look - eye).normalize() * pulled_in;
-    let as_asked = see_it.replace(
-        camera,
-        &format!(
-            "--eye {},{},{} --look {},{},{}",
-            asked.x,
-            asked.y,
-            asked.z,
-            asked.x + look.x - eye.x,
-            asked.y + look.y - eye.y,
-            asked.z + look.z - eye.z
-        ),
-    );
+    let as_asked = note.see_it_from(note.camera().backed_off(pulled_in));
     let out = pictures().join("notes-wall-as-asked.png");
-    let drawn = reopen(&as_asked, &out, point);
-    let off = miss(spot, drawn);
+    let drawn = shoot_and_project(&as_asked, &out, point);
+    let off = pixels_off(spot, drawn);
     eprintln!(
         "through the camera as asked, {pulled_in:.3} yd back, it is drawn at {drawn}: {off:.3} px"
     );

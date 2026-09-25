@@ -8,14 +8,14 @@ const SEPT_25_2026: u64 = 20_721;
 
 #[test]
 fn a_note_is_named_by_its_time_in_utc() {
-    let day = |d: u64| Duration::from_secs(d * 86_400);
-    assert_eq!(civil(Duration::ZERO), [1970, 1, 1, 0, 0, 0]);
-    assert_eq!(civil(day(11_016)), [2000, 2, 29, 0, 0, 0]);
-    assert_eq!(civil(day(11_017)), [2000, 3, 1, 0, 0, 0]);
-    assert_eq!(civil(day(47_541)), [2100, 3, 1, 0, 0, 0]);
-    let taken = day(SEPT_25_2026) + Duration::from_secs(17 * 3600 + 12 * 60 + 9);
-    assert_eq!(dir_name(taken), "2026-09-25T17-12-09Z");
-    assert_eq!(utc(taken), "2026-09-25 17:12:09");
+    let day = |d: u64| UtcTime::at(Duration::from_secs(d * 86_400)).stamp();
+    assert_eq!(day(0), "1970-01-01 00:00:00");
+    assert_eq!(day(11_016), "2000-02-29 00:00:00");
+    assert_eq!(day(11_017), "2000-03-01 00:00:00");
+    assert_eq!(day(47_541), "2100-03-01 00:00:00");
+    let taken = Duration::from_secs(SEPT_25_2026 * 86_400 + 17 * 3600 + 12 * 60 + 9);
+    assert_eq!(UtcTime::at(taken).dir_name(), "2026-09-25T17-12-09Z");
+    assert_eq!(UtcTime::at(taken).stamp(), "2026-09-25 17:12:09");
 }
 
 #[test]
@@ -23,8 +23,8 @@ fn two_notes_in_one_second_keep_both() {
     let root = std::env::temp_dir().join(format!("cairn-notes-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
     let name = "2026-09-25T17-12-09Z";
-    let first = make_dir(&root, name).expect("the first");
-    let second = make_dir(&root, name).expect("the second");
+    let first = make_unique_dir(&root, name).expect("the first");
+    let second = make_unique_dir(&root, name).expect("the second");
     assert_eq!(first, root.join("2026-09-25T17-12-09Z"));
     assert_eq!(second, root.join("2026-09-25T17-12-09Z-2"));
     std::fs::remove_dir_all(&root).expect("clean up");
@@ -33,12 +33,12 @@ fn two_notes_in_one_second_keep_both() {
 #[test]
 fn the_look_point_is_where_the_sight_line_passes_the_body_within_its_bounds() {
     let (eye, forward) = (Vec3::ZERO, Dir3::NEG_Z);
-    let at = |feet: Vec3, blocked| look_point(eye, forward, feet, blocked);
+    let at = |feet: Vec3, blocked| look_nearest_the_feet(eye, forward, feet, blocked);
     let ahead = |yd: f32| Vec3::new(0.0, 0.0, -yd);
     assert_eq!(at(Vec3::new(3.0, -2.0, -12.0), None), ahead(12.0));
-    assert_eq!(at(ahead(1.0), None), ahead(LOOK_NEAR), "too near");
-    assert_eq!(at(ahead(-40.0), None), ahead(LOOK_NEAR), "behind");
-    assert_eq!(at(ahead(90.0), None), ahead(LOOK_FAR), "too far");
+    assert_eq!(at(ahead(1.0), None), ahead(AIMS_TRUE_FROM), "too near");
+    assert_eq!(at(ahead(-40.0), None), ahead(AIMS_TRUE_FROM), "behind");
+    assert_eq!(at(ahead(90.0), None), ahead(STANDS_WITHIN), "too far");
     assert_eq!(at(ahead(12.0), Some(8.0)), ahead(7.0), "a wall first");
 }
 
@@ -51,12 +51,12 @@ fn facts() -> Facts {
         map_id: 0,
         minute: 14 * 60 + 5,
         glow: false,
-        frame: UVec2::new(3200, 1800),
-        window: UVec2::new(1600, 900),
-        eye: [-9447.402, 58.318, 86.845],
+        frame_px: UVec2::new(3200, 1800),
+        window_points: UVec2::new(1600, 900),
+        eye_wow: [-9447.402, 58.318, 86.845],
         flying: false,
-        feet: [-9436.1, 49.0, 81.6],
-        facing: -std::f32::consts::FRAC_PI_2,
+        feet_wow: [-9436.1, 49.0, 81.6],
+        heading: -std::f32::consts::FRAC_PI_2,
         spot: UVec2::new(812, 395),
     }
 }
@@ -109,7 +109,7 @@ fn the_flags_a_note_gives_are_taken_by_the_shot_and_the_window_alike() {
     let shot = flags("see it: cairn ").expect("the shot takes them");
     let window = flags("walk there: cairn ").expect("the window takes them");
     assert_eq!(shot.pose, window.pose);
-    let [eye, look] = [facts().eye, LOOK].map(Vec3::from_array);
+    let [eye, look] = [facts().eye_wow, LOOK].map(Vec3::from_array);
     assert_eq!((shot.pose.eye, shot.pose.target), (eye, look));
     assert_eq!(
         (shot.size, window.size),
