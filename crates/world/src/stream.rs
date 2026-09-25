@@ -166,14 +166,18 @@ pub(crate) fn stream_terrain(
             tile.state = TileState::Failed;
         }
     }
-    let any_in_flight = tiles.values().any(|t| t.in_flight(&adts));
-    let mut unspawned: Vec<(u64, (u32, u32))> = tiles
-        .iter()
-        .filter(|(_, t)| !any_in_flight && matches!(t.state, TileState::Unspawned))
-        .map(|(&key, t)| (t.requested, key))
-        .collect();
-    unspawned.sort_unstable();
-    for (_, key) in unspawned {
+    let every_request_arrived = !tiles.values().any(|t| t.in_flight(&adts));
+    let mut batch: Vec<(u64, (u32, u32))> = Vec::new();
+    if every_request_arrived {
+        batch.extend(
+            tiles
+                .iter()
+                .filter(|(_, t)| matches!(t.state, TileState::Unspawned))
+                .map(|(&key, t)| (t.requested, key)),
+        );
+    }
+    batch.sort_unstable();
+    for (_, key) in batch {
         let Some(tile) = tiles.get_mut(&key) else {
             continue;
         };

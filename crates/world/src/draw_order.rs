@@ -59,8 +59,8 @@ impl Plugin for MeshSlabsPlugin {
 /// Bevy numbers a frame's new material bind groups, and frees its removed ones for reuse, in a hash
 /// order that takes in the type's id, which changes with the build; on one opaque pipeline the
 /// higher-numbered bind group wins an exact depth tie. Bevy's unload, run again on `removed`, then
-/// frees nothing. A material prepared before its images waits a frame and is numbered ahead of that
-/// frame's, so the images are prepared first.
+/// frees nothing. A material prepared before its images is retried the next frame, numbered before
+/// that frame's new ones, so the images are prepared first.
 fn bind_groups_in_id_order<M: Material>(
     mut extracted: ResMut<'_, NewMaterials<MeshMaterial3d<M>>>,
     unload: StaticSystemParam<'_, '_, <MeshMaterial3d<M> as ErasedRenderAsset>::Param>,
