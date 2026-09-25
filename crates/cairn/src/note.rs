@@ -214,7 +214,7 @@ fn look_nearest_the_feet(eye: Vec3, forward: Dir3, feet: Vec3, blocked: Option<f
         .dot(*forward)
         .clamp(AIMS_TRUE_FROM, STANDS_WITHIN);
     if let Some(blocked) = blocked {
-        out = out.min((blocked - 1.0).max(1.0));
+        out = out.min(blocked - 1.0).max(AIMS_TRUE_FROM);
     }
     eye + *forward * out
 }

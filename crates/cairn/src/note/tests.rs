@@ -40,6 +40,38 @@ fn the_look_point_is_where_the_sight_line_passes_the_body_within_its_bounds() {
     assert_eq!(at(ahead(-40.0), None), ahead(AIMS_TRUE_FROM), "behind");
     assert_eq!(at(ahead(90.0), None), ahead(STANDS_WITHIN), "too far");
     assert_eq!(at(ahead(12.0), Some(8.0)), ahead(7.0), "a wall first");
+    assert_eq!(
+        at(ahead(12.0), Some(3.0)),
+        ahead(AIMS_TRUE_FROM),
+        "aim first"
+    );
+}
+
+fn worst_turn_of_a_4k_frame_px(eye_to_look: impl Fn(Vec3, Dir3) -> Vec3) -> f64 {
+    let pixel = f64::from(world::FOV_Y) / 2160.0;
+    let eye = world::coords::wow_to_bevy([-9447.402, -8958.318, 86.845]);
+    let mut worst: f64 = 0.0;
+    for heading in (0..360).step_by(3) {
+        for pitch in [-80, -45, -10, 0, 10, 45, 80] {
+            let (h, p) = ((heading as f32).to_radians(), (pitch as f32).to_radians());
+            let turn = Quat::from_euler(EulerRot::YXZ, h, p, 0.0);
+            let forward = Dir3::new(turn * Vec3::NEG_Z).expect("a direction");
+            let kept = (eye_to_look(eye, forward).as_dvec3() - eye.as_dvec3()).normalize();
+            worst = worst.max(kept.angle_between(forward.as_dvec3()));
+        }
+    }
+    worst / pixel
+}
+
+#[test]
+fn a_look_point_as_near_as_it_may_be_still_aims_within_half_a_pixel_of_a_4k_frame() {
+    let nearest = worst_turn_of_a_4k_frame_px(|eye, forward| {
+        look_nearest_the_feet(eye, forward, eye, Some(0.0))
+    });
+    let a_yard_out = worst_turn_of_a_4k_frame_px(|eye, forward| eye + *forward);
+    eprintln!("the worst turn is {nearest:.3} px, and {a_yard_out:.3} a yard out");
+    assert!(nearest < 0.5, "{nearest} px");
+    assert!(a_yard_out > 0.5, "a yard out: {a_yard_out} px");
 }
 
 const LOOK: [f32; 3] = [-9436.093, 48.994, 83.627];
