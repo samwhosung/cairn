@@ -201,20 +201,8 @@ impl Walker {
         )
     }
 
-    /// A client on Azeroth that joins the server at `server` as `look` and stands where its
-    /// welcome places it, stepped at `hz` and paced to the wall clock.
-    pub fn joined_over_loopback(
-        server: SocketAddr,
-        name: &str,
-        look: CharacterLook,
-        hz: f32,
-    ) -> Option<Self> {
-        let mut walker = Self::welcomed_over_loopback(server, name, look, hz)?;
-        ready(&mut [&mut walker]);
-        Some(walker)
-    }
-
-    /// [`Walker::joined_over_loopback`], but not yet [`ready`].
+    /// A client on Azeroth that joins the server at `server` as `look`, stepped at `hz` and paced
+    /// to the wall clock, not yet [`ready`].
     pub fn welcomed_over_loopback(
         server: SocketAddr,
         name: &str,
