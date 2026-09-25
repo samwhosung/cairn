@@ -44,6 +44,11 @@ impl Link {
         self.frames.try_recv().ok()
     }
 
+    /// Whether the server has let the connection go and every frame it sent has been taken.
+    pub fn closed(&self) -> bool {
+        self.frames.is_closed() && self.frames.is_empty()
+    }
+
     /// Tells the server the client has taken in `bytes` of what it was sent, as its socket's reads
     /// would.
     pub fn taken_in(&self, bytes: usize) {

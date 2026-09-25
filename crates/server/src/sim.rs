@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use game::{Hosted, Spot, Stages, Turn};
-use protocol::{VERSION, Welcome};
+use protocol::{Movement, VERSION, Welcome};
 use rayon::ThreadPool;
 use rayon::prelude::*;
 
@@ -177,34 +177,37 @@ impl Sim {
         let (mut joined, mut restored) = (Vec::new(), Vec::new());
         let admission = phases[ADMIT].time(|| world.admit(inputs, |n| roster.admit(n)));
         if let Batches::Send(shared) = batches {
-            for conn in admission.refused {
+            for &conn in &admission.refused {
                 drop(shared.take_outbox(conn));
             }
         }
-        for admitted in admission.admitted {
-            let name = world.name(admitted.id);
-            roster.bind(admitted.id, name);
-            if let Some(saved) = roster.saved(name) {
-                restored.push((admitted.id, saved.to_vec()));
-            }
+        let welcome = |conn: u32, id: u32, spawn: Movement| {
             let outbox = match batches {
-                Batches::Send(shared) => shared.take_outbox(admitted.conn),
+                Batches::Send(shared) => shared.take_outbox(conn),
                 Batches::Skip => None,
             };
             if let Some(outbox) = &outbox {
                 let mut bytes = Vec::new();
                 Welcome {
                     version: VERSION,
-                    id: admitted.id,
+                    id,
                     map: *map,
-                    tick: world.tick(),
+                    tick: admission.tick,
                     tick_ms: *tick_ms,
-                    spawn: admitted.spawn,
+                    spawn,
                 }
                 .write(&mut bytes);
                 outbox.send(bytes);
             }
-            observers.push(Observer::new(admitted.id, admitted.conn, outbox));
+            Observer::new(id, conn, outbox)
+        };
+        for admitted in &admission.admitted {
+            let name = world.name(admitted.id);
+            roster.bind(admitted.id, name);
+            if let Some(saved) = roster.saved(name) {
+                restored.push((admitted.id, saved.to_vec()));
+            }
+            observers.push(welcome(admitted.conn, admitted.id, admitted.spawn));
             let spawn = admitted.spawn;
             joined.push((
                 admitted.id,
@@ -213,6 +216,13 @@ impl Sim {
                     facing: spawn.facing,
                 },
             ));
+        }
+        for taken in &admission.taken_over {
+            let new = welcome(taken.conn, taken.id, taken.spawn);
+            match observers.iter_mut().find(|o| o.id == taken.id) {
+                Some(had) => *had = new,
+                None => observers.push(new),
+            }
         }
         st.wall_ns[ADMIT] = lap_ns(&mut clock);
         let acts = phases[STEP].time(|| world.route(inputs, order));

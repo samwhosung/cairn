@@ -49,6 +49,8 @@ fn config(world: Option<PathBuf>) -> Config {
 struct Told {
     welcome: Option<Welcome>,
     last_seq: u32,
+    appeared: Vec<u32>,
+    vanished: u32,
 }
 
 struct Run {
@@ -77,10 +79,15 @@ impl Run {
                 match ServerMessage::read(&frame[LEN_BYTES..]) {
                     Ok(ServerMessage::Welcome(w)) => self.told[conn].welcome = Some(w),
                     Ok(ServerMessage::Batch(batch)) => {
+                        let told = &mut self.told[conn];
                         for record in batch.flatten() {
-                            if let Record::Place { seq, .. } | Record::Correct { seq, .. } = record
-                            {
-                                self.told[conn].last_seq = seq;
+                            match record {
+                                Record::Place { seq, .. } | Record::Correct { seq, .. } => {
+                                    told.last_seq = seq;
+                                }
+                                Record::Appear { id, .. } => told.appeared.push(id),
+                                Record::Vanish { .. } => told.vanished += 1,
+                                _ => {}
                             }
                         }
                     }
@@ -102,6 +109,10 @@ impl Run {
     }
 
     fn join(&mut self, name: &str) -> (u32, Option<Welcome>) {
+        self.join_as(name, Input::Join)
+    }
+
+    fn join_as(&mut self, name: &str, as_: fn(Hello) -> Input) -> (u32, Option<Welcome>) {
         let conn = self.links.len() as u32;
         self.links.push(self.stepper.connect(conn));
         self.nth.push(0);
@@ -111,9 +122,15 @@ impl Run {
             name: name.into(),
             appearance: Appearance::default(),
         };
-        let join = self.input(conn, Input::Join(hello));
+        let join = self.input(conn, as_(hello));
         self.tick(&[join]);
         (conn, self.told[conn as usize].welcome)
+    }
+
+    /// The game's health and death of the body `conn` was welcomed to.
+    fn shown(&self, conn: u32) -> Option<(u32, bool)> {
+        let id = self.told[conn as usize].welcome?.id;
+        game::Bytes::from_bytes(self.stepper.game()?.shown(id)?)
     }
 
     fn body(&self, conn: u32) -> Option<game::Spot> {
@@ -219,20 +236,66 @@ fn a_player_that_leaves_and_comes_back_gets_its_kills_deaths_and_place() {
 }
 
 #[test]
-fn a_join_under_the_name_of_a_player_in_the_world_is_refused_until_it_leaves() {
-    let mut run = Run::new(&config(Some(scratch("clash"))));
+fn a_join_under_the_name_of_a_player_in_the_world_takes_over_its_body_and_row() {
+    let mut run = Run::new(&config(Some(scratch("takeover"))));
     let (a, first) = run.join("Ada");
-    let (_, twin) = run.join("Ada");
+    let (b, _) = run.join("Bo");
+    run.swing(b, 1);
+    let stood = run.walk(a, 2.0);
+    let (_, cy) = run.join("Cy");
+    let first = first.expect("Ada's welcome");
     assert!(
-        first.is_some() && twin.is_none(),
-        "no welcome for the second Ada"
+        cy.is_some_and(|w| w.id != first.id) && !run.links[a as usize].closed(),
+        "the control: a join under another name gets a body of its own"
     );
-    assert_eq!(run.stepper.keeping().len(), 1);
-    run.leave(a);
-    let (again, welcome) = run.join("Ada");
-    assert!(
-        welcome.is_some() && run.body(again).is_some(),
-        "once the first has left"
+    let seen_before = (
+        run.told[b as usize].appeared.len(),
+        run.told[b as usize].vanished,
+    );
+    let (again, second) = run.join("Ada");
+    let second = second.expect("a welcome for the new session");
+    assert_eq!(second.id, first.id, "the same body");
+    assert_eq!(
+        second.spawn.pos.map(f32::to_bits),
+        stood.map(f32::to_bits),
+        "where it stands, not a spawn"
+    );
+    assert!(run.links[a as usize].closed(), "the old session is let go");
+    assert_eq!(
+        run.shown(again),
+        Some((40, false)),
+        "the same row: hit once"
+    );
+    let seen = (
+        run.told[b as usize].appeared.len(),
+        run.told[b as usize].vanished,
+    );
+    assert_eq!(seen, seen_before, "Bo sees Ada neither go nor come");
+    let moved = run.walk(again, 2.0);
+    assert_eq!(
+        run.body(again).map(|s| s.pos),
+        Some(moved),
+        "the new session moves it"
+    );
+    run.walk(a, 5.0);
+    assert_eq!(
+        run.body(again).map(|s| s.pos),
+        Some(moved),
+        "the old one no longer does"
     );
     assert_eq!(run.stepper.file_differs(), None);
+}
+
+#[test]
+fn a_guest_never_takes_over_the_hosts_body() {
+    let mut run = Run::new(&config(None));
+    let (host, first) = run.join_as("Ada", Input::HostJoin);
+    let (_, guest) = run.join("Ada");
+    assert!(first.is_some() && guest.is_none() && !run.links[host as usize].closed());
+    let (_, again) = run.join_as("Ada", Input::HostJoin);
+    assert_eq!(
+        again.map(|w| w.id),
+        first.map(|w| w.id),
+        "the host takes its own back"
+    );
 }

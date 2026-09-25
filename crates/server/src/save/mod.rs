@@ -122,9 +122,10 @@ pub struct Roster {
 }
 
 pub enum Admit {
-    Refused,
     AtSpawn,
     Back(Spawn),
+    /// A player of the name is in the world: the join takes over its body.
+    TakeOver,
 }
 
 impl Roster {
@@ -158,7 +159,7 @@ impl Roster {
 
     pub fn admit(&mut self, name: &str) -> Admit {
         let i = match self.by_name.get(name) {
-            Some(&i) if self.known[i].here => return Admit::Refused,
+            Some(&i) if self.known[i].here => return Admit::TakeOver,
             Some(&i) => i,
             None => {
                 let file_id = self.next_id;

@@ -127,8 +127,17 @@ pub struct Admitted {
     pub spawn: Movement,
 }
 
+/// A join that took over the body of the player of its name, from the connection that had it.
+pub struct TakenOver {
+    pub conn: u32,
+    pub id: u32,
+    pub spawn: Movement,
+}
+
 pub struct Admission {
+    pub tick: u32,
     pub admitted: Vec<Admitted>,
+    pub taken_over: Vec<TakenOver>,
     pub refused: Vec<u32>,
 }
 
@@ -210,7 +219,7 @@ impl World {
         inputs: &[Stamped],
         mut decide: impl FnMut(&str) -> Admit,
     ) -> Admission {
-        let (mut admitted, mut refused) = (Vec::new(), Vec::new());
+        let (mut admitted, mut taken_over, mut refused) = (Vec::new(), Vec::new(), Vec::new());
         for s in inputs {
             let (Input::Join(hello) | Input::HostJoin(hello)) = &s.input else {
                 continue;
@@ -219,13 +228,17 @@ impl World {
                 continue;
             }
             let id = self.prev.len() as u32;
+            let host = matches!(s.input, Input::HostJoin(_));
             let spawn = match decide(&hello.name) {
-                Admit::Refused => {
-                    refused.push(s.conn);
-                    continue;
-                }
                 Admit::AtSpawn => self.spawns[id as usize % self.spawns.len()],
                 Admit::Back(spawn) => spawn,
+                Admit::TakeOver => {
+                    match self.take_over(s.conn, &hello.name, host) {
+                        Some(taken) => taken_over.push(taken),
+                        None => refused.push(s.conn),
+                    }
+                    continue;
+                }
             };
             let body = Body {
                 movement: Movement {
@@ -242,8 +255,7 @@ impl World {
             self.next.push(body);
             self.names.push(hello.name.clone());
             self.looks.push(hello.appearance);
-            self.may_teleport
-                .push(matches!(s.input, Input::HostJoin(_)));
+            self.may_teleport.push(host);
             self.id_of.insert(s.conn, id);
             admitted.push(Admitted {
                 conn: s.conn,
@@ -251,7 +263,50 @@ impl World {
                 spawn: body.movement,
             });
         }
-        Admission { admitted, refused }
+        Admission {
+            tick: self.tick,
+            admitted,
+            taken_over,
+            refused,
+        }
+    }
+
+    /// Hands the body of the player named `name` to `conn`, as it stands, still, and forgetting
+    /// the clock and the claims of the connection that had it; a guest never takes the host's.
+    fn take_over(&mut self, conn: u32, name: &str, host: bool) -> Option<TakenOver> {
+        let id = (0..self.prev.len())
+            .rev()
+            .find(|&i| self.prev[i].present && self.names[i] == name)?;
+        if self.may_teleport[id] && !host {
+            return None;
+        }
+        let id32 = id as u32;
+        self.id_of.retain(|_, body| *body != id32);
+        self.id_of.insert(conn, id32);
+        self.may_teleport[id] = host;
+        let tick = self.tick;
+        let b = &mut self.prev[id];
+        let rooted = b.rooted_at.is_some();
+        let still = Movement {
+            flags: if rooted { flags::ROOT } else { 0 },
+            pos: b.movement.pos,
+            facing: b.movement.facing,
+            ..Movement::default()
+        };
+        if still.flags != b.movement.flags {
+            b.flags_changed_at = tick;
+        }
+        b.movement = still;
+        b.moved_at = tick;
+        b.clock = None;
+        b.clock_spent_ms = 0;
+        b.correction_seq = b.correction_seq.wrapping_add(1);
+        b.placed = Some(Placement { tick, rooted });
+        Some(TakenOver {
+            conn,
+            id: id32,
+            spawn: still,
+        })
     }
 
     pub fn route(&self, inputs: &[Stamped], order: InputOrder) -> Vec<Act> {
