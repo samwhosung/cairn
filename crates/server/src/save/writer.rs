@@ -197,11 +197,11 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     };
     let (kick, kicked) = mpsc::channel::<()>();
     let checkpointer = {
-        let (path, shared) = (path.clone(), shared.clone());
+        let (path, shared, durable) = (path.clone(), shared.clone(), opened.durable);
         std::thread::Builder::new()
             .name("checkpoint".into())
             .spawn(move || {
-                if let Err(why) = checkpoint(&path, &kicked) {
+                if let Err(why) = checkpoint(&path, durable, &kicked) {
                     fail(&shared, why);
                 }
             })
@@ -277,14 +277,11 @@ fn write_on(mut opened: Opened, jobs: &mpsc::Receiver<Job>, saving: Saving, shar
     }
 }
 
-fn checkpoint(path: &Path, kicked: &mpsc::Receiver<()>) -> Result<(), String> {
+fn checkpoint(path: &Path, durable: bool, kicked: &mpsc::Receiver<()>) -> Result<(), String> {
     let at = |e: rusqlite::Error| format!("{}: {e}", path.display());
     let conn = Connection::open(path).map_err(at)?;
-    conn.execute_batch(
-        "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;
-         PRAGMA busy_timeout = 5000;",
-    )
-    .map_err(at)?;
+    let sql = format!("{} PRAGMA busy_timeout = 5000;", file::syncs(durable));
+    conn.execute_batch(&sql).map_err(at)?;
     while kicked.recv().is_ok() {
         while kicked.try_recv().is_ok() {}
         conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))

@@ -26,6 +26,7 @@ pub struct Spec {
     pub expects: Vec<Expect>,
     pub game: Option<Loaded>,
     pub world: WorldFile,
+    pub durable: bool,
     pub saving: Saving,
 }
 
@@ -106,6 +107,7 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         expects: text.expects,
         game: None,
         world: WorldFile::Temporary,
+        durable: false,
         saving: Saving::Held,
     };
     let mut drafts: Vec<Draft> = Vec::new();
@@ -282,6 +284,7 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
             spec.world = WorldFile::At(path);
         }
         "world.drops" => spec.saving = Saving::Drops(whole(v)?),
+        "world.durable" => spec.durable = yes(v)?,
         key => {
             let knob = if let Some(k) = key.strip_prefix("limits.") {
                 limits_knob(&mut spec.limits, k)

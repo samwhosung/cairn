@@ -199,6 +199,7 @@ fn config(spec: &Spec, briefs: &[Brief], threads: usize, file: &WorldAt) -> Conf
         tick_ms: spec.tick_ms,
         game: spec.game.clone(),
         world: file.path.clone(),
+        durable: spec.durable,
         saving: spec.saving,
         ..Config::default()
     }

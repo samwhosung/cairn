@@ -69,7 +69,7 @@ fn players<S: Columns>() -> Tables {
 }
 
 fn opened<S: Columns>(path: &Path) -> Result<Opened, String> {
-    open(path, Some(("tally", &players::<S>())))
+    open(path, Some(("tally", &players::<S>())), true)
 }
 
 fn save(opened: Opened, batch: Batch) {
@@ -179,19 +179,19 @@ fn a_world_is_its_games_of_its_layout_and_one_servers() {
     let dir = Scratch::new("its-own");
     let path = dir.world("world");
     ada_kills(&path, 1);
-    let other = open(&path, Some(("other", &players::<older::Score>())));
+    let other = open(&path, Some(("other", &players::<older::Score>())), true);
     let said = other.map(drop).expect_err("another game");
     assert!(
         said.contains("a world of tally, and this server runs other"),
         "{said}"
     );
-    let none = open(&path, None).map(drop).expect_err("no game");
+    let none = open(&path, None, true).map(drop).expect_err("no game");
     assert!(none.contains("this server runs no game"), "{none}");
     let sparks = Tables {
         players: None,
         others: Schema::of::<older::Score>().into_iter().collect(),
     };
-    let said = open(&dir.world("sparks"), Some(("sparks", &sparks)))
+    let said = open(&dir.world("sparks"), Some(("sparks", &sparks)), true)
         .map(drop)
         .expect_err("a kind other than players that saves");
     assert!(

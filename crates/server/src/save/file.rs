@@ -13,6 +13,7 @@ const WAL_LIMIT_BYTES: i64 = 64 << 20;
 
 pub struct Opened {
     pub path: PathBuf,
+    pub(super) durable: bool,
     pub(super) conn: Connection,
     pub(super) _lock: File,
     pub(super) table: Option<Table>,
@@ -71,8 +72,9 @@ fn at(path: &Path) -> impl Fn(rusqlite::Error) -> String + '_ {
 /// Opens the world at `path`, making it if there is none, for a server running the game named
 /// with its tables, or none. Refuses a file another server keeps, one of another game or of a
 /// later layout, and one whose saved fields this build cannot read; a field of the players'
-/// table added since the file was written, or the table itself, is added to it.
-pub fn open(path: &Path, game: Option<(&str, &Tables)>) -> Result<Opened, String> {
+/// table added since the file was written, or the table itself, is added to it. A commit is
+/// durable once it reaches the drive, or, not `durable`, the system.
+pub fn open(path: &Path, game: Option<(&str, &Tables)>, durable: bool) -> Result<Opened, String> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -86,9 +88,9 @@ pub fn open(path: &Path, game: Option<(&str, &Tables)>) -> Result<Opened, String
         return Err(format!("{}: keeps no write-ahead log", path.display()));
     }
     conn.execute_batch(&format!(
-        "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;
-         PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WAL_LIMIT_BYTES};
-         PRAGMA busy_timeout = 5000;"
+        "{} PRAGMA wal_autocheckpoint = 0; PRAGMA journal_size_limit = {WAL_LIMIT_BYTES};
+         PRAGMA busy_timeout = 5000;",
+        syncs(durable)
     ))
     .map_err(at(path))?;
     let tx = conn
@@ -109,11 +111,21 @@ pub fn open(path: &Path, game: Option<(&str, &Tables)>) -> Result<Opened, String
     tx.commit().map_err(at(path))?;
     Ok(Opened {
         path: path.to_path_buf(),
+        durable,
         conn,
         _lock: lock,
         table,
         players,
     })
+}
+
+/// macOS reaches the drive only with `fullfsync`, which other systems ignore.
+pub(super) fn syncs(durable: bool) -> &'static str {
+    if durable {
+        "PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;"
+    } else {
+        "PRAGMA synchronous = OFF;"
+    }
 }
 
 fn lock(path: &Path) -> Result<File, String> {
