@@ -12,7 +12,7 @@ use bevy::render::ExtractSchedule;
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::winit::WinitPlugin;
 use world::coords::{bevy_to_wow, wow_to_bevy};
-use world::unit::{UnitShow, UnitSystems};
+use world::unit::{Outcome, UnitAttack, UnitShow, UnitSystems};
 use world::{CurrentMap, Install, WorldSystems};
 
 use super::assemble;
@@ -270,6 +270,31 @@ fn one_blow_melee() -> server::Config {
     }
 }
 
+#[derive(Resource, Default)]
+struct Attacks(Vec<UnitAttack>);
+
+fn hear_attacks(app: &mut App) {
+    app.init_resource::<Attacks>().add_systems(
+        Update,
+        |mut told: MessageReader<'_, '_, UnitAttack>, mut heard: ResMut<'_, Attacks>| {
+            heard.0.extend(told.read().copied());
+        },
+    );
+}
+
+fn bodies(app: &mut App) -> (Entity, Option<Entity>) {
+    let world = app.world_mut();
+    let own = world
+        .query_filtered::<Entity, With<PlayerBody>>()
+        .single(world)
+        .expect("the player's body");
+    let other = world
+        .query_filtered::<Entity, With<OtherPlayer>>()
+        .iter(world)
+        .next();
+    (own, other)
+}
+
 fn own_show(app: &mut App) -> UnitShow {
     let world = app.world_mut();
     let mut own = world.query_filtered::<&UnitShow, With<PlayerBody>>();
@@ -319,6 +344,7 @@ fn key_one_swings_and_the_one_it_kills_lies_dead_for_both_and_does_not_walk_whil
     host.insert_resource(hosting);
     let mut guest = running(&format!("--mute --connect {addr}")).expect("a second window");
     for app in [&mut host, &mut guest] {
+        hear_attacks(app);
         assert!(frames_until(app, welcomed), "not welcomed");
         app.world_mut().resource_mut::<Player>().settling = false;
     }
@@ -348,6 +374,21 @@ fn key_one_swings_and_the_one_it_kills_lies_dead_for_both_and_does_not_walk_whil
         own_show(&mut guest),
         the_others_show(&mut guest)
     );
+    for (app, struck) in [(&mut host, true), (&mut guest, false)] {
+        let (own, other) = bodies(app);
+        let other = other.expect("the other's body");
+        let (attacker, target) = if struck { (other, own) } else { (own, other) };
+        let blow = UnitAttack {
+            attacker,
+            target: Some(target),
+            outcome: Outcome::Hit,
+        };
+        let heard = &app.world().resource::<Attacks>().0;
+        assert!(
+            heard.contains(&blow),
+            "told {heard:?}, not the guest's blow on the host"
+        );
+    }
 
     let lies = stands_across(&host);
     press(&mut host, KeyCode::KeyW, true);
