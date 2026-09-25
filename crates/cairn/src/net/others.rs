@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use protocol::{Appearance, Jump, Record, State, flags};
+use protocol::{Appearance, Jump, Record, Show, State, flags};
 use world::Install;
 use world::coords::wow_to_bevy;
 use world::unit::{
     BodySkin, CharacterLook, CharacterTables, UnitAlpha, UnitAppear, UnitMotion, UnitShade,
+    UnitShow,
 };
 
 use super::remote::{RelayMove, RemoteMotion, swim_body_rotation};
@@ -92,6 +93,7 @@ pub struct Others {
 pub struct Faults {
     pub drop_every_other: bool,
     pub no_dead_reckoning: bool,
+    pub no_show: bool,
 }
 
 pub struct BatchContext {
@@ -130,6 +132,7 @@ impl Others {
                     Visibility::default(),
                     UnitShade::default(),
                     UnitMotion::default(),
+                    UnitShow::default(),
                     UnitAlpha::default(),
                     RemoteMotion::seeded(&mv, at.arrived_real_ms),
                 ));
@@ -150,11 +153,25 @@ impl Others {
             Record::State { slot, state } => self.relay(commands, slot, at, |r| {
                 *r = Relayed::of(r.entity, &state, at.server_ms, at.read_around);
             }),
+            Record::Show {
+                slot: Some(slot),
+                show,
+            } => {
+                if let Some(r) = self.by_slot.get(&slot) {
+                    commands
+                        .entity(r.entity)
+                        .queue(move |mut entity: EntityWorldMut<'_>| {
+                            if let Some(mut shown) = entity.get_mut::<UnitShow>() {
+                                told(&mut shown, show);
+                            }
+                        });
+                }
+            }
             Record::Correct { .. }
             | Record::Granted { .. }
             | Record::Place { .. }
             | Record::Game { .. }
-            | Record::Show { .. } => {}
+            | Record::Show { slot: None, .. } => {}
         }
     }
 
@@ -195,6 +212,14 @@ impl Others {
         for (_, gone) in self.by_slot.drain() {
             leave(commands, gone.entity, game_secs);
         }
+    }
+}
+
+/// What a body is told to show, as its driver takes it.
+pub fn told(shown: &mut UnitShow, show: Show) {
+    match show {
+        Show::Play(anim) => shown.play = Some(anim),
+        Show::Hold(pose) => shown.pose = pose,
     }
 }
 

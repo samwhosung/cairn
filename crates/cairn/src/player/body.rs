@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 use world::unit::{
     BodyModel, CharacterLook, CharacterTables, UnitAlpha, UnitBody, UnitMotion, UnitShade,
-    ViewerUnit,
+    UnitShow, ViewerUnit,
 };
 use world::{Install, M2Model};
 
@@ -24,6 +24,7 @@ pub fn spawn_body(mut commands: Commands<'_, '_>) {
         Visibility::default(),
         UnitShade::default(),
         UnitMotion::default(),
+        UnitShow::default(),
         UnitAlpha::default(),
         ViewerUnit,
     ));

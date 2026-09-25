@@ -17,10 +17,10 @@ use protocol::{Appearance, Batch, ClientMessage, Hello, Record, ServerMessage, V
 use server::Spawn;
 use world::CurrentMap;
 use world::coords::{bevy_to_wow, wow_to_bevy};
-use world::unit::{CharacterLook, UnitSystems};
+use world::unit::{CharacterLook, UnitShow, UnitSystems};
 
 use crate::args::{Join, Joining};
-use crate::player::{CameraRig, Player};
+use crate::player::{CameraRig, Player, PlayerBody};
 use claims::Claims;
 use link::{Arrival, Link};
 use others::{BatchContext, Others};
@@ -32,6 +32,21 @@ pub use remote::RemoteMotion;
 const SPAWN_SPACING_YD: f32 = 2.5;
 const SPAWNS: usize = 16;
 const SEEN_EVERY: Duration = Duration::from_millis(500);
+/// WoW's first action bar, 1 to 0 and then - and =: the game's actions 1 to 12.
+const ACTION_KEYS: [KeyCode; 12] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+    KeyCode::Digit0,
+    KeyCode::Minus,
+    KeyCode::Equal,
+];
 
 /// Present while the window plays through a server; removed when that server goes.
 #[derive(Resource)]
@@ -216,7 +231,21 @@ impl Plugin for NetPlugin {
             Update,
             (others::dress_remotes, others::fade_leaving).before(UnitSystems),
         )
-        .add_systems(PostUpdate, claims::claim.run_if(resource_exists::<Net>));
+        .add_systems(
+            PostUpdate,
+            (act, claims::claim).run_if(resource_exists::<Net>),
+        );
+    }
+}
+
+fn act(keys: Res<'_, ButtonInput<KeyCode>>, net: Res<'_, Net>) {
+    if net.welcomed.is_none() {
+        return;
+    }
+    for (number, key) in (1..).zip(ACTION_KEYS) {
+        if keys.just_pressed(key) {
+            net.link.send(&ClientMessage::Action(number));
+        }
     }
 }
 
@@ -229,6 +258,7 @@ fn receive(
     map: Res<'_, CurrentMap>,
     mut player: ResMut<'_, Player>,
     mut rigs: Query<'_, '_, &mut CameraRig>,
+    mut own: Query<'_, '_, &mut UnitShow, With<PlayerBody>>,
 ) {
     let alone =
         |commands: &mut Commands<'_, '_>, net: &mut Net, player: &mut Player, why: String| {
@@ -284,6 +314,7 @@ fn receive(
                     claims.as_mut(),
                     others,
                     &mut player,
+                    own.single_mut().ok().as_deref_mut(),
                     &mut commands,
                 );
                 if let Err(e) = taken {
@@ -312,10 +343,18 @@ fn take_batch(
     mut claims: Option<&mut Claims>,
     others: &mut Others,
     player: &mut Player,
+    mut own: Option<&mut UnitShow>,
     commands: &mut Commands<'_, '_>,
 ) -> Result<(), protocol::Error> {
     for record in batch {
         match record? {
+            #[cfg(test)]
+            Record::Show { .. } if others.faults.no_show => {}
+            Record::Show { slot: None, show } => {
+                if let Some(own) = own.as_deref_mut() {
+                    others::told(own, show);
+                }
+            }
             Record::Correct { seq, why, movement } => {
                 if let Some(claims) = claims.as_deref_mut() {
                     claims.correct(player, seq, why, &movement);
@@ -442,6 +481,7 @@ mod tests {
                 Some(&mut self.claims),
                 &mut self.others,
                 &mut self.player,
+                None,
                 &mut world.commands(),
             )
             .expect("a whole batch");

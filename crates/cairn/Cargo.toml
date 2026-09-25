@@ -18,6 +18,7 @@ sound = { path = "../sound" }
 world = { path = "../world" }
 
 [dev-dependencies]
+game = { path = "../game" }
 mpq = { path = "../mpq" }
 
 [lints]

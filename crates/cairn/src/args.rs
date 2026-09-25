@@ -22,8 +22,8 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          also serves the world on 127.0.0.1:PORT (7777 by default), and each player who
          connects there appears beside the host. NAME is who the others see, the race's name
          by default. --game runs a game's rules (melee) on the window's own server, on its
-         own knobs or the --knobs FILE, with an --overlay FILE laid on them; the window takes
-         where the game puts the player, and shows nothing else of it yet
+         own knobs or the --knobs FILE, with an --overlay FILE laid on them; the window shows
+         what the game has each body do, and takes where the game puts the player
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
                   --out FILE.png
          render one frame without a window, once everything in it has loaded and the
@@ -51,7 +51,8 @@ choice 0.
 
 Walking: W and S run forward and back, A and D turn, Q and E strafe, Space jumps and
 leaves the water, the wheel zooms to first person. A held left button turns the camera,
-a held right button steers, both run. Num Lock runs on its own, keypad / walks.
+a held right button steers, both run. Num Lock runs on its own, keypad / walks. The keys
+1 to 0, - and = are WoW's first action bar: they send a game's actions 1 to 12.
 Ctrl+Shift+F flies (--fly starts there): WASD moves, Space and C rise and sink, a held
 button looks, the wheel sets the speed, Ctrl goes faster. Ctrl+Shift+G, flying, lands
 where the camera is if the server lets the player teleport, as the window's own server

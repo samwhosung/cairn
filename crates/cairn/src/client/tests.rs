@@ -1,20 +1,24 @@
+use std::f32::consts::PI;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::app::PluginGroupBuilder;
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::ExtractSchedule;
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::winit::WinitPlugin;
-use world::coords::wow_to_bevy;
-use world::unit::UnitSystems;
+use world::coords::{bevy_to_wow, wow_to_bevy};
+use world::unit::{UnitShow, UnitSystems};
 use world::{CurrentMap, Install, WorldSystems};
 
 use super::assemble;
 use crate::args;
-use crate::net::{self, Net};
+use crate::net::{self, Net, OtherPlayer};
+use crate::player::PlayerBody;
 use crate::player::state::Player;
 
 const FIRST_FRAMES: usize = 3;
@@ -238,4 +242,142 @@ fn a_window_whose_server_fails_says_so_and_plays_on_alone() {
         control.world().get_resource::<Net>().is_some(),
         "a window whose server runs lost it"
     );
+}
+
+const DEATH: u16 = 1;
+const DEAD: u16 = 6;
+const ATTACK_UNARMED: u16 = 16;
+
+/// Melee where one blow kills and the dead rise after three seconds, served on a free port to two
+/// players standing three yards apart, face to face.
+fn one_blow_melee() -> server::Config {
+    let over = game::KnobsFile::parse(
+        "damage_min = 100\ndamage_max = 100\nrespawn_s = 3\n",
+        "one blow",
+    )
+    .expect("knobs");
+    server::Config {
+        game: Some(catalog::load("melee", None, &over.lines, 0).expect("melee")),
+        spawns: vec![
+            server::Spawn {
+                pos: [0.0; 3],
+                facing: 0.0,
+            },
+            server::Spawn {
+                pos: [3.0, 0.0, 0.0],
+                facing: PI,
+            },
+        ],
+        ..net::own_server(Some(0), 0, [0.0; 3], 0.0)
+    }
+}
+
+fn own_show(app: &mut App) -> UnitShow {
+    let world = app.world_mut();
+    let mut own = world.query_filtered::<&UnitShow, With<PlayerBody>>();
+    *own.single(world).expect("the player's body")
+}
+
+fn the_others_show(app: &mut App) -> Option<UnitShow> {
+    let world = app.world_mut();
+    let mut others = world.query_filtered::<&UnitShow, With<OtherPlayer>>();
+    others.iter(world).next().copied()
+}
+
+fn press(app: &mut App, key_code: KeyCode, down: bool) {
+    app.world_mut().write_message(KeyboardInput {
+        key_code,
+        logical_key: Key::Unidentified(NativeKey::Unidentified),
+        state: if down {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        },
+        text: None,
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
+}
+
+fn stands_across(app: &App) -> [f32; 2] {
+    let [x, y, _] = bevy_to_wow(app.world().resource::<Player>().pos);
+    [x, y]
+}
+
+fn frames_for(app: &mut App, secs: f32) {
+    let until = Instant::now() + Duration::from_secs_f32(secs);
+    while Instant::now() < until {
+        app.update();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn key_one_swings_and_the_one_it_kills_lies_dead_for_both_and_does_not_walk_while_rooted() {
+    let mut host = running("--mute").expect("a window");
+    let hello = net::hello("Host".into(), &super::character_look(args::Look::default()));
+    let hosting = Net::host(one_blow_melee(), hello).expect("melee is served");
+    let addr = hosting.hosted_addr().expect("a port");
+    host.insert_resource(hosting);
+    let mut guest = running(&format!("--mute --connect {addr}")).expect("a second window");
+    for app in [&mut host, &mut guest] {
+        assert!(frames_until(app, welcomed), "not welcomed");
+        app.world_mut().resource_mut::<Player>().settling = false;
+    }
+    press(&mut guest, KeyCode::Digit1, true);
+    guest.update();
+    press(&mut guest, KeyCode::Digit1, false);
+    let killed = frames_until(&mut host, |app| {
+        app.world().resource::<Player>().rooted && own_show(app).pose == Some(DEAD)
+    });
+    assert!(
+        killed,
+        "the host was never killed: {:?}",
+        own_show(&mut host)
+    );
+    let seen_dying = |app: &mut App| {
+        own_show(app).play == Some(ATTACK_UNARMED)
+            && the_others_show(app)
+                == Some(UnitShow {
+                    play: Some(DEATH),
+                    pose: Some(DEAD),
+                })
+    };
+    assert!(
+        frames_until(&mut guest, seen_dying),
+        "the guest saw {:?} swing and {:?} die",
+        own_show(&mut guest),
+        the_others_show(&mut guest)
+    );
+
+    let lies = stands_across(&host);
+    press(&mut host, KeyCode::KeyW, true);
+    frames_for(&mut host, 0.5);
+    let tried = stands_across(&host);
+    let corrected = host.world().resource::<Net>().corrections();
+    assert!(
+        (tried[0] - lies[0]).hypot(tried[1] - lies[1]) < 1e-3 && corrected == 0,
+        "rooted, it went from {lies:?} to {tried:?} and was corrected {corrected} times"
+    );
+    host.world_mut().resource_mut::<Player>().rooted = false;
+    let caught = frames_until(&mut host, |app| {
+        app.world().resource::<Net>().corrections() > 0
+    });
+    press(&mut host, KeyCode::KeyW, false);
+    assert!(
+        caught,
+        "a client that walks on while rooted is not corrected"
+    );
+
+    let risen = frames_until(&mut host, |app| {
+        !app.world().resource::<Player>().rooted && own_show(app).pose.is_none()
+    });
+    let at = stands_across(&host);
+    assert!(
+        risen && at[0].hypot(at[1]) < 1e-3,
+        "risen {risen} at {at:?}"
+    );
+    assert!(frames_until(&mut guest, |app| {
+        the_others_show(app).is_some_and(|s| s.pose.is_none())
+    }));
 }

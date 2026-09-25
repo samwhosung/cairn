@@ -1447,6 +1447,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "catalog",
+ "game",
  "mpq",
  "protocol",
  "server",
