@@ -1,13 +1,14 @@
+use std::path::PathBuf;
 use std::time::Instant;
 
 use game::Delivery;
 use protocol::{Appearance, ClientMessage, Hello, Pos, VERSION};
 use rayon::prelude::*;
-use server::{Config, Input, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
+use server::{Config, Input, InputOrder, Refusal, Saving, Spawn, Stepper, TickStats, Why};
 
 use super::client::{Accepted, Brief, Client, Delivered, Seen, Taken, Tally, World};
 use super::played::Played;
-use super::spec::{Group, Script, Spec};
+use super::spec::{Group, Script, Spec, WorldFile};
 use crate::ground::Ground;
 use crate::lie::{Lie, same_bits};
 use crate::region;
@@ -98,15 +99,8 @@ pub fn run(
     let groups: Vec<usize> = briefs.iter().map(|b| b.group).collect();
     let liar_of = liar_of(spec, &groups);
     let liars = liar_of.iter().flatten().count();
-    let cfg = Config {
-        tick_threads: threads,
-        spawns: briefs.iter().map(|b| b.spawn).collect(),
-        limits: spec.limits,
-        view: spec.view,
-        tick_ms: spec.tick_ms,
-        game: spec.game.clone(),
-        ..Config::default()
-    };
+    let file = WorldAt::of(spec);
+    let cfg = config(spec, &briefs, threads, &file);
     let mut stepper =
         Stepper::new(&cfg, orders.inputs, orders.letters).map_err(|e| format!("a server: {e}"))?;
     let mut played = spec.game.as_ref().map(Played::zeroed);
@@ -172,6 +166,9 @@ pub fn run(
     if let Some(p) = &mut played {
         p.finish(&stepper, &clients);
     }
+    stepper
+        .finish()
+        .map_err(|e| format!("the world's file: {e}"))?;
     let wall_s = began.elapsed().as_secs_f64();
     for c in &clients {
         if c.tally.welcomed_as != Some(c.conn) {
@@ -191,6 +188,69 @@ pub fn run(
         wall_s,
         game: played,
     })
+}
+
+fn config(spec: &Spec, briefs: &[Brief], threads: usize, file: &WorldAt) -> Config {
+    Config {
+        tick_threads: threads,
+        spawns: briefs.iter().map(|b| b.spawn).collect(),
+        limits: spec.limits,
+        view: spec.view,
+        tick_ms: spec.tick_ms,
+        game: spec.game.clone(),
+        world: file.path.clone(),
+        saving: spec.drops.map_or(Saving::Held, Saving::Drops),
+        ..Config::default()
+    }
+}
+
+/// The file a run keeps its world in; a fresh one is removed once the run is over.
+struct WorldAt {
+    path: Option<PathBuf>,
+    fresh: bool,
+}
+
+impl WorldAt {
+    fn of(spec: &Spec) -> Self {
+        match &spec.world {
+            WorldFile::Fresh => {
+                let name: String = spec
+                    .name
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect();
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.subsec_nanos());
+                let file = format!("cairn-{name}-{}-{nanos}.sqlite", std::process::id());
+                Self {
+                    path: Some(std::env::temp_dir().join(file)),
+                    fresh: true,
+                }
+            }
+            WorldFile::At(path) => Self {
+                path: Some(path.clone()),
+                fresh: false,
+            },
+            WorldFile::Unsaved => Self {
+                path: None,
+                fresh: false,
+            },
+        }
+    }
+}
+
+impl Drop for WorldAt {
+    fn drop(&mut self) {
+        let Some(path) = self.path.as_ref().filter(|_| self.fresh) else {
+            return;
+        };
+        for end in ["", "-wal", "-shm", "-lock"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(end);
+            let _ = std::fs::remove_file(name);
+        }
+    }
 }
 
 fn connect(spec: &Spec, briefs: Vec<Brief>, stepper: &Stepper, liars: usize) -> Vec<Client> {

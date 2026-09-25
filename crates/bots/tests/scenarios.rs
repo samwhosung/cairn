@@ -244,6 +244,23 @@ fn a_bot_that_drops_one_animation_or_pose_it_was_shown_is_caught() {
 }
 
 #[test]
+fn a_writer_that_drops_one_change_leaves_the_file_apart_from_the_world() {
+    let whole = machine_independent(&run(
+        &melee_on("melee-kept.scenario", "seconds = 10\n"),
+        &[],
+    ));
+    assert!(whole.contains("\"saved_mismatches\":0"), "{whole}");
+    let dropping = melee_on("melee-drops.scenario", "seconds = 10\nworld.drops = 1\n");
+    let out = run(&dropping, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        said(&out).contains("expected game.saved_mismatches == 0"),
+        "{}",
+        said(&out)
+    );
+}
+
+#[test]
 fn an_unknown_knob_is_refused_at_its_line() {
     let file = melee_on("melee-knob.scenario", "knobs.speed = 3\n");
     let out = run(&file, &[]);

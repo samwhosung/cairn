@@ -25,6 +25,20 @@ pub struct Spec {
     pub groups: Vec<Group>,
     pub expects: Vec<Expect>,
     pub game: Option<Loaded>,
+    pub world: WorldFile,
+    /// A control: the writer leaves out the first player's row handed over at or after this tick.
+    pub drops: Option<u32>,
+}
+
+/// Where a scenario's world is kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorldFile {
+    /// A file of its own, made for the run and removed after it.
+    Fresh,
+    /// A file at this path, which must not exist yet: a scenario starts from an empty world.
+    At(PathBuf),
+    /// Memory only.
+    Unsaved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +110,8 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         groups: Vec::new(),
         expects: text.expects,
         game: None,
+        world: WorldFile::Fresh,
+        drops: None,
     };
     let mut drafts: Vec<Draft> = Vec::new();
     let mut disk: Vec<&Setting> = Vec::new();
@@ -259,6 +275,18 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
         "tick_ms" => spec.tick_ms = whole(v)?,
         "client.delay_ms" => spec.delay_ms = whole(v)?,
         "client.jitter_ms" => spec.jitter_ms = whole(v)?,
+        "world" if v == "none" => spec.world = WorldFile::Unsaved,
+        "world" => {
+            let path = s.at.file.parent().unwrap_or(Path::new(".")).join(v);
+            if path.exists() {
+                return Err(format!(
+                    "{} exists: a scenario starts from an empty world",
+                    path.display()
+                ));
+            }
+            spec.world = WorldFile::At(path);
+        }
+        "world.drops" => spec.drops = Some(whole(v)?),
         key => {
             let knob = if let Some(k) = key.strip_prefix("limits.") {
                 limits_knob(&mut spec.limits, k)
