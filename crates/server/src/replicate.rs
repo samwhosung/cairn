@@ -1,6 +1,6 @@
 use std::fmt;
 
-use game::Hosted;
+use game::{Hosted, Id};
 use protocol::{
     SLOTS, Wrapped, begin_batch, finish_frame, write_appear, write_correct, write_game,
     write_granted, write_move, write_place, write_state, write_turn, write_vanish,
@@ -251,8 +251,6 @@ pub struct Scene<'a> {
     pub relays: &'a Relays,
     pub clients: &'a Shared,
     pub game: Option<&'a dyn Hosted>,
-    /// By entity, whether the game's state of it changed this tick.
-    pub changed: &'a [bool],
 }
 
 pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built {
@@ -293,7 +291,6 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         reach: Reach::of(world.limits()),
         relays: scene.relays,
         game: scene.game,
-        changed: scene.changed,
         view,
         tick,
         shedding: queued > view.shed_bytes || behind > view.shed_ticks,
@@ -301,7 +298,8 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         out: &mut out,
         built: &mut built,
     };
-    if o.fresh || (tick + o.id).is_multiple_of(view.aoi_every.max(1)) {
+    let rechecked = o.fresh || (tick + o.id).is_multiple_of(view.aoi_every.max(1));
+    if rechecked {
         s.near.clear();
         scene.grid.present_within(
             bodies,
@@ -315,6 +313,10 @@ pub fn send_batch(o: &mut Observer, scene: &Scene<'_>, s: &mut Scratch) -> Built
         o.fresh = false;
     } else {
         o.seen.retain_mut(|e| pass.keep(e));
+    }
+    if let Some(game) = scene.game {
+        let came = if rechecked { &s.came[..] } else { &[] };
+        pass.write_game_changes(&o.seen, &game.record().shown, came);
     }
     finish_frame(&mut out, start);
     built.bytes = out.len() as u64;
@@ -330,7 +332,6 @@ struct Pass<'a> {
     reach: Reach,
     relays: &'a Relays,
     game: Option<&'a dyn Hosted>,
-    changed: &'a [bool],
     view: &'a View,
     tick: u32,
     shedding: bool,
@@ -365,7 +366,6 @@ impl Pass<'_> {
                 s.kept_at[e.id as usize] = r;
                 let mut e = e;
                 if self.refresh_or_let_go(&mut e) {
-                    self.write_game_state(e.id, e.slot, false);
                     s.kept.push(e);
                 }
             } else {
@@ -410,15 +410,20 @@ impl Pass<'_> {
         );
         self.built.shared_bytes += write_appear(self.out, slot, intro, relay) as u64;
         self.built.appeared += 1;
-        self.write_game_state(id, slot, true);
-    }
-
-    fn write_game_state(&mut self, id: u32, slot: u16, appearing: bool) {
-        if !appearing && !self.changed.get(id as usize).copied().unwrap_or(false) {
-            return;
-        }
         if let Some(state) = self.game.and_then(|g| g.shown(id)) {
             self.built.shared_bytes += write_game(self.out, slot, state) as u64;
+        }
+    }
+
+    /// All three are by id, and those that came were sent their whole state as they appeared.
+    fn write_game_changes(&mut self, seen: &[Seen], shown: &[(Id, Vec<u8>)], came: &[u32]) {
+        let mut rest = seen;
+        for (id, state) in shown.iter().take_while(|(id, _)| id.is_player()) {
+            rest = &rest[rest.partition_point(|e| e.id < id.n)..];
+            let Some(e) = rest.first() else { break };
+            if e.id == id.n && came.binary_search(&id.n).is_err() {
+                self.built.shared_bytes += write_game(self.out, e.slot, state) as u64;
+            }
         }
     }
 
@@ -433,11 +438,7 @@ impl Pass<'_> {
             self.vanish(e.slot);
             return false;
         }
-        let kept = self.refresh_or_let_go(e);
-        if kept {
-            self.write_game_state(e.id, e.slot, false);
-        }
-        kept
+        self.refresh_or_let_go(e)
     }
 
     fn refresh_or_let_go(&mut self, e: &mut Seen) -> bool {

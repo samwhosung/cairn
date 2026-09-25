@@ -492,16 +492,13 @@ fn hash_body(id: u32, b: &Body) -> u64 {
         b.refused,
         b.stale,
     ];
-    let rooted = b.rooted_at.into_iter().flatten().map(f32::to_bits);
-    let placed = b
-        .placed
-        .into_iter()
-        .flat_map(|p| [p.tick, u32::from(p.rooted)]);
-    words
-        .into_iter()
-        .chain(rooted)
-        .chain(placed)
-        .fold(0xcbf2_9ce4_8422_2325, |h, w| {
-            (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3)
-        })
+    let fnv = |h: u64, w: u32| (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3);
+    let mut h = words.iter().fold(0xcbf2_9ce4_8422_2325, |h, &w| fnv(h, w));
+    if let Some([x, y]) = b.rooted_at {
+        h = fnv(fnv(h, x.to_bits()), y.to_bits());
+    }
+    if let Some(p) = b.placed {
+        h = fnv(fnv(h, p.tick), u32::from(p.rooted));
+    }
+    h
 }
