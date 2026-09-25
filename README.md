@@ -34,6 +34,7 @@ gates enforce the rest.
 - [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, or renders one shot of it to a PNG
 - [`character`](crates/character) — World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
+- [`game`](crates/game) — The rule API a game on the server is written on: kinds of rows in typed tables, rules that read last tick's world and write only their own row, messages, timers, spawning and knobs, and the tick that runs them
 - [`light`](crates/light) — Reads World of Warcraft 1.12.1 lighting tables into fog, sun, sky and water colour by place, weather and time, and traces the sun and moon through the day
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
