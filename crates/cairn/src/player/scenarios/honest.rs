@@ -5,6 +5,7 @@ use bevy::input::keyboard::KeyCode;
 use server::{Config, Running, Spawn, Summary, Why};
 use world::unit::CharacterLook;
 
+use super::clock::{self, Served};
 use super::walker::Walker;
 use super::{
     ABBEY_STAIRS, CANAL_RAMP, DOWN_THE_RAMP, HILLSIDE, INN_WALL_START, MEADOW, SHORE, walk_path,
@@ -47,6 +48,12 @@ pub fn config(stands: &[Stand]) -> Config {
 
 pub fn serve_over_loopback(stands: &[Stand]) -> LoopbackServer {
     LoopbackServer(server::start(config(stands)).expect("a server"))
+}
+
+/// A server whose players join beside `stands` in turn, on a clock their windows step `hz` times
+/// a second.
+pub fn serve(stands: &[Stand], hz: f32) -> Served {
+    clock::serve(&config(stands), clock::step_at(hz))
 }
 
 struct Scenario {

@@ -4,7 +4,7 @@ use server::{InputOrder, Replay, Replicate};
 use world::coords::wow_to_bevy;
 use world::unit::CharacterLook;
 
-use super::honest::{Stand, serve_over_loopback};
+use super::honest::{Stand, serve};
 use super::walker::Walker;
 use super::{MEADOW, horizontal};
 use crate::player::Mode;
@@ -64,9 +64,8 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
         feet: [MEADOW[0], MEADOW[1], 59.86],
         heading_deg: 0.0,
     };
-    let server = serve_over_loopback(&[stand]);
-    let look = CharacterLook::naked(1, 0);
-    let Some(mut w) = Walker::joined_over_loopback(server.addr(), "Guest", look, HZ) else {
+    let clock = serve(&[stand], HZ);
+    let Some(mut w) = Walker::joined(&clock, "Guest", CharacterLook::naked(1, 0)) else {
         return;
     };
     let stood = w.wow();
@@ -78,7 +77,7 @@ fn a_landing_on_a_server_that_does_not_grant_it_is_put_back_and_told_why() {
     let (teleports, corrections, told) =
         (net.teleports_sent(), net.corrections(), net.why_put_back());
     drop(w);
-    let summary = server.stop().expect("the server stops");
+    let summary = clock.borrow_mut().stop();
     eprintln!(
         "put back {:.4} yd from where it stood, told {told:?}; refused {:?}",
         horizontal(stood, back),
