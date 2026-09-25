@@ -44,8 +44,6 @@ pub enum Region {
     },
 }
 
-/// Where bots walk: a region of a map, the map's tiles that hold it, and how far one leg of a walk
-/// may reach. A place with no tiles stands on level ground built in code.
 #[derive(Clone, Copy, Debug)]
 pub struct Place {
     pub name: &'static str,

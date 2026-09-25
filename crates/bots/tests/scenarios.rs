@@ -1,5 +1,3 @@
-//! The scenario files, run as an agent runs them: `bots scenario FILE`, one verdict line out.
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -20,9 +18,7 @@ fn said(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// The verdict without what only this run measured here: its wall time, speed, threads, cost of
-/// a tick and the machine's load.
-fn measured(out: &Output) -> String {
+fn machine_independent(out: &Output) -> String {
     let line = String::from_utf8_lossy(&out.stdout);
     let end = line
         .find(",\"wall_s\"")
@@ -35,7 +31,6 @@ fn hash(verdict: &str) -> &str {
     &verdict[at..at + 16]
 }
 
-/// A scenario written for one test, beside the others' in the test's scratch.
 fn scratch(name: &str, text: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("scenarios");
     std::fs::create_dir_all(&dir).expect("a scratch directory");
@@ -82,10 +77,10 @@ fn a_verdict_is_the_same_on_one_thread_and_on_fourteen_but_not_in_a_racy_order()
         "flat-run14.scenario",
     ] {
         let file = scratch(name, &over(name, "seconds = 15\n"));
-        let one = measured(&run(&file, &["--threads", "1"]));
-        let many = measured(&run(&file, &["--threads", "14"]));
+        let one = machine_independent(&run(&file, &["--threads", "1"]));
+        let many = machine_independent(&run(&file, &["--threads", "14"]));
         assert_eq!(one, many, "{name}");
-        let racy = measured(&run(&file, &["--threads", "14", "--racy"]));
+        let racy = machine_independent(&run(&file, &["--threads", "14", "--racy"]));
         assert_ne!(
             hash(&one),
             hash(&racy),

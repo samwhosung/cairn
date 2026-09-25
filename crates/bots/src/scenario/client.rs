@@ -8,57 +8,50 @@ use server::{Input, Link, Spawn, Stamped};
 use super::spec::Script;
 use crate::ground::Ground;
 use crate::lie::Lie;
-use crate::mover::Mover;
+use crate::mover::{Claims, Frame, Mover};
 use crate::region::{Place, XorShift64Star};
-use crate::track::{Line, Track, Walk, plan};
+use crate::track::{Pace, Track, Walk, plan};
 
 const SEEN_EVERY_MS: u32 = 500;
 const START_AFTER_WELCOME_MS: u32 = 100;
 
-/// What one bot is to do, from its group.
 #[derive(Clone, Debug)]
 pub struct Brief {
     pub group: usize,
     pub spawn: Spawn,
     pub script: Script,
-    /// A line's pace and stop; a wander's runs take its speed.
-    pub line: Line,
-    /// On the server's clock from its start.
+    pub pace: Pace,
     pub lies: Vec<Lie>,
-    pub hz: f32,
-    pub every_frame: bool,
-    pub clock_ms: u32,
+    pub frame_hz: f32,
+    pub claims: Claims,
+    pub clock_at_start_ms: u32,
     pub seed: u64,
-    /// The last moment of its own clock its route must reach.
-    pub horizon_ms: u32,
-}
-
-/// What the body did when a claim was made of it.
-#[derive(Clone, Copy, Debug)]
-pub struct Sent {
-    pub truth: Movement,
-    pub lied: bool,
+    pub route_until_ms: u32,
 }
 
 pub struct Outgoing {
     pub arrives_ms: u32,
-    pub frame: Vec<u8>,
-    pub sent: Option<Sent>,
+    pub bytes: Vec<u8>,
+    pub made_in: Option<Frame>,
 }
 
-/// A claim as the server took it in, and what the body did when it was made.
 pub struct Delivered {
     pub claim: Claim,
-    pub sent: Sent,
+    pub made_in: Frame,
 }
 
-/// What every client reads while it steps: the ground, and each liar's positions the server
-/// accepted up to the last tick, its spawn first, with how far each was from its body.
+/// A liar's position the server accepted, and how far it stood from the liar's body.
+#[derive(Clone, Copy, Debug)]
+pub struct Accepted {
+    pub pos: Pos,
+    pub off_body_yd: f32,
+}
+
 pub struct World<'a> {
     pub place: &'a Place,
     pub ground: &'a Ground,
     pub liar_of: &'a [Option<usize>],
-    pub accepted: &'a [Vec<(Pos, f32)>],
+    pub accepted: &'a [Vec<Accepted>],
 }
 
 /// Where a client saw one liar, against what the server accepted from it.
@@ -66,8 +59,6 @@ pub struct World<'a> {
 pub struct Seen {
     pub positions: u64,
     pub worst_yd: f32,
-    /// Accepted places read 512 yards off, a batch's 16 bits of a position read around a client
-    /// more than 256 yards from the liar.
     pub misread: u64,
     pub unaccepted: u64,
 }
@@ -87,8 +78,6 @@ struct Body {
     mover: Mover,
 }
 
-/// The network between one client and the server: a delay each way and a jitter on top, seeded,
-/// with each direction's messages arriving in the order they left.
 struct Net {
     rng: XorShift64Star,
     delay_ms: u32,
@@ -145,7 +134,7 @@ impl Client {
         liars: usize,
     ) -> Self {
         let mut rng = XorShift64Star::new(brief.seed ^ 0x6e65_7477_6f72_6b00);
-        let period = 1000.0 / brief.hz;
+        let period = 1000.0 / brief.frame_hz;
         let phase_ms = rng.range(0.0, period) as u32;
         let here = brief.spawn.pos;
         let (delay_ms, jitter_ms) = lag;
@@ -165,8 +154,8 @@ impl Client {
             inbound: VecDeque::new(),
             outbound: VecDeque::from([Outgoing {
                 arrives_ms: delay_ms,
-                frame: hello,
-                sent: None,
+                bytes: hello,
+                made_in: None,
             }]),
             nth: 0,
             body: None,
@@ -183,11 +172,11 @@ impl Client {
     }
 
     fn frame_at(&self, n: u64) -> u32 {
-        self.phase_ms + (n as f64 * 1000.0 / f64::from(self.brief.hz)) as u32
+        self.phase_ms + (n as f64 * 1000.0 / f64::from(self.brief.frame_hz)) as u32
     }
 
     fn clock(&self, t: u32) -> u32 {
-        self.brief.clock_ms + t
+        self.brief.clock_at_start_ms + t
     }
 
     /// Runs every frame due by `until_ms`, each after reading what arrived before it.
@@ -224,15 +213,15 @@ impl Client {
             let Some(o) = self.outbound.pop_front() else {
                 break;
             };
-            let input = match ClientMessage::read(&o.frame[LEN_BYTES..]) {
+            let input = match ClientMessage::read(&o.bytes[LEN_BYTES..]) {
                 Ok(ClientMessage::Seen(tick)) => {
                     self.link.behind_by(next_tick.saturating_sub(tick));
                     continue;
                 }
                 Ok(ClientMessage::Hello(h)) => Input::Join(h),
                 Ok(ClientMessage::Claim(claim)) => {
-                    if let Some(sent) = o.sent {
-                        delivered.push((self.conn, Delivered { claim, sent }));
+                    if let Some(made_in) = o.made_in {
+                        delivered.push((self.conn, Delivered { claim, made_in }));
                     }
                     Input::Claim(claim)
                 }
@@ -313,17 +302,14 @@ impl Client {
         }
     }
 
-    /// Checks a liar's position as this client read it against what the server accepted from
-    /// the liar: the same place, or the same bits of an accepted place read around a client too
-    /// far from it, or neither.
     fn saw(&mut self, liar: usize, bits: Wrapped, world: &World<'_>) {
         let read = bits.around(self.here);
         let seen = &mut self.tally.seen[liar];
         let accepted = &world.accepted[liar];
-        if let Some(&(_, off_yd)) = accepted.iter().rev().find(|(p, _)| *p == read) {
+        if let Some(a) = accepted.iter().rev().find(|a| a.pos == read) {
             seen.positions += 1;
-            seen.worst_yd = seen.worst_yd.max(off_yd);
-        } else if accepted.iter().any(|(p, _)| p.wrapped() == bits) {
+            seen.worst_yd = seen.worst_yd.max(a.off_body_yd);
+        } else if accepted.iter().any(|a| a.pos.wrapped() == bits) {
             seen.misread += 1;
         } else {
             seen.unaccepted += 1;
@@ -337,38 +323,28 @@ impl Client {
         };
         let start = self.clock(t) + START_AFTER_WELCOME_MS;
         let b = &self.brief;
-        let until = b.horizon_ms.max(start);
+        let until = b.route_until_ms.max(start);
         let track = match b.script {
             Script::Wander => {
                 let walk = Walk {
                     start_ms: start,
                     until_ms: until,
                     seed: b.seed,
-                    run: b.line.speed,
-                    liar: false,
+                    run_speed: b.pace.speed,
+                    long_runs: false,
                 };
                 plan(world.place, world.ground, &spawn, &walk)
             }
-            Script::Line => Track::line(&spawn, &b.line, start, until),
+            Script::Line => Track::line(&spawn, &b.pace, start, until),
             Script::Stand => {
-                let stand = Line {
+                let stand = Pace {
                     stop_yd: Some(0.0),
-                    ..b.line
+                    ..b.pace
                 };
                 Track::line(&spawn, &stand, start, until)
             }
         };
-        let clock = b.clock_ms;
-        let lies = b
-            .lies
-            .iter()
-            .map(|l| Lie {
-                from_ms: l.from_ms + clock,
-                to_ms: l.to_ms.saturating_add(clock),
-                ..*l
-            })
-            .collect();
-        let mover = Mover::new(spawn.pos, spawn.facing, lies, b.every_frame);
+        let mover = Mover::new(spawn.pos, spawn.facing, b.lies.clone(), b.claims);
         self.body = Some(Body { track, mover });
         self.here = spawn.pos;
         self.seen_tick = w.tick;
@@ -395,11 +371,8 @@ impl Client {
             .write(&mut frame);
             self.outbound.push_back(Outgoing {
                 arrives_ms: self.net.out(t),
-                frame,
-                sent: Some(Sent {
-                    truth: f.truth,
-                    lied: f.lied,
-                }),
+                bytes: frame,
+                made_in: Some(f),
             });
         }
         if f.lied {
@@ -412,8 +385,8 @@ impl Client {
             ClientMessage::Seen(self.seen_tick).write(&mut frame);
             self.outbound.push_back(Outgoing {
                 arrives_ms: self.net.out(t),
-                frame,
-                sent: None,
+                bytes: frame,
+                made_in: None,
             });
         }
     }

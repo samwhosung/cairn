@@ -34,7 +34,6 @@ bots.hover.lie.hover = yes
 
 expect walkers.corrections == 0
 
-# Known holes: the server holds no walls, water or ground. When one closes, its liar is refused.
 expect wall.lies_refused == 0
 expect wall.past_honest_yd > 30
 expect wall.control_corrections == 0

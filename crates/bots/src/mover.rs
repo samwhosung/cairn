@@ -4,7 +4,7 @@ use libm::{cosf, sinf};
 use protocol::{Cadence, Jump, Movement, flags};
 
 use crate::ground::Ground;
-use crate::lie::{Lie, Route, Told, same};
+use crate::lie::{Lie, Route, Told, same_bits};
 use crate::track::Track;
 
 const JUMP_SPEED: f32 = 7.955_547;
@@ -18,39 +18,43 @@ struct Air {
     facing: f32,
 }
 
-/// One frame: where the body really is, and how many claims it made of it.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame {
     pub truth: Movement,
     pub claims: usize,
-    /// The claims differ from the truth.
     pub lied: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Claims {
+    ByCadence,
+    EveryFrame,
 }
 
 pub struct Mover {
     cadence: Cadence,
-    last_ground_z: f32,
+    last_footing_z: f32,
     air: Option<Air>,
     jumped_leg: Option<usize>,
     lies: Vec<(Lie, Told)>,
-    every_frame: bool,
+    claims: Claims,
     pub ack: u32,
 }
 
-struct OnGround<'a> {
+struct OnFooting<'a> {
     track: &'a Track,
     ground: &'a Ground,
     fallback_z: f32,
 }
 
-impl OnGround<'_> {
+impl OnFooting<'_> {
     fn over(&self, [x, y]: [f32; 2]) -> [f32; 3] {
-        let z = self.track.ground_z(self.ground, x, y);
+        let z = self.track.footing_z(self.ground, x, y);
         [x, y, z.unwrap_or(self.fallback_z)]
     }
 }
 
-impl Route for OnGround<'_> {
+impl Route for OnFooting<'_> {
     fn at(&self, t: u32) -> [f32; 3] {
         self.over(self.track.xy(t))
     }
@@ -61,20 +65,18 @@ impl Route for OnGround<'_> {
 }
 
 impl Mover {
-    /// A body standing where it spawned; with `every_frame`, it claims every frame whatever the
-    /// send law says, as a client turning with the mouse does.
-    pub fn new(spawn: [f32; 3], facing: f32, lies: Vec<Lie>, every_frame: bool) -> Self {
+    pub fn new(spawn: [f32; 3], facing: f32, lies: Vec<Lie>, claims: Claims) -> Self {
         Self {
             cadence: Cadence::new(&Movement {
                 pos: spawn,
                 facing: facing.rem_euclid(TAU),
                 ..Movement::default()
             }),
-            last_ground_z: spawn[2],
+            last_footing_z: spawn[2],
             air: None,
             jumped_leg: None,
             lies: lies.into_iter().map(|l| (l, Told::default())).collect(),
-            every_frame,
+            claims,
             ack: 0,
         }
     }
@@ -93,10 +95,10 @@ impl Mover {
         out: &mut Vec<Movement>,
     ) -> Frame {
         let truth = self.truth(t, track, ground);
-        let route = OnGround {
+        let route = OnFooting {
             track,
             ground,
-            fallback_z: self.last_ground_z,
+            fallback_z: self.last_footing_z,
         };
         let mut claim = truth;
         for (lie, told) in &mut self.lies {
@@ -108,27 +110,27 @@ impl Mover {
             }
         }
         let mut claims = self.cadence.claims(&claim);
-        if self.every_frame {
+        if self.claims == Claims::EveryFrame {
             claims = claims.max(1);
         }
         if claims > 0 {
             for (lie, told) in &mut self.lies {
-                told.shifted |= lie.holds_at(t) && lie.once;
+                told.shift_sent |= lie.holds_at(t) && lie.shift_once;
             }
         }
         out.extend(std::iter::repeat_n(claim, claims));
         Frame {
             truth,
             claims,
-            lied: claims > 0 && !same(&claim, &truth),
+            lied: claims > 0 && !same_bits(&claim, &truth),
         }
     }
 
     fn truth(&mut self, t: u32, track: &Track, ground: &Ground) -> Movement {
         let pose = track.pose(t);
         let [x, y] = pose.spot.xy;
-        let ground_z = track.ground_z(ground, x, y).unwrap_or(self.last_ground_z);
-        self.last_ground_z = ground_z;
+        let footing_z = track.footing_z(ground, x, y).unwrap_or(self.last_footing_z);
+        self.last_footing_z = footing_z;
         let mut live = pose.flags;
         if let Some(jump) = pose.jump
             && t >= jump.at_ms
@@ -138,14 +140,14 @@ impl Mover {
             self.jumped_leg = Some(pose.leg);
             self.air = Some(Air {
                 launched_at: jump.at_ms,
-                launch_z: ground_z,
+                launch_z: footing_z,
                 xy_speed: jump.speed,
                 facing: pose.spot.facing,
             });
         }
         let mut movement = Movement {
             time: t,
-            pos: [x, y, ground_z],
+            pos: [x, y, footing_z],
             facing: pose.spot.facing.rem_euclid(TAU),
             ..Movement::default()
         };
@@ -153,7 +155,7 @@ impl Mover {
             let secs = (t - air.launched_at) as f32 / 1000.0;
             let z = air.launch_z + JUMP_SPEED * secs - 0.5 * GRAVITY * secs * secs;
             movement.fall_time = t - air.launched_at;
-            if secs > 0.2 && z <= ground_z {
+            if secs > 0.2 && z <= footing_z {
                 self.air = None;
             } else {
                 live |= flags::FALLING;
@@ -196,7 +198,7 @@ mod tests {
 
     fn claims(track: &Track, lies: Vec<Lie>, until: u32) -> Vec<(u32, Movement, Movement)> {
         let ground = Ground::flat(10.0);
-        let mut mover = Mover::new([0.0, 0.0, 10.0], 0.0, lies, false);
+        let mut mover = Mover::new([0.0, 0.0, 10.0], 0.0, lies, Claims::ByCadence);
         let mut out = Vec::new();
         for t in (0..=until).step_by(50) {
             let mut frame = Vec::new();
@@ -273,7 +275,7 @@ mod tests {
         let teleport = Lie {
             from_ms: 3000,
             shift: [200.0, 0.0, 0.0],
-            once: true,
+            shift_once: true,
             ..Lie::default()
         };
         let track = Track::of(vec![leg(0, 5000, run(None))]);
@@ -299,7 +301,7 @@ mod tests {
         assert_eq!(times(&sent), [0, 500, 1000, 1250, 1750]);
         assert!(sent[3].1.pos[2].abs() < 1e-6, "ten yards under the ground");
         let ground = Ground::flat(10.0);
-        let mut mover = Mover::new([0.0, 0.0, 10.0], 0.0, Vec::new(), true);
+        let mut mover = Mover::new([0.0, 0.0, 10.0], 0.0, Vec::new(), Claims::EveryFrame);
         let mut out = Vec::new();
         for t in (0..1000).step_by(50) {
             mover.frame(t, &track, &ground, &mut out);

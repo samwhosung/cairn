@@ -1,13 +1,15 @@
-# Lies in the movement flags on a straight run over level ground: swimming on dry land at the
-# swim speed; jumps launched at three times their speed; falling, to be held to a run, while
-# walking at a run; walking's flags on a run; standing's flags on a run.
 place = flat
 seconds = 30
+rules.run = 7
+rules.walk = 2.5
+rules.swim = 4.722
+rules.tolerance = 0.1
+rules.slack = 0.5
 bots.walkers.count = 20
 
 bots.swim-on-land.count = 1
 bots.swim-on-land.script = line
-bots.swim-on-land.speed = 4.722
+bots.swim-on-land.speed = 4.722 # the swim speed
 bots.swim-on-land.lie.set = swim
 
 bots.launch.count = 1
@@ -31,19 +33,16 @@ bots.stand-flags.lie.clear = moving
 
 expect walkers.corrections == 0
 
-# A known hole, harmless today: nothing asks whether there is water, and a swim is slower than a
-# run. When it closes, swim-on-land is refused.
+# A known hole: nothing asks whether there is water.
 expect swim-on-land.lies_refused == 0
 expect swim-on-land.past_honest_yd < 1
 expect swim-on-land.control_corrections == 0
 
-# Refused at each launch.
 expect launch.caught_after_s <= 0.1
 expect launch.lies_accepted == 0
 expect launch.control_corrections == 0
 
-# A known hole: a falling body is held to a run whatever else its flags say. When it closes,
-# fall-walk is refused.
+# A known hole: a falling body is held to a run whatever else its flags say.
 expect fall-walk.lies_refused == 0
 expect fall-walk.past_honest_yd > 100
 expect fall-walk.control_corrections == 0
@@ -54,7 +53,7 @@ expect walk-flags.past_honest_yd < 1
 expect walk-flags.control_corrections == 0
 
 # A known hole: a body that claims to stand still claims wherever it drifts, every frame, each
-# claim within the slack. It gains no ground here. When it closes, stand-flags is refused.
+# claim within the slack.
 expect stand-flags.lies_refused == 0
 expect stand-flags.past_honest_yd < 1
 expect stand-flags.control_corrections == 0

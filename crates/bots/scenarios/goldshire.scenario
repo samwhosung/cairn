@@ -1,7 +1,6 @@
-# A crowd walking Goldshire, and a few bots scripted to run at 14 yards a second. The movement
-# check holds every runner to 7, so it corrects them and never the walkers.
 place = goldshire
 seconds = 60
+rules.run = 7
 bots.walkers.count = 100
 bots.sprinters.count = 10
 bots.sprinters.speed = 14

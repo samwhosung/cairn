@@ -171,8 +171,7 @@ impl Track {
         }
     }
 
-    /// The height the body keeps over world `(x, y)`.
-    pub fn ground_z(&self, ground: &Ground, x: f32, y: f32) -> Option<f32> {
+    pub fn footing_z(&self, ground: &Ground, x: f32, y: f32) -> Option<f32> {
         if self.surface {
             ground.surface(x, y)
         } else {
@@ -182,18 +181,18 @@ impl Track {
 
     /// A straight run from `from` along its facing, from `start_ms` until `until_ms` or until it
     /// has covered its `stop_yd`, then standing.
-    pub fn line(from: &Spawn, line: &Line, start_ms: u32, until_ms: u32) -> Self {
-        let stop_ms = line
+    pub fn line(from: &Spawn, pace: &Pace, start_ms: u32, until_ms: u32) -> Self {
+        let stop_ms = pace
             .stop_yd
-            .map_or(until_ms, |yd| start_ms + (yd / line.speed * 1000.0) as u32)
+            .map_or(until_ms, |yd| start_ms + (yd / pace.speed * 1000.0) as u32)
             .min(until_ms);
-        let stride = line.jump_every_ms.unwrap_or(u32::MAX);
+        let stride = pace.jump_every_ms.unwrap_or(u32::MAX);
         let mut legs = Vec::new();
         let mut at = [from.pos[0], from.pos[1]];
         let mut t = start_ms;
         while t < stop_ms {
             let end = t.saturating_add(stride).min(stop_ms);
-            let jump_at = line
+            let jump_at = pace
                 .jump_every_ms
                 .map(|_| t + JUMP_AFTER_MS)
                 .filter(|&j| j + JUMP_LANDS_WITHIN_MS <= end);
@@ -203,8 +202,8 @@ impl Track {
                 from: at,
                 facing: from.facing,
                 motion: Motion::Run {
-                    speed: line.speed,
-                    gait: line.gait,
+                    speed: pace.speed,
+                    gait: pace.gait,
                     jump_at,
                 },
             };
@@ -221,7 +220,7 @@ impl Track {
         });
         Self {
             legs,
-            surface: line.surface,
+            surface: pace.surface,
         }
     }
 }
@@ -229,26 +228,22 @@ impl Track {
 const JUMP_AFTER_MS: u32 = 500;
 const JUMP_LANDS_WITHIN_MS: u32 = 1000;
 
-/// A straight run's pace, and where it stops.
 #[derive(Clone, Copy, Debug)]
-pub struct Line {
+pub struct Pace {
     pub speed: f32,
     pub gait: Gait,
     pub stop_yd: Option<f32>,
-    /// A jump this often, each half a second into its stretch.
     pub jump_every_ms: Option<u32>,
     pub surface: bool,
 }
 
-/// How a planned walk goes: when, how fast its runs are, and whether it is a crowd's liar, whose
-/// runs are long enough to lie on.
 #[derive(Clone, Copy, Debug)]
 pub struct Walk {
     pub start_ms: u32,
     pub until_ms: u32,
     pub seed: u64,
-    pub run: f32,
-    pub liar: bool,
+    pub run_speed: f32,
+    pub long_runs: bool,
 }
 
 pub fn plan(s: &Place, ground: &Ground, spawn: &Spawn, walk: &Walk) -> Track {
@@ -257,7 +252,7 @@ pub fn plan(s: &Place, ground: &Ground, spawn: &Spawn, walk: &Walk) -> Track {
         ground,
         rng: XorShift64Star::new(walk.seed),
         slope: server::Rules::default().climb,
-        run: walk.run,
+        run: walk.run_speed,
     };
     let mut legs = vec![Leg {
         start_ms: walk.start_ms,
@@ -269,7 +264,7 @@ pub fn plan(s: &Place, ground: &Ground, spawn: &Spawn, walk: &Walk) -> Track {
     while legs.last().is_some_and(|l| l.end_ms < walk.until_ms) {
         let last = legs[legs.len() - 1];
         let end = last.at(last.end_ms);
-        let leg = if walk.liar {
+        let leg = if walk.long_runs {
             p.liar_leg(last.end_ms, end)
         } else {
             p.next_leg(last.end_ms, end)
@@ -419,8 +414,7 @@ impl Planner<'_> {
     }
 }
 
-/// A crowd's liar's lies: three times its speed for two seconds of a long run, and later, once,
-/// a teleport while it runs; none if its track has no runs long enough.
+/// None if the track has no runs long enough to lie on.
 pub fn crowd_liar_lies(track: &Track, start_ms: u32) -> Vec<Lie> {
     let long_run = |after: u32, ms: u32| {
         track.legs.iter().find(|l| {
@@ -442,7 +436,7 @@ pub fn crowd_liar_lies(track: &Track, start_ms: u32) -> Vec<Lie> {
         Lie {
             from_ms: teleport.start_ms + 1000,
             shift: [TELEPORT_YD, 0.0, 0.0],
-            once: true,
+            shift_once: true,
             ..Lie::default()
         },
     ]
@@ -495,7 +489,7 @@ mod tests {
             pos: [10.0, 0.0, 0.0],
             facing: 0.0,
         };
-        let line = Line {
+        let line = Pace {
             speed: RUN,
             gait: Gait::Walk,
             stop_yd: Some(14.0),
@@ -534,7 +528,7 @@ mod tests {
         let lies = crowd_liar_lies(&Track::of(legs), 0);
         let windows: Vec<_> = lies
             .iter()
-            .map(|l| (l.from_ms, l.to_ms, l.factor.map(|f| f as u32), l.once))
+            .map(|l| (l.from_ms, l.to_ms, l.factor.map(|f| f as u32), l.shift_once))
             .collect();
         assert_eq!(
             windows,

@@ -6,20 +6,19 @@ use super::file::{Bad, Expect};
 use super::run::{Account, Outcome, liar_of};
 use super::spec::Spec;
 
-/// A value of the verdict, as JSON writes it.
 #[derive(Clone, Debug)]
-pub enum Value {
+pub enum Json {
     Count(u64),
     Number(f64),
     Text(String),
     Yes(bool),
-    Nothing,
-    Object(Vec<(String, Value)>),
-    List(Vec<Value>),
+    NoNumber,
+    Object(Vec<(String, Json)>),
+    List(Vec<Json>),
 }
 
-impl Value {
-    fn object(fields: Vec<(&str, Value)>) -> Self {
+impl Json {
+    fn object(fields: Vec<(&str, Json)>) -> Self {
         Self::Object(
             fields
                 .into_iter()
@@ -35,14 +34,12 @@ impl Value {
         }
     }
 
-    /// The number at `path`, a key for each object it goes into, or the null that stands for a
-    /// number there is none of, such as the time a liar never caught was caught at.
     fn number_at(&self, path: &[&str]) -> Option<&Self> {
         let mut v = self;
         for key in path {
             v = v.get(key)?;
         }
-        matches!(v, Self::Count(_) | Self::Number(_) | Self::Nothing).then_some(v)
+        matches!(v, Self::Count(_) | Self::Number(_) | Self::NoNumber).then_some(v)
     }
 
     fn number(&self) -> Option<f64> {
@@ -54,14 +51,14 @@ impl Value {
     }
 }
 
-impl fmt::Display for Value {
+impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Count(n) => write!(f, "{n}"),
             Self::Number(n) => write!(f, "{n:.3}"),
             Self::Text(s) => write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
             Self::Yes(b) => write!(f, "{b}"),
-            Self::Nothing => f.write_str("null"),
+            Self::NoNumber => f.write_str("null"),
             Self::Object(fields) => {
                 f.write_char('{')?;
                 for (i, (k, v)) in fields.iter().enumerate() {
@@ -82,20 +79,20 @@ impl fmt::Display for Value {
     }
 }
 
-fn refused(counts: &[u64; Why::ALL.len()]) -> Value {
-    let mut fields = vec![("all".to_string(), Value::Count(counts.iter().sum()))];
+fn refused(counts: &[u64; Why::ALL.len()]) -> Json {
+    let mut fields = vec![("all".to_string(), Json::Count(counts.iter().sum()))];
     for (why, &n) in Why::ALL.iter().zip(counts) {
-        fields.push((format!("{why:?}").to_lowercase(), Value::Count(n)));
+        fields.push((format!("{why:?}").to_lowercase(), Json::Count(n)));
     }
-    Value::Object(fields)
+    Json::Object(fields)
 }
 
-fn sum(accounts: &[&Account], f: impl Fn(&Account) -> u64) -> Value {
-    Value::Count(accounts.iter().map(|a| f(a)).sum())
+fn sum(accounts: &[&Account], f: impl Fn(&Account) -> u64) -> Json {
+    Json::Count(accounts.iter().map(|a| f(a)).sum())
 }
 
 /// Everything the scenario measured that the same file measures the same on any machine.
-pub fn measured(spec: &Spec, o: &Outcome) -> Value {
+pub fn measured(spec: &Spec, o: &Outcome) -> Json {
     let liar_of = liar_of(spec, &o.groups);
     let members =
         |g: usize| -> Vec<usize> { (0..o.groups.len()).filter(|&b| o.groups[b] == g).collect() };
@@ -114,17 +111,17 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Value {
         }
         let corrections: u64 = bots.iter().map(|&b| o.tallies[b].corrections).sum();
         let mut fields = vec![
-            ("bots", Value::Count(bots.len() as u64)),
+            ("bots", Json::Count(bots.len() as u64)),
             ("claims", sum(&accounts, |a| a.claims)),
             ("accepted", sum(&accounts, |a| a.accepted)),
             ("stale", sum(&accounts, |a| a.stale)),
             ("refused", refused(&refusals)),
-            ("corrections", Value::Count(corrections)),
+            ("corrections", Json::Count(corrections)),
         ];
         if g.lie.is_some() {
             fields.extend(lies(o, &bots, &accounts, &liar_of, gi, spec));
         }
-        groups.push((g.name.clone(), Value::object(fields)));
+        groups.push((g.name.clone(), Json::object(fields)));
     }
     let all: Vec<&Account> = o.accounts.iter().collect();
     let mut refusals = [0; Why::ALL.len()];
@@ -134,13 +131,13 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Value {
         }
     }
     let game_s = o.ticks.len() as f64 * f64::from(o.tick_ms) / 1000.0;
-    Value::object(vec![
-        ("scenario", Value::Text(spec.name.clone())),
-        ("ticks", Value::Count(o.ticks.len() as u64)),
-        ("game_s", Value::Number(game_s)),
+    Json::object(vec![
+        ("scenario", Json::Text(spec.name.clone())),
+        ("ticks", Json::Count(o.ticks.len() as u64)),
+        ("game_s", Json::Number(game_s)),
         (
             "players",
-            Value::Count(
+            Json::Count(
                 o.ticks
                     .iter()
                     .map(|t| u64::from(t.players))
@@ -153,16 +150,16 @@ pub fn measured(spec: &Spec, o: &Outcome) -> Value {
         ("refused", refused(&refusals)),
         (
             "corrections",
-            Value::Count(o.tallies.iter().map(|t| t.corrections).sum()),
+            Json::Count(o.tallies.iter().map(|t| t.corrections).sum()),
         ),
         (
             "decode_errors",
-            Value::Count(o.tallies.iter().map(|t| t.decode_errors).sum()),
+            Json::Count(o.tallies.iter().map(|t| t.decode_errors).sum()),
         ),
-        ("groups", Value::Object(groups)),
+        ("groups", Json::Object(groups)),
         (
             "hash",
-            Value::Text(format!("{:016x}", o.ticks.last().map_or(0, |t| t.hash))),
+            Json::Text(format!("{:016x}", o.ticks.last().map_or(0, |t| t.hash))),
         ),
     ])
 }
@@ -174,14 +171,14 @@ fn lies(
     liar_of: &[Option<usize>],
     gi: usize,
     spec: &Spec,
-) -> Vec<(&'static str, Value)> {
+) -> Vec<(&'static str, Json)> {
     let tallies: Vec<_> = bots.iter().map(|&b| &o.tallies[b]).collect();
     let after = |at: fn(&Account) -> Option<u32>| {
         let ms = bots
             .iter()
             .filter_map(|&b| Some(at(&o.accounts[b])? - o.tallies[b].first_lie_ms?))
             .max();
-        ms.map_or(Value::Nothing, |ms| Value::Number(f64::from(ms) / 1000.0))
+        ms.map_or(Json::NoNumber, |ms| Json::Number(f64::from(ms) / 1000.0))
     };
     let past = accounts
         .iter()
@@ -207,24 +204,24 @@ fn lies(
         .flat_map(|(t, _)| (0..o.groups.len()).filter(move |&b| o.groups[b] == t))
         .collect();
     vec![
-        ("lies", Value::Count(tallies.iter().map(|t| t.lies).sum())),
+        ("lies", Json::Count(tallies.iter().map(|t| t.lies).sum())),
         ("lies_refused", sum(accounts, |a| a.lies_refused)),
         ("lies_stale", sum(accounts, |a| a.lies_stale)),
         ("lies_accepted", sum(accounts, |a| a.lies_accepted)),
         ("caught_after_s", after(|a| a.first_caught_ms)),
         ("through_after_s", after(|a| a.first_through_ms)),
-        ("past_honest_yd", Value::Number(f64::from(past))),
-        ("seen_positions", Value::Count(positions)),
-        ("seen_past_honest_yd", Value::Number(f64::from(worst))),
-        ("seen_misread", Value::Count(misread)),
-        ("seen_unaccepted", Value::Count(unaccepted)),
+        ("past_honest_yd", Json::Number(f64::from(past))),
+        ("seen_positions", Json::Count(positions)),
+        ("seen_past_honest_yd", Json::Number(f64::from(worst))),
+        ("seen_misread", Json::Count(misread)),
+        ("seen_unaccepted", Json::Count(unaccepted)),
         (
             "control_corrections",
-            Value::Count(twins.iter().map(|&b| o.tallies[b].corrections).sum()),
+            Json::Count(twins.iter().map(|&b| o.tallies[b].corrections).sum()),
         ),
         (
             "control_refused",
-            Value::Count(
+            Json::Count(
                 twins
                     .iter()
                     .map(|&b| o.accounts[b].refused.iter().sum::<u64>())
@@ -234,8 +231,7 @@ fn lies(
     ]
 }
 
-/// The number an expectation reads: `GROUP.FIELD…` for a group's, otherwise the scenario's.
-fn read<'a>(measured: &'a Value, spec: &Spec, e: &Expect) -> Option<&'a Value> {
+fn read<'a>(measured: &'a Json, spec: &Spec, e: &Expect) -> Option<&'a Json> {
     let path: Vec<&str> = e.path.split('.').collect();
     let is_group = spec
         .groups
@@ -252,7 +248,7 @@ fn read<'a>(measured: &'a Value, spec: &Spec, e: &Expect) -> Option<&'a Value> {
 
 /// Fails on an expectation that reads no number the verdict has.
 pub fn check_paths(spec: &Spec) -> Result<(), Bad> {
-    let zero = measured(spec, &Outcome::nothing(spec));
+    let zero = measured(spec, &Outcome::zeroed(spec));
     for e in &spec.expects {
         if read(&zero, spec, e).is_none() {
             return Err(Bad::at(
@@ -264,60 +260,86 @@ pub fn check_paths(spec: &Spec) -> Result<(), Bad> {
     Ok(())
 }
 
-/// Each expectation, what it read, and whether it held.
-pub fn judge(spec: &Spec, measured: &Value) -> Vec<(Expect, Value, bool)> {
+pub struct Judged {
+    pub expect: Expect,
+    pub got: Json,
+    pub held: bool,
+}
+
+pub fn judge(spec: &Spec, measured: &Json) -> Vec<Judged> {
     spec.expects
         .iter()
         .map(|e| {
-            let got = read(measured, spec, e).cloned().unwrap_or(Value::Nothing);
+            let got = read(measured, spec, e).cloned().unwrap_or(Json::NoNumber);
             let held = e.op.holds(got.number(), e.want);
-            (e.clone(), got, held)
+            Judged {
+                expect: e.clone(),
+                got,
+                held,
+            }
         })
         .collect()
 }
 
-/// How the run went on this machine: its tick's threads, and the seconds it took to read the
-/// scenario and load its ground.
-pub struct Here {
+pub struct ThisMachine {
     pub threads: usize,
     pub setup_s: f64,
 }
 
 /// The verdict line: what was measured, each expectation, and last how fast it ran here, which
 /// no expectation reads.
-pub fn line(measured: Value, judged: &[(Expect, Value, bool)], o: &Outcome, here: &Here) -> Value {
-    let Value::Object(mut fields) = measured else {
+pub fn line(measured: Json, judged: &[Judged], o: &Outcome, here: &ThisMachine) -> Json {
+    let Json::Object(mut fields) = measured else {
         return measured;
     };
-    let pass = judged.iter().all(|(_, _, ok)| *ok);
-    fields.insert(1, ("pass".into(), Value::Yes(pass)));
+    let pass = judged.iter().all(|j| j.held);
+    fields.insert(1, ("pass".into(), Json::Yes(pass)));
     let expects = judged
         .iter()
-        .map(|(e, got, ok)| {
-            Value::object(vec![
-                ("expect", Value::Text(e.to_string())),
-                ("at", Value::Text(e.at.to_string())),
-                ("got", got.clone()),
-                ("pass", Value::Yes(*ok)),
+        .map(|j| {
+            Json::object(vec![
+                ("expect", Json::Text(j.expect.to_string())),
+                ("at", Json::Text(j.expect.at.to_string())),
+                ("got", j.got.clone()),
+                ("pass", Json::Yes(j.held)),
             ])
         })
         .collect();
-    fields.push(("expect".into(), Value::List(expects)));
+    fields.push(("expect".into(), Json::List(expects)));
     let game_s = o.ticks.len() as f64 * f64::from(o.tick_ms) / 1000.0;
     let summary = Summary::of(&o.ticks, here.threads, game_s, 0, 0);
     fields.extend([
-        ("wall_s".into(), Value::Number(o.wall_s)),
-        ("speedup".into(), Value::Number(game_s / o.wall_s.max(1e-9))),
-        ("setup_s".into(), Value::Number(here.setup_s)),
-        ("threads".into(), Value::Count(here.threads as u64)),
+        ("wall_s".into(), Json::Number(o.wall_s)),
+        ("speedup".into(), Json::Number(game_s / o.wall_s.max(1e-9))),
+        ("setup_s".into(), Json::Number(here.setup_s)),
+        ("threads".into(), Json::Count(here.threads as u64)),
         (
             "tick_cpu_ms".into(),
-            Value::List(vec![
-                Value::Number(summary.cpu[0]),
-                Value::Number(summary.cpu[1]),
+            Json::List(vec![
+                Json::Number(summary.cpu[0]),
+                Json::Number(summary.cpu[1]),
             ]),
         ),
-        ("load".into(), Value::Text(server::load_average())),
+        ("load".into(), Json::Text(server::load_average())),
     ]);
-    Value::Object(fields)
+    Json::Object(fields)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::scenario::file::Text;
+    use crate::scenario::spec::{RESERVED_GROUP_NAMES, spec};
+
+    #[test]
+    fn a_group_may_take_no_name_the_top_of_the_verdict_has() {
+        let empty = spec(Text::default(), Path::new("empty.scenario")).expect("a spec");
+        let Json::Object(top) = measured(&empty, &Outcome::zeroed(&empty)) else {
+            panic!("the verdict is an object");
+        };
+        let keys: Vec<&str> = top.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, RESERVED_GROUP_NAMES);
+    }
 }

@@ -4,21 +4,18 @@ use protocol::{Appearance, ClientMessage, Hello, Pos, VERSION};
 use rayon::prelude::*;
 use server::{Config, InputOrder, Refusal, Spawn, Stepper, TickStats, Why};
 
-use super::client::{Brief, Client, Delivered, Seen, Tally, World};
+use super::client::{Accepted, Brief, Client, Delivered, Seen, Tally, World};
 use super::spec::{Group, Script, Spec};
 use crate::ground::Ground;
-use crate::lie::{Lie, same};
+use crate::lie::{Lie, same_bits};
 use crate::region;
-use crate::track::Line;
+use crate::track::Pace;
 
-/// A route runs this long past the run and past its fastest lie, so no bot runs off its end.
 const ROUTE_SLACK_MS: u32 = 10_000;
 
-/// One bot's claims as the server judged them, in the order it judged them.
 #[derive(Clone, Debug, Default)]
 pub struct Account {
-    /// The correction the server waits for the client to acknowledge.
-    seq: u32,
+    awaited_ack: u32,
     pub claims: u64,
     pub accepted: u64,
     pub stale: u64,
@@ -42,8 +39,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// An outcome with every number at zero, for checking what a verdict can be asked.
-    pub fn nothing(spec: &Spec) -> Self {
+    pub fn zeroed(spec: &Spec) -> Self {
         let groups: Vec<usize> = spec
             .groups
             .iter()
@@ -62,7 +58,7 @@ impl Outcome {
             ],
             groups,
             ticks: Vec::new(),
-            tick_ms: spec.server.tick_ms,
+            tick_ms: spec.tick_ms,
             wall_s: 0.0,
         }
     }
@@ -82,7 +78,6 @@ pub fn liar_of(spec: &Spec, groups: &[usize]) -> Vec<Option<usize>> {
         .collect()
 }
 
-/// Runs the scenario on `ground` with the server's tick on `threads` threads.
 pub fn run(
     spec: &Spec,
     ground: &Ground,
@@ -96,7 +91,10 @@ pub fn run(
     let cfg = Config {
         tick_threads: threads,
         spawns: briefs.iter().map(|b| b.spawn).collect(),
-        ..spec.server.clone()
+        rules: spec.rules,
+        view: spec.view,
+        tick_ms: spec.tick_ms,
+        ..Config::default()
     };
     let mut stepper = Stepper::new(&cfg, order).map_err(|e| format!("a server: {e}"))?;
     stepper.keep_refusals();
@@ -111,10 +109,13 @@ pub fn run(
         })
         .collect();
     let mut accounts = vec![Account::default(); clients.len()];
-    let mut accepted: Vec<Vec<(Pos, f32)>> = vec![Vec::new(); liars];
+    let mut accepted: Vec<Vec<Accepted>> = vec![Vec::new(); liars];
     for (c, liar) in clients.iter().zip(&liar_of) {
         if let Some(l) = liar {
-            accepted[*l].push((Pos::of(c.brief.spawn.pos), 0.0));
+            accepted[*l].push(Accepted {
+                pos: Pos::of(c.brief.spawn.pos),
+                off_body_yd: 0.0,
+            });
         }
     }
     let tick_ms = u32::from(cfg.tick_ms);
@@ -188,23 +189,21 @@ fn hello(group: &str, i: usize) -> Vec<u8> {
     frame
 }
 
-/// Books each delivered claim as the server judged it: refused when the server refused that
-/// claim of that bot, ignored when it does not acknowledge the latest correction, accepted
-/// otherwise. Every refusal must be one of the delivered claims.
 fn settle(
     accounts: &mut [Account],
     delivered: &[(u32, Delivered)],
     refusals: &[Refusal],
     now: u32,
     liar_of: &[Option<usize>],
-    accepted: &mut [Vec<(Pos, f32)>],
+    accepted: &mut [Vec<Accepted>],
 ) -> Result<(), String> {
+    debug_assert!(delivered.is_sorted_by_key(|(conn, _)| *conn));
     let mut why: Vec<Option<Why>> = vec![None; delivered.len()];
     for r in refusals {
         let from = delivered.partition_point(|(conn, _)| *conn < r.id);
         let hit = (from..delivered.len())
             .take_while(|&i| delivered[i].0 == r.id)
-            .find(|&i| why[i].is_none() && same(&r.claim, &delivered[i].1.claim.movement));
+            .find(|&i| why[i].is_none() && same_bits(&r.claim, &delivered[i].1.claim.movement));
         let Some(i) = hit else {
             return Err(format!(
                 "tick {}: the server refused a claim of bot {} no bot sent: {:?}",
@@ -216,27 +215,30 @@ fn settle(
     for ((conn, d), refused) in delivered.iter().zip(why) {
         let acc = &mut accounts[*conn as usize];
         acc.claims += 1;
-        let lied = d.sent.lied;
+        let lied = d.made_in.lied;
         if let Some(why) = refused {
-            acc.seq = acc.seq.wrapping_add(1);
+            acc.awaited_ack = acc.awaited_ack.wrapping_add(1);
             acc.refused[why as usize] += 1;
             if lied {
                 acc.lies_refused += 1;
                 acc.first_caught_ms.get_or_insert(now);
             }
-        } else if d.claim.ack != acc.seq {
+        } else if d.claim.ack != acc.awaited_ack {
             acc.stale += 1;
             acc.lies_stale += u64::from(lied);
         } else {
             acc.accepted += 1;
-            let off_yd = distance(d.claim.movement.pos, d.sent.truth.pos);
+            let off_body_yd = distance(d.claim.movement.pos, d.made_in.truth.pos);
             if lied {
                 acc.lies_accepted += 1;
                 acc.first_through_ms.get_or_insert(now);
-                acc.past_honest_yd = acc.past_honest_yd.max(off_yd);
+                acc.past_honest_yd = acc.past_honest_yd.max(off_body_yd);
             }
             if let Some(liar) = liar_of[*conn as usize] {
-                accepted[liar].push((Pos::of(d.claim.movement.pos), off_yd));
+                accepted[liar].push(Accepted {
+                    pos: Pos::of(d.claim.movement.pos),
+                    off_body_yd,
+                });
             }
         }
     }
@@ -247,8 +249,6 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-/// Every bot in the order it connects: each group's in turn, then each liar's honest twins,
-/// each twin where its liar is and on its liar's route.
 fn roster(spec: &Spec, ground: &Ground) -> Result<Vec<Brief>, String> {
     let sampled = spec
         .groups
@@ -301,12 +301,12 @@ fn placed(g: &Group, [x, y]: [f32; 2], ground: &Ground) -> Result<Spawn, String>
 
 fn brief(g: &Group, group: usize, spawn: Spawn, seed: u64, run_ms: u32) -> Brief {
     let stretch = g.lie.as_ref().map_or(1.0, Lie::reach);
-    let horizon_ms = g.clock_ms + (run_ms as f32 * stretch) as u32 + ROUTE_SLACK_MS;
+    let route_until_ms = g.clock_at_start_ms + (run_ms as f32 * stretch) as u32 + ROUTE_SLACK_MS;
     Brief {
         group,
         spawn,
         script: g.script,
-        line: Line {
+        pace: Pace {
             speed: g.speed,
             gait: g.gait,
             stop_yd: g.stop_yd,
@@ -314,10 +314,10 @@ fn brief(g: &Group, group: usize, spawn: Spawn, seed: u64, run_ms: u32) -> Brief
             surface: g.surface,
         },
         lies: g.lie.into_iter().collect(),
-        hz: g.hz,
-        every_frame: g.every_frame,
-        clock_ms: g.clock_ms,
+        frame_hz: g.frame_hz,
+        claims: g.claims,
+        clock_at_start_ms: g.clock_at_start_ms,
         seed,
-        horizon_ms,
+        route_until_ms,
     }
 }

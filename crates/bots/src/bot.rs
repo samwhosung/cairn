@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use crate::check::{Checks, Limits, RELAYED_EPSILON_YD, Traffic, UnsentJudged};
 use crate::ground::Ground;
 use crate::lie::Lie;
-use crate::mover::Mover;
+use crate::mover::{Claims, Mover};
 use crate::region::Place;
 use crate::track::{RUN, Track, Walk, crowd_liar_lies, plan};
 
@@ -131,8 +131,7 @@ impl Crowd {
         claims.iter().rev().find(|c| c.pos == pos).map(|c| c.time)
     }
 
-    /// The track of an honest bot that has been in for the join's grace and is still in.
-    fn settled(&self, id: u32, now: u32) -> Option<&Track> {
+    fn settled_honest(&self, id: u32, now: u32) -> Option<&Track> {
         let m = self.by_id.get(id as usize)?;
         let joined = m.joined_ms.load(Ordering::Relaxed);
         let gone = m.gone.load(Ordering::Relaxed);
@@ -183,8 +182,8 @@ pub async fn run(i: usize, addr: SocketAddr, crowd: Arc<Crowd>) {
         start_ms: now + 100,
         until_ms: crowd.walks_end_ms,
         seed: u64::from(welcome.id) + 1,
-        run: RUN,
-        liar,
+        run_speed: RUN,
+        long_runs: liar,
     };
     let track = plan(&crowd.place, &crowd.ground, &spawn, &walk);
     let lies = if liar {
@@ -272,7 +271,7 @@ async fn write(
     let Some(track) = crowd.track(id) else {
         return;
     };
-    let mut mover = Mover::new(spawn.pos, spawn.facing, lies, false);
+    let mut mover = Mover::new(spawn.pos, spawn.facing, lies, Claims::ByCadence);
     let mut ticker = tokio::time::interval(Duration::from_millis(FRAME_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
     let (mut claims, mut bytes) = (Vec::<Movement>::new(), Vec::new());
@@ -503,7 +502,7 @@ impl Reader {
         }
         let crowd = &self.crowd;
         if let (Some(before), Some(me), Some(them)) =
-            (before, crowd.track(self.me), crowd.settled(id, now))
+            (before, crowd.track(self.me), crowd.settled_honest(id, now))
         {
             let truth = them.xy(now);
             let t = crowd.limits.tier(dist(me.xy(now), truth));
@@ -535,7 +534,7 @@ impl Reader {
         let (checks, limits) = (&self.crowd.checks, &self.crowd.limits);
         let here = me.xy(now);
         for id in 0..self.crowd.by_id.len() as u32 {
-            let Some(them) = self.crowd.settled(id, now) else {
+            let Some(them) = self.crowd.settled_honest(id, now) else {
                 continue;
             };
             if id == self.me {

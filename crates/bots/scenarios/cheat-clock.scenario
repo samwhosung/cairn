@@ -1,9 +1,10 @@
-# Lies about the client's clock on a straight run: a clock and a body a quarter fast; a clock at
-# half speed; a clock set five seconds back; a clock that stands still for ten seconds while the
-# client claims every frame, then jumps. And time banked by standing: a client that stood silent
-# for thirty seconds, then claims a start two hundred yards away.
 place = flat
 seconds = 90
+rules.run = 7
+rules.tolerance = 0.1
+rules.slack = 0.5
+rules.clock_slack_ms = 1000
+rules.clock_budget_ms = 10000
 bots.walkers.count = 20
 
 bots.clock-fast.count = 1
@@ -37,8 +38,8 @@ bots.banked.lie.set = forward
 
 expect walkers.corrections == 0
 
-# Taken for the eleven seconds of lead the check allows, a second of slack and ten of budget,
-# which a clock a quarter fast spends in 44 seconds; then refused.
+# Taken while its clock leads by no more than `rules.clock_slack_ms` and `rules.clock_budget_ms`,
+# eleven seconds, which a clock a quarter fast spends in 44 seconds; then refused.
 expect clock-fast.through_after_s < 1
 expect clock-fast.caught_after_s > 40
 expect clock-fast.caught_after_s < 50
@@ -50,21 +51,18 @@ expect clock-slow.caught_after_s <= 1.1
 expect clock-slow.past_honest_yd < 1
 expect clock-slow.control_corrections == 0
 
-# Refused while its clock reads before its last claim taken, then for speed until the tolerance
-# has made up the five seconds; it gains nothing.
 expect clock-back.caught_after_s <= 0.1
 expect clock-back.past_honest_yd < 1
 expect clock-back.control_corrections == 0
 
 # A known hole: claims every frame with a clock that stands still each cover less than the slack,
-# so a stalled clock goes unseen. It gains nothing here. When it closes, lies_refused > 0.
+# so a stalled clock goes unseen.
 expect clock-stall.lies_refused == 0
 expect clock-stall.past_honest_yd < 1
 expect clock-stall.control_corrections == 0
 
 # A known hole: a claim may cover the ground of the faster of its flags and the last taken
-# claim's, for all the time since that claim, so standing silent banks a teleport. When it
-# closes, banked is refused.
+# claim's, for all the time since that claim, so standing silent banks a teleport.
 expect banked.lies_refused == 0
 expect banked.past_honest_yd > 199
 expect banked.control_corrections == 0

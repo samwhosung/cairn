@@ -1,9 +1,8 @@
-# Lies about speed, each told for ten seconds of a straight run on level ground with a crowd
-# walking about: three times a run at the client's own cadence, a claim every half second while
-# it runs; five times a run claimed every frame at 60 frames a second; twenty times a run claimed
-# every millisecond. The check grants half a yard of slack to every claim, however soon it comes.
 place = flat
 seconds = 30
+rules.run = 7
+rules.tolerance = 0.1
+rules.slack = 0.5
 bots.walkers.count = 20
 
 bots.speed-3x.count = 1
@@ -14,7 +13,7 @@ bots.speed-3x.lie.factor = 3
 
 bots.speed-5x-frames.count = 1
 bots.speed-5x-frames.script = line
-bots.speed-5x-frames.hz = 60
+bots.speed-5x-frames.frame_hz = 60
 bots.speed-5x-frames.claims = every-frame
 bots.speed-5x-frames.lie.from_s = 5
 bots.speed-5x-frames.lie.to_s = 15
@@ -22,7 +21,7 @@ bots.speed-5x-frames.lie.factor = 5
 
 bots.speed-flood.count = 1
 bots.speed-flood.script = line
-bots.speed-flood.hz = 1000
+bots.speed-flood.frame_hz = 1000
 bots.speed-flood.claims = every-frame
 bots.speed-flood.lie.from_s = 5
 bots.speed-flood.lie.to_s = 15
@@ -36,12 +35,10 @@ expect speed-3x.past_honest_yd < 1
 expect speed-3x.control_corrections == 0
 
 # A known hole: the slack comes with every claim, so claims every frame carry five times a run.
-# When it closes, the liar is refused: lies_refused > 0 and no ground past its body.
 expect speed-5x-frames.lies_refused == 0
 expect speed-5x-frames.past_honest_yd > 250
 expect speed-5x-frames.control_corrections == 0
 
-# The same hole claimed every millisecond: twenty times a run, never refused.
 expect speed-flood.lies_refused == 0
 expect speed-flood.past_honest_yd > 1000
 expect speed-flood.control_corrections == 0

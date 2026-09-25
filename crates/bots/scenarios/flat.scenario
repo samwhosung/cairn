@@ -1,3 +1,2 @@
-# Goldshire's crowd on level ground built in code, so it runs without the install.
 base = goldshire.scenario
 place = flat

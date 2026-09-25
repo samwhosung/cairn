@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// A line of a scenario file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct At {
     pub file: PathBuf,
@@ -15,7 +14,6 @@ impl fmt::Display for At {
     }
 }
 
-/// Why a scenario cannot run as written, and where its files say so.
 #[derive(Debug)]
 pub struct Bad {
     pub at: Option<At>,
@@ -101,7 +99,6 @@ impl Op {
     }
 }
 
-/// `expect PATH OP VALUE`: a number of the verdict, a relation, and a number or `none`.
 #[derive(Clone, Debug)]
 pub struct Expect {
     pub path: String,

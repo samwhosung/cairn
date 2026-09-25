@@ -32,10 +32,24 @@ usage: bots [--addr HOST:PORT | --in-process] [--scenario goldshire|elwynn] [--c
          check every position they are shown against where its bot really was.
          --in-process runs the server on this process's threads (--server-threads, 1,
          --unchecked to accept every claim) and prints its row too.
+       bots scenario FILE [--threads N] [--racy]
+         run the scenario in FILE headless, the server's tick and every bot in this
+         process on one simulated clock, as fast as it goes, and print one JSON verdict.
+         Exits 0 when every expectation holds, 1 when one fails, 2 on a bad file or
+         arguments, 3 when it cannot run here (its place needs the install). --threads
+         sets the tick's threads (all by default); --racy applies each entity's inputs
+         in the order worker threads hand them over, a control for determinism.
        bots spawns [--scenario S] [--count N] [--seed N]
          print N places to join at, one `x y z facing` per line, for the server.
        bots header
          print the header of the row's table.
+
+A scenario file is lines of `key = value` and `expect PATH OP VALUE`, `#` starting a comment:
+`base = FILE` lays the file over another; `place` (goldshire, elwynn or flat), `seconds`,
+`seed`, `tick_ms`, `client.delay_ms`, `client.jitter_ms`, `rules.*` and `view.*` set the world,
+and `bots.NAME.count` with the rest of `bots.NAME.*` a group of bots: its script, pace, spawn and
+lies. An expectation reads a number of the verdict: `NAME.FIELD` a group's, any other path the
+scenario's.
 
 The terrain is read from the install at $WOW_DATA (or --wow-data DIR).";
 
@@ -53,7 +67,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}\n\n{USAGE}\n{}", scenario::USAGE);
+            eprintln!("{e}\n\n{USAGE}");
             ExitCode::FAILURE
         }
     }
@@ -93,7 +107,7 @@ fn place(f: &Flags) -> Result<(Place, Ground), String> {
     Ok((place, ground))
 }
 
-/// The install's archives, at `data` or at `$WOW_DATA`.
+/// The install's archives, at `data` or else at `$WOW_DATA`; none when neither is set.
 fn install(data: Option<PathBuf>) -> Result<Option<mpq::Chain>, String> {
     let Some(data) = data.or_else(|| std::env::var_os("WOW_DATA").map(PathBuf::from)) else {
         return Ok(None);

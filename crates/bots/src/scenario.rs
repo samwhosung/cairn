@@ -10,22 +10,6 @@ use std::time::Instant;
 
 use server::InputOrder;
 
-pub const USAGE: &str = "\
-       bots scenario FILE [--threads N] [--racy] [--wow-data DIR]
-         run the scenario in FILE headless, the server's tick and every bot in this
-         process on one simulated clock, as fast as it goes, and print one JSON verdict.
-         Exits 0 when every expectation holds, 1 when one fails, 2 when the file is bad,
-         3 when it cannot run here (its place needs the install). --threads sets the
-         tick's threads (all by default); --racy applies each entity's inputs in the
-         order worker threads hand them over, a control for determinism.
-       A scenario file is lines of `key = value` and `expect PATH OP VALUE`, with `#` starting
-         a comment: `base = FILE` lays the file over another; `place` (goldshire, elwynn or
-         flat), `seconds`, `seed`, `tick_ms`, `client.delay_ms`, `client.jitter_ms`, `rules.*`
-         and `view.*` set the world, and `bots.NAME.count` with the rest of `bots.NAME.*` a
-         group of bots: its script, pace, spawn and lies. An expectation reads a number of the
-         verdict: `NAME.FIELD` a group's, any other path the scenario's.";
-
-/// Runs `bots scenario`'s arguments.
 pub fn main(args: &[String]) -> ExitCode {
     match scenario(args) {
         Ok(true) => ExitCode::SUCCESS,
@@ -48,8 +32,12 @@ enum Fault {
 
 fn scenario(args: &[String]) -> Result<bool, Fault> {
     let began = Instant::now();
-    let (path, how) =
-        arguments(args).map_err(|e| Fault::Here(format!("{e}\n\nusage:\n{USAGE}")))?;
+    let (path, how) = arguments(args).map_err(|what| {
+        Fault::File(file::Bad {
+            at: None,
+            what: format!("{what}\n\n{}", crate::USAGE),
+        })
+    })?;
     let text = file::read(&path).map_err(Fault::File)?;
     let spec = spec::spec(text, &path).map_err(Fault::File)?;
     verdict::check_paths(&spec).map_err(Fault::File)?;
@@ -64,13 +52,11 @@ fn scenario(args: &[String]) -> Result<bool, Fault> {
     let outcome = run::run(&spec, &ground, how.threads, how.order).map_err(Fault::Here)?;
     let measured = verdict::measured(&spec, &outcome);
     let judged = verdict::judge(&spec, &measured);
-    for (e, got, ok) in &judged {
-        if !*ok {
-            eprintln!("{}: expected {e}, got {got}", e.at);
-        }
+    for j in judged.iter().filter(|j| !j.held) {
+        eprintln!("{}: expected {}, got {}", j.expect.at, j.expect, j.got);
     }
-    let pass = judged.iter().all(|(_, _, ok)| *ok);
-    let here = verdict::Here {
+    let pass = judged.iter().all(|j| j.held);
+    let here = verdict::ThisMachine {
         threads: how.threads,
         setup_s,
     };

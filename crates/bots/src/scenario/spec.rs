@@ -1,22 +1,23 @@
 use std::path::Path;
 
 use protocol::flags;
-use server::{Config, Rules, View};
+use server::{Rules, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
 use crate::lie::{Clock, Lie, Malformed};
+use crate::mover::Claims;
 use crate::region::{self, Place, Region};
 use crate::track::{Gait, RUN, WALK};
 
-/// What a scenario file asks for, every key read and checked.
 #[derive(Clone, Debug)]
 pub struct Spec {
     pub name: String,
     pub place: Place,
     pub seconds: f32,
     pub seed: u64,
-    /// The server's tunables; its spawns come from the bots.
-    pub server: Config,
+    pub rules: Rules,
+    pub view: View,
+    pub tick_ms: u16,
     pub delay_ms: u32,
     pub jitter_ms: u32,
     pub groups: Vec<Group>,
@@ -25,14 +26,11 @@ pub struct Spec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Script {
-    /// Planned routes about the place: runs, walks, arcs, jumps, standing and looking about.
     Wander,
-    /// A straight run along the facing.
     Line,
     Stand,
 }
 
-/// Bots alike: how many, what they do, and how they lie.
 #[derive(Clone, Debug)]
 pub struct Group {
     pub name: String,
@@ -45,21 +43,16 @@ pub struct Group {
     pub stop_yd: Option<f32>,
     pub jump_every_s: Option<f32>,
     pub surface: bool,
-    /// Frames a second.
-    pub hz: f32,
-    pub every_frame: bool,
-    /// What the bot's clock reads when the server starts.
-    pub clock_ms: u32,
-    /// On the server's clock from its start.
+    pub frame_hz: f32,
+    pub claims: Claims,
+    pub clock_at_start_ms: u32,
     pub lie: Option<Lie>,
-    /// The liar group this one is the honest twin of.
     pub control_of: Option<usize>,
 }
 
-/// The top of a verdict, which an expectation reads when it names no bots.
-const VERDICT_FIELDS: [&str; 15] = [
+/// The top of the verdict an expectation can read, so no group may take one of these names.
+pub const RESERVED_GROUP_NAMES: [&str; 11] = [
     "scenario",
-    "pass",
     "ticks",
     "game_s",
     "players",
@@ -70,26 +63,26 @@ const VERDICT_FIELDS: [&str; 15] = [
     "decode_errors",
     "groups",
     "hash",
-    "expect",
-    "speedup",
-    "load",
 ];
 const DEFAULT_SECONDS: f32 = 60.0;
 const DEFAULT_DELAY_MS: u32 = 20;
 const DEFAULT_JITTER_MS: u32 = 10;
-const DEFAULT_HZ: f32 = 20.0;
-const MOST_HZ: f32 = 1000.0;
+const DEFAULT_FRAME_HZ: f32 = 20.0;
+const MOST_FRAME_HZ: f32 = 1000.0;
 
 pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
     let name = file
         .file_stem()
         .map_or("scenario".into(), |s| s.to_string_lossy().into_owned());
+    let server = server::Config::default();
     let mut spec = Spec {
         name,
         place: region::place("flat").ok_or_else(|| bad_place("flat"))?,
         seconds: DEFAULT_SECONDS,
         seed: 1,
-        server: Config::default(),
+        rules: server.rules,
+        view: server.view,
+        tick_ms: server.tick_ms,
         delay_ms: DEFAULT_DELAY_MS,
         jitter_ms: DEFAULT_JITTER_MS,
         groups: Vec::new(),
@@ -120,19 +113,27 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
         }
     }
     for d in drafts {
-        if !d.counted {
+        let Some(count) = d.count else {
             return Err(Bad::at(
                 &d.at,
                 format!("bots.{} has no count", d.group.name),
             ));
-        }
+        };
         let gait_speed = match d.group.gait {
             Gait::Run => RUN,
             Gait::Walk => WALK,
             Gait::Swim => Rules::default().swim,
         };
+        let clock = d.group.clock_at_start_ms;
+        let lie = d.group.lie.map(|l| Lie {
+            from_ms: l.from_ms + clock,
+            to_ms: l.to_ms.saturating_add(clock),
+            ..l
+        });
         spec.groups.push(Group {
+            count,
             speed: d.speed.unwrap_or(gait_speed),
+            lie,
             ..d.group
         });
     }
@@ -156,11 +157,10 @@ pub fn spec(text: Text, file: &Path) -> Result<Spec, Bad> {
     Ok(spec)
 }
 
-/// Bots as their keys come in: counted once a count comes, their speed their gait's unless given.
 struct Draft {
     group: Group,
     at: At,
-    counted: bool,
+    count: Option<usize>,
     speed: Option<f32>,
 }
 
@@ -181,14 +181,14 @@ fn set(spec: &mut Spec, s: &Setting) -> Result<(), String> {
         }
         "seconds" => spec.seconds = positive(v)?,
         "seed" => spec.seed = whole(v)?,
-        "tick_ms" => spec.server.tick_ms = whole(v)?,
+        "tick_ms" => spec.tick_ms = whole(v)?,
         "client.delay_ms" => spec.delay_ms = whole(v)?,
         "client.jitter_ms" => spec.jitter_ms = whole(v)?,
         key => {
             let knob = if let Some(k) = key.strip_prefix("rules.") {
-                rules_knob(&mut spec.server.rules, k)
+                rules_knob(&mut spec.rules, k)
             } else if let Some(k) = key.strip_prefix("view.") {
-                view_knob(&mut spec.server.view, k)
+                view_knob(&mut spec.view, k)
             } else {
                 None
             };
@@ -273,8 +273,8 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
             "`{name}` is not a name for bots: lower case, digits and -"
         ));
     }
-    if VERDICT_FIELDS.contains(&name) {
-        return Err(format!("`{name}` names a field of the verdict, not bots"));
+    if RESERVED_GROUP_NAMES.contains(&name) {
+        return Err(format!("`{name}` names a number of the verdict, not bots"));
     }
     let i = if let Some(i) = drafts.iter().position(|d| d.group.name == name) {
         i
@@ -282,7 +282,7 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
         drafts.push(Draft {
             group: group(name),
             at: s.at.clone(),
-            counted: false,
+            count: None,
             speed: None,
         });
         drafts.len() - 1
@@ -291,10 +291,7 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
     let g = &mut d.group;
     let v = s.value.as_str();
     match field {
-        "count" => {
-            g.count = whole(v)?;
-            d.counted = true;
-        }
+        "count" => d.count = Some(whole(v)?),
         "script" => {
             g.script = match v {
                 "wander" => Script::Wander,
@@ -317,29 +314,24 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
         "stop" => g.stop_yd = Some(positive(v)?),
         "jump_every_s" => g.jump_every_s = Some(positive(v)?),
         "surface" => g.surface = yes(v)?,
-        "hz" => {
-            g.hz = positive(v)?;
-            if g.hz > MOST_HZ {
-                return Err(format!("{v} frames a second is past {MOST_HZ}"));
+        "frame_hz" => {
+            g.frame_hz = positive(v)?;
+            if g.frame_hz > MOST_FRAME_HZ {
+                return Err(format!("{v} frames a second is past {MOST_FRAME_HZ}"));
             }
         }
         "claims" => {
-            g.every_frame = match v {
-                "send-law" => false,
-                "every-frame" => true,
-                _ => return Err(format!("no claims `{v}`: send-law or every-frame")),
+            g.claims = match v {
+                "cadence" => Claims::ByCadence,
+                "every-frame" => Claims::EveryFrame,
+                _ => return Err(format!("no claims `{v}`: cadence or every-frame")),
             };
         }
-        "clock_ms" => g.clock_ms = whole(v)?,
-        field => {
-            let known = match field.strip_prefix("lie.") {
-                Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), key, v)?,
-                None => false,
-            };
-            if !known {
-                return Err(unknown(&s.key));
-            }
-        }
+        "clock_at_start_ms" => g.clock_at_start_ms = whole(v)?,
+        field => match field.strip_prefix("lie.") {
+            Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), &s.key, key, v)?,
+            None => return Err(unknown(&s.key)),
+        },
     }
     Ok(())
 }
@@ -356,22 +348,21 @@ fn group(name: &str) -> Group {
         stop_yd: None,
         jump_every_s: None,
         surface: false,
-        hz: DEFAULT_HZ,
-        every_frame: false,
-        clock_ms: 0,
+        frame_hz: DEFAULT_FRAME_HZ,
+        claims: Claims::ByCadence,
+        clock_at_start_ms: 0,
         lie: None,
         control_of: None,
     }
 }
 
-/// Sets a lie's key; false when there is no such key.
-fn lie_key(l: &mut Lie, key: &str, v: &str) -> Result<bool, String> {
+fn lie_key(l: &mut Lie, full_key: &str, key: &str, v: &str) -> Result<(), String> {
     match key {
         "from_s" => l.from_ms = ms(v)?,
         "to_s" => l.to_ms = ms(v)?,
         "factor" => l.factor = Some(positive(v)?),
         "shift" => l.shift = xyz(v)?,
-        "once" => l.once = yes(v)?,
+        "shift_once" => l.shift_once = yes(v)?,
         "rise" => l.rise = number(v)?,
         "hover" => l.hover = yes(v)?,
         "through" => l.through = yes(v)?,
@@ -390,9 +381,9 @@ fn lie_key(l: &mut Lie, key: &str, v: &str) -> Result<bool, String> {
                 _ => return Err(format!("no malformed `{v}`: nan or bound")),
             });
         }
-        _ => return Ok(false),
+        _ => return Err(unknown(full_key)),
     }
-    Ok(true)
+    Ok(())
 }
 
 fn flag_names(v: &str) -> Result<u32, String> {
@@ -470,8 +461,7 @@ fn xyz(v: &str) -> Result<[f32; 3], String> {
 mod tests {
     use super::*;
 
-    /// The names of a struct's own fields, as its `Debug` shows them.
-    fn fields(debug: &str) -> Vec<String> {
+    fn debug_field_names(debug: &str) -> Vec<String> {
         let body =
             &debug[debug.find('{').expect("a struct") + 1..debug.rfind('}').expect("closed")];
         let mut depth = 0;
@@ -496,13 +486,13 @@ mod tests {
     #[test]
     fn every_tunable_of_the_movement_check_and_the_view_is_a_key() {
         let mut rules = Rules::default();
-        let names = fields(&format!("{rules:?}"));
+        let names = debug_field_names(&format!("{rules:?}"));
         assert!(names.len() >= 14, "{names:?}");
         for name in names {
             assert!(rules_knob(&mut rules, &name).is_some(), "rules.{name}");
         }
         let mut view = View::default();
-        for name in fields(&format!("{view:?}")) {
+        for name in debug_field_names(&format!("{view:?}")) {
             let knobs: Vec<String> = if name == "tiers" {
                 [
                     "near.within",
@@ -553,11 +543,13 @@ mod tests {
             ("bots.fast.lie.factor", "3"),
             ("bots.fast.gait", "walk"),
             ("bots.fast.lie.set", "walk fall"),
+            ("bots.fast.lie.from_s", "2"),
+            ("bots.fast.clock_at_start_ms", "60000"),
         ]);
         let s = spec(text, Path::new("x/fast.scenario")).expect("a spec");
         assert_eq!(s.name, "fast");
-        assert!((s.server.rules.run - 14.0).abs() < 1e-6);
-        assert_eq!(s.server.view.tiers[0].every, 2);
+        assert!((s.rules.run - 14.0).abs() < 1e-6);
+        assert_eq!(s.view.tiers[0].every, 2);
         assert!(
             matches!(s.place.region, Region::Disk { radius, .. } if (radius - 80.0).abs() < 1e-6)
         );
@@ -566,8 +558,10 @@ mod tests {
         let (fast, twin) = (&s.groups[1], &s.groups[2]);
         assert!(fast.gait == Gait::Walk && (fast.speed - WALK).abs() < 1e-6);
         assert_eq!(
-            fast.lie.map(|l| (l.factor.map(|f| f as u32), l.set_flags)),
-            Some((Some(3), flags::WALK_MODE | flags::FALLING))
+            fast.lie
+                .map(|l| (l.factor.map(|f| f as u32), l.set_flags, l.from_ms, l.to_ms)),
+            Some((Some(3), flags::WALK_MODE | flags::FALLING, 62_000, u32::MAX)),
+            "the lie on the bot's own clock"
         );
         assert_eq!((twin.lie, twin.control_of, twin.count), (None, Some(1), 1));
     }
@@ -592,8 +586,12 @@ mod tests {
             "t.scenario:1: bots.a has no count"
         );
         assert_eq!(
-            fault(&[("bots.a.count", "1"), ("bots.a.hz", "2000")]),
+            fault(&[("bots.a.count", "1"), ("bots.a.frame_hz", "2000")]),
             "t.scenario:2: 2000 frames a second is past 1000"
+        );
+        assert_eq!(
+            fault(&[("bots.claims.count", "1")]),
+            "t.scenario:1: `claims` names a number of the verdict, not bots"
         );
     }
 }

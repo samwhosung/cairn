@@ -98,8 +98,8 @@ impl Stepper {
         link
     }
 
-    /// Runs one tick on `inputs`, sorted by connection and then in the order each connection sent
-    /// them, and on the leave of any client the last tick gave up on.
+    /// Runs one tick on `inputs`, which must be sorted by connection and then in the order each
+    /// connection sent them, and on the leave of any client the last tick gave up on.
     pub fn tick(&mut self, inputs: &[Stamped]) -> TickStats {
         let batches = if self.batches {
             Batches::Send(&self.clients)

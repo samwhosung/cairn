@@ -1,7 +1,6 @@
 use protocol::{Movement, flags};
 
-/// Yards north of the map's centre a claim past every bound stands at.
-const PAST_THE_BOUND_YD: f32 = 100_000.0;
+const X_PAST_EVERY_BOUND: f32 = 100_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Malformed {
@@ -17,7 +16,7 @@ pub enum Clock {
     Rate(f32),
     /// Stands this many milliseconds behind the body's.
     Back(u32),
-    /// Stands still at the lie's start; after the lie, the claims carry the body's again.
+    /// Stands still at the lie's start.
     Stall,
 }
 
@@ -31,8 +30,7 @@ pub struct Lie {
     pub factor: Option<f32>,
     /// Added to every claimed position.
     pub shift: [f32; 3],
-    /// Only the lie's first claim is shifted.
-    pub once: bool,
+    pub shift_once: bool,
     /// Yards a second the claims climb since the lie began, with no jump.
     pub rise: f32,
     /// No claim is lower than the lie's first.
@@ -54,7 +52,7 @@ impl Default for Lie {
             to_ms: u32::MAX,
             factor: None,
             shift: [0.0; 3],
-            once: false,
+            shift_once: false,
             rise: 0.0,
             hover: false,
             through: false,
@@ -67,18 +65,16 @@ impl Default for Lie {
     }
 }
 
-/// What a lie has told so far.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Told {
     pub begun: bool,
-    /// A claim carrying the shift has gone out.
-    pub shifted: bool,
+    pub shift_sent: bool,
     pub first_z: f32,
 }
 
 /// Where a body's route takes it at a moment of its clock.
 pub trait Route {
-    /// The body's position at `t`, on the ground under it.
+    /// The body's position at `t`.
     fn at(&self, t: u32) -> [f32; 3];
     /// Where the body's last run would have taken it by `t` had it not stopped.
     fn through(&self, t: u32) -> [f32; 3];
@@ -102,16 +98,16 @@ impl Lie {
     pub fn tell(&self, told: &mut Told, t: u32, truth: &Movement, route: &impl Route) -> Movement {
         let mut m = *truth;
         let since = t - self.from_ms;
-        let above_ground = truth.pos[2] - route.at(t)[2];
+        let above_footing = truth.pos[2] - route.at(t)[2];
         let moved = match (self.through, self.factor) {
             (true, _) => Some(route.through(t)),
             (false, Some(f)) => Some(route.at(self.from_ms + (f * since as f32) as u32)),
             (false, None) => None,
         };
         if let Some(at) = moved {
-            m.pos = [at[0], at[1], at[2] + above_ground];
+            m.pos = [at[0], at[1], at[2] + above_footing];
         }
-        if !self.once || !told.shifted {
+        if !self.shift_once || !told.shift_sent {
             for (p, d) in m.pos.iter_mut().zip(self.shift) {
                 *p += d;
             }
@@ -136,7 +132,7 @@ impl Lie {
         m.jump.xy_speed *= self.launch;
         match self.malformed {
             Some(Malformed::NotANumber) => m.pos[0] = f32::NAN,
-            Some(Malformed::PastTheBound) => m.pos[0] = PAST_THE_BOUND_YD,
+            Some(Malformed::PastTheBound) => m.pos[0] = X_PAST_EVERY_BOUND,
             None => {}
         }
         told.begun = true;
@@ -144,8 +140,7 @@ impl Lie {
     }
 }
 
-/// Whether two movements are the same to the bit, as a claim and its copy off the wire are.
-pub fn same(a: &Movement, b: &Movement) -> bool {
+pub fn same_bits(a: &Movement, b: &Movement) -> bool {
     let bits = |m: &Movement| {
         let j = m.jump;
         [
@@ -215,7 +210,7 @@ mod tests {
         let times = [1000, 1500, 9000];
         let claims = tell(&from_one_second(Lie::default()), &times);
         for (t, m) in times.into_iter().zip(claims) {
-            assert!(same(&m, &truth(t)), "{t}: {m:?}");
+            assert!(same_bits(&m, &truth(t)), "{t}: {m:?}");
         }
     }
 
@@ -228,15 +223,15 @@ mod tests {
         assert!(at(tell(&fast, &[2000])[0].pos, Downhill.at(4000)));
         let jump = Lie {
             shift: [300.0, 0.0, 0.0],
-            once: true,
+            shift_once: true,
             ..Lie::default()
         };
         let mut told = Told::default();
         let first = jump.tell(&mut told, 500, &truth(500), &Downhill);
-        told.shifted = true;
+        told.shift_sent = true;
         let second = jump.tell(&mut told, 550, &truth(550), &Downhill);
         assert!(at(first.pos, [305.0, 0.0, -0.5]));
-        assert!(same(&second, &truth(550)));
+        assert!(same_bits(&second, &truth(550)));
     }
 
     #[test]
@@ -286,6 +281,6 @@ mod tests {
         };
         let m = tell(&odd, &[100])[0];
         assert_eq!(m.flags, flags::WALK_MODE | flags::FALLING);
-        assert!(m.pos[0].is_nan() && same(&m, &m));
+        assert!(m.pos[0].is_nan() && same_bits(&m, &m));
     }
 }
