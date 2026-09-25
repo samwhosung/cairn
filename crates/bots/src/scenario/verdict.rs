@@ -201,6 +201,9 @@ fn played(g: &Played) -> Json {
         ("first_saved_mismatch", first(&g.first_saved_mismatch)),
         ("shown_mismatches", Json::Count(g.shown_mismatches)),
         ("first_shown_mismatch", first(&g.first_shown_mismatch)),
+        ("plays_told", Json::Count(g.plays_told)),
+        ("poses_told", Json::Count(g.poses_told)),
+        ("plays_out_of_view", Json::Count(g.plays_out_of_view)),
     ])
 }
 

@@ -170,7 +170,7 @@ pub fn run(
         }
     }
     if let Some(p) = &mut played {
-        p.finish(&stepper);
+        p.finish(&stepper, &clients);
     }
     let wall_s = began.elapsed().as_secs_f64();
     for c in &clients {
@@ -353,6 +353,6 @@ fn brief(g: &Group, group: usize, spawn: Spawn, seed: u64, run_ms: u32) -> Brief
         route_until_ms,
         swing_action: g.swing_action,
         heeds_roots: g.heeds_roots,
-        drop_shown: g.drop_shown,
+        drops: g.drops,
     }
 }

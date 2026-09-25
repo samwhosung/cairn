@@ -1,0 +1,6 @@
+# Each bot sees only 30 yards about it, so most of the fighting is out of its view: it is shown
+# every swing, wound, death and pose of the bodies in its view and its own, and none of the rest.
+base = melee.scenario
+view.radius = 30
+
+expect game.plays_out_of_view > 0

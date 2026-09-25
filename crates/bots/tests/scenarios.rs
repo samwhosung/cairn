@@ -224,6 +224,26 @@ fn a_bot_that_drops_one_state_it_was_sent_is_caught() {
 }
 
 #[test]
+fn a_bot_that_drops_one_animation_or_pose_it_was_shown_is_caught() {
+    let quick = "seconds = 8\nknobs.damage_min = 60\nknobs.damage_max = 60\n";
+    let whole = machine_independent(&run(&melee_on("melee-shows.scenario", quick), &[]));
+    assert!(whole.contains("\"shown_mismatches\":0"), "{whole}");
+    for drop in ["drop_played", "drop_held"] {
+        let dropping = melee_on(
+            &format!("melee-{drop}.scenario"),
+            &format!("{quick}bots.fighters.{drop} = 1\n"),
+        );
+        let out = run(&dropping, &[]);
+        assert_eq!(out.status.code(), Some(1), "{drop}: {}", said(&out));
+        assert!(
+            said(&out).contains("expected game.shown_mismatches == 0"),
+            "{drop}: {}",
+            said(&out)
+        );
+    }
+}
+
+#[test]
 fn an_unknown_knob_is_refused_at_its_line() {
     let file = melee_on("melee-knob.scenario", "knobs.speed = 3\n");
     let out = run(&file, &[]);

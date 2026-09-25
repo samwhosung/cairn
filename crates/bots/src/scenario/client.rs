@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::num::NonZeroU64;
 
 use protocol::{
     Claim, ClientMessage, LEN_BYTES, Movement, Pos, Record, ServerMessage, Welcome, Wrapped,
@@ -7,7 +6,7 @@ use protocol::{
 use server::{Input, Link, Spawn, Stamped};
 
 use super::fight::{Aim, Fighter, Sight};
-use super::shown::Shown;
+use super::shown::{Drops, Shown};
 use super::spec::Script;
 use crate::ground::Ground;
 use crate::lie::Lie;
@@ -32,7 +31,7 @@ pub struct Brief {
     pub route_until_ms: u32,
     pub swing_action: u32,
     pub heeds_roots: bool,
-    pub drop_shown: Option<NonZeroU64>,
+    pub drops: Drops,
 }
 
 pub struct Outgoing {
@@ -187,7 +186,7 @@ impl Client {
         let here = brief.spawn.pos;
         let watches = liars > 0 && brief.lies.is_empty();
         let sight = (brief.script == Script::Fight).then(Sight::default);
-        let shown = Shown::dropping(brief.drop_shown);
+        let shown = Shown::dropping(brief.drops);
         let (delay_ms, jitter_ms) = lag;
         Self {
             conn,

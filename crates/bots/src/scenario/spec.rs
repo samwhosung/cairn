@@ -1,4 +1,3 @@
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use game::{KnobsFile, Line, Loaded};
@@ -6,6 +5,7 @@ use protocol::flags;
 use server::{Limits, View};
 
 use super::file::{At, Bad, Expect, Setting, Text};
+use super::shown::Drops;
 use crate::lie::{Clock, Lie, Malformed};
 use crate::mover::Claims;
 use crate::region::{self, Place, Region};
@@ -54,7 +54,7 @@ pub struct Group {
     pub control_of: Option<usize>,
     pub swing_action: u32,
     pub heeds_roots: bool,
-    pub drop_shown: Option<NonZeroU64>,
+    pub drops: Drops,
 }
 
 /// The top of the verdict an expectation can read, so no group may take one of these names.
@@ -407,7 +407,9 @@ fn group_key(drafts: &mut Vec<Draft>, rest: &str, s: &Setting) -> Result<(), Str
         "clock_at_start_ms" => g.clock_at_start_ms = whole(v)?,
         "swing_action" => g.swing_action = whole(v)?,
         "heeds_roots" => g.heeds_roots = yes(v)?,
-        "drop_shown" => g.drop_shown = Some(whole(v)?),
+        "drop_shown" => g.drops.state = Some(whole(v)?),
+        "drop_played" => g.drops.played = Some(whole(v)?),
+        "drop_held" => g.drops.held = Some(whole(v)?),
         field => match field.strip_prefix("lie.") {
             Some(key) => lie_key(g.lie.get_or_insert_with(Lie::default), &s.key, key, v)?,
             None => return Err(unknown(&s.key)),
@@ -435,7 +437,7 @@ fn group(name: &str) -> Group {
         control_of: None,
         swing_action: 1,
         heeds_roots: true,
-        drop_shown: None,
+        drops: Drops::default(),
     }
 }
 
