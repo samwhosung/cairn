@@ -26,8 +26,8 @@ at run time.
 ## The loop
 
 - `cargo xtask setup` once per clone, then `cargo xtask check` before every commit. It runs
-  every gate; `--fast` runs the quick ones. It needs taplo, typos, cargo-deny and cargo-machete,
-  and says how to install any that is missing.
+  every gate; `--fast` runs the quick ones. It needs taplo, typos, cargo-deny, cargo-machete and
+  cargo-nextest, and says how to install any that is missing.
 - Set `WOW_DATA` to the install's `Data` directory. Without it the tests that read the install
   skip, and a green check says nothing about them.
 - A change to the client: `cargo xtask pictures <dir>` runs the tests that start the app on the

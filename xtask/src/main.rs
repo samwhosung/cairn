@@ -88,8 +88,8 @@ fn check(root: &Path, fast: bool) -> Result<()> {
         step("test", &|| {
             run(
                 root,
-                "cargo",
-                &["test", "--workspace", "--all-targets", "--locked"],
+                "cargo-nextest",
+                &["nextest", "run", "--workspace", "--all-targets", "--locked"],
             )
         });
         step("deny", &|| run(root, "cargo-deny", &["check"]));
@@ -130,6 +130,7 @@ fn install_hint(tool: &str) -> &'static str {
         "typos" => "brew install typos-cli, or cargo install typos-cli --locked",
         "cargo-deny" => "brew install cargo-deny, or cargo install cargo-deny --locked",
         "cargo-machete" => "cargo install cargo-machete --locked",
+        "cargo-nextest" => "brew install cargo-nextest, or cargo install cargo-nextest --locked",
         _ => "see the tool's documentation",
     }
 }
