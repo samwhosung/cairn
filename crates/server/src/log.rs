@@ -138,7 +138,7 @@ impl LogReader {
                 JOIN | CLAIM => match ClientMessage::read(&self.frame()?) {
                     Ok(ClientMessage::Hello(h)) => Input::Join(h),
                     Ok(ClientMessage::Claim(c)) => Input::Claim(c),
-                    Ok(ClientMessage::Seen(_)) | Err(_) => {
+                    Ok(ClientMessage::Seen(_) | ClientMessage::Teleport(_)) | Err(_) => {
                         return Err(bad("a logged message is not a hello or a claim"));
                     }
                 },

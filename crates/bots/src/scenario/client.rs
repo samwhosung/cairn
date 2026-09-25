@@ -225,7 +225,7 @@ impl Client {
                     }
                     Input::Claim(claim)
                 }
-                Err(_) => {
+                Ok(ClientMessage::Teleport(_)) | Err(_) => {
                     self.tally.decode_errors += 1;
                     continue;
                 }

@@ -222,11 +222,11 @@ fn receive(
                 };
                 for record in batch {
                     match record {
-                        Ok(Record::Correct { seq, movement }) => {
+                        Ok(Record::Correct { seq, why, movement }) => {
                             if let Some(claims) = &mut net.claims {
                                 claims.correct(&mut player, seq, &movement);
                                 warn!(
-                                    "the server put the player back at {:?}, {} times now",
+                                    "the server put the player back at {:?}, {} times now: {why}",
                                     movement.pos, claims.corrections
                                 );
                             }

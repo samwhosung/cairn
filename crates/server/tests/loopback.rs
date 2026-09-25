@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use protocol::{
     Appearance, Claim, ClientMessage, Frames, Hello, Movement, Pos, Record, ServerMessage, VERSION,
-    flags,
+    Why, flags,
 };
 use server::{Config, InputOrder, Replay, Replicate, Spawn, Summary, View, Window};
 
@@ -14,7 +14,7 @@ enum Got {
     Appear(u32),
     Vanish(u32),
     Move(u32, [f32; 3]),
-    Correct(u32),
+    Correct(u32, Why),
 }
 
 struct Client {
@@ -110,8 +110,8 @@ impl Client {
                     got.push(Got::Vanish(self.slots.remove(&slot).expect("held")));
                     continue;
                 }
-                Record::Correct { seq, .. } => {
-                    got.push(Got::Correct(seq));
+                Record::Correct { seq, why, .. } => {
+                    got.push(Got::Correct(seq, why));
                     continue;
                 }
                 Record::Turn { .. } => continue,
@@ -176,8 +176,8 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
     assert!(seen.contains(&relayed([10.0, 0.0, 0.0])), "{seen:?}");
 
     b.claim(0, 1500, [90.0, 0.0, 0.0]);
-    let own = b.records_until(40, |g| matches!(g, Got::Correct(_)));
-    assert!(own.contains(&Got::Correct(1)), "{own:?}");
+    let own = b.records_until(40, |g| matches!(g, Got::Correct(..)));
+    assert!(own.contains(&Got::Correct(1, Why::Speed)), "{own:?}");
     b.claim(1, 1600, [10.5, 0.0, 0.0]);
     let seen = a.records_until(40, |g| matches!(g, Got::Move(id, _) if *id == b.id));
     assert!(seen.contains(&relayed([10.5, 0.0, 0.0])), "{seen:?}");
@@ -194,7 +194,7 @@ fn two_clients_over_loopback_see_each_other_move_but_never_a_refused_claim() {
     let summary = running.stop().expect("a clean stop");
     assert_eq!(
         summary.refused,
-        [0, 0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0],
         "one refusal, for speed"
     );
 }

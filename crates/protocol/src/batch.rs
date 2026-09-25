@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::frame::{Kind, begin_frame};
 use crate::message::read_name;
 use crate::reader::Reader;
@@ -43,9 +45,65 @@ pub enum Record<'a> {
     Turn { slot: u16, facing: Angle },
     /// The entity in `slot` changed how it moves.
     State { slot: u16, state: State },
-    /// The server refused this client's claim: its mover stands here, and its claims count again
-    /// once they acknowledge `seq`.
-    Correct { seq: u32, movement: Movement },
+    /// The server refused this client's claim or teleport, for `why`: its mover stands here, and
+    /// its claims count again once they acknowledge `seq`.
+    Correct {
+        seq: u32,
+        why: Why,
+        movement: Movement,
+    },
+}
+
+/// Why the server refused a claim or a teleport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Why {
+    Malformed,
+    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
+    /// slack and the budget left allow.
+    Clock,
+    /// Further over the ground than the speed allows.
+    Speed,
+    Climb,
+    Fall,
+    /// A jump launched faster than a run.
+    Launch,
+    /// A teleport from a player the server does not let teleport.
+    Teleport,
+}
+
+impl Why {
+    pub const ALL: [Self; 7] = [
+        Self::Malformed,
+        Self::Clock,
+        Self::Speed,
+        Self::Climb,
+        Self::Fall,
+        Self::Launch,
+        Self::Teleport,
+    ];
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+        let byte = r.u8()?;
+        Self::ALL
+            .get(usize::from(byte))
+            .copied()
+            .ok_or(Error::UnknownWhy(byte))
+    }
+}
+
+impl fmt::Display for Why {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Malformed => "its movement did not parse as one",
+            Self::Clock => "its clock ran backwards or too far ahead",
+            Self::Speed => "it went further than its speed allows",
+            Self::Climb => "it rose higher than it can climb",
+            Self::Fall => "it fell faster than anything falls",
+            Self::Launch => "it jumped faster than it can run",
+            Self::Teleport => "this server lets only its host teleport",
+        })
+    }
 }
 
 /// One tick's news for one client: its records, read one by one as the batch is iterated. The
@@ -92,6 +150,7 @@ impl<'a> Batch<'a> {
                 VANISH => Record::Vanish { slot },
                 CORRECT => Record::Correct {
                     seq: r.u32()?,
+                    why: Why::read(r)?,
                     movement: Movement::read(r)?,
                 },
                 other => return Err(Error::UnknownRecord(other)),
@@ -163,10 +222,11 @@ pub fn write_state(out: &mut Vec<u8>, slot: u16, relay: &Relay) -> usize {
     relay.stated.bytes().len()
 }
 
-pub fn write_correct(out: &mut Vec<u8>, seq: u32, movement: &Movement) {
+pub fn write_correct(out: &mut Vec<u8>, seq: u32, why: Why, movement: &Movement) {
     head(out, OTHER, 0);
     out.push(CORRECT);
     out.extend_from_slice(&seq.to_le_bytes());
+    out.push(why as u8);
     movement.write(out);
 }
 
@@ -215,7 +275,7 @@ mod tests {
         let mut out = Vec::new();
         let start = begin_batch(&mut out, 77);
         let mut ends = vec![out.len()];
-        write_correct(&mut out, 3, &Movement::default());
+        write_correct(&mut out, 3, Why::Teleport, &Movement::default());
         ends.push(out.len());
         write_appear(
             &mut out,
@@ -235,7 +295,7 @@ mod tests {
         finish_frame(&mut out, start);
         let sizes: Vec<usize> = ends.windows(2).map(|w| w[1] - w[0]).collect();
         assert_eq!(ends[0], 9, "the batch's own header");
-        assert_eq!(sizes, [35, 2 + 1 + 4 + 15 + 47 + 31, 9, 3, 13, 3]);
+        assert_eq!(sizes, [36, 2 + 1 + 4 + 15 + 47 + 31, 9, 3, 13, 3]);
 
         let mut frames = Frames::default();
         frames.extend(&out);
@@ -249,6 +309,7 @@ mod tests {
             [
                 Record::Correct {
                     seq: 3,
+                    why: Why::Teleport,
                     movement: Movement::default()
                 },
                 Record::Appear {
@@ -290,6 +351,32 @@ mod tests {
                 Err(Error::UnknownRecord(99))
             ]
         );
+    }
+
+    #[test]
+    fn every_reason_for_a_correction_round_trips_and_no_other_is_read() {
+        let mut bytes = Vec::new();
+        let start = begin_batch(&mut bytes, 1);
+        for (seq, why) in (0..).zip(Why::ALL) {
+            write_correct(&mut bytes, seq, why, &Movement::default());
+        }
+        let unknown = bytes.len() + 7;
+        write_correct(&mut bytes, 9, Why::Malformed, &Movement::default());
+        bytes[unknown] = Why::ALL.len() as u8;
+        finish_frame(&mut bytes, start);
+        let (_, got) = records_of(&bytes);
+        let whys: Vec<Result<Why, Error>> = got
+            .into_iter()
+            .map(|r| {
+                r.map(|r| match r {
+                    Record::Correct { why, .. } => why,
+                    other => panic!("{other:?}"),
+                })
+            })
+            .collect();
+        let mut want: Vec<Result<Why, Error>> = Why::ALL.into_iter().map(Ok).collect();
+        want.push(Err(Error::UnknownWhy(Why::ALL.len() as u8)));
+        assert_eq!(whys, want);
     }
 
     #[test]

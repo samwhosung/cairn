@@ -21,6 +21,22 @@ pub struct Claim {
     pub movement: Movement,
 }
 
+impl Claim {
+    fn write(&self, out: &mut Vec<u8>, kind: Kind) {
+        let start = begin_frame(out, kind);
+        out.extend_from_slice(&self.ack.to_le_bytes());
+        self.movement.write(out);
+        finish_frame(out, start);
+    }
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+        Ok(Self {
+            ack: r.u32()?,
+            movement: Movement::read(r)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClientMessage {
     Hello(Hello),
@@ -28,6 +44,8 @@ pub enum ClientMessage {
     /// The latest tick whose batch the client has taken in, so the server can tell how far
     /// behind it is wherever the bytes between them wait.
     Seen(u32),
+    /// Where the client asks its mover to be put: somewhere its movement did not take it.
+    Teleport(Claim),
 }
 
 impl ClientMessage {
@@ -41,12 +59,8 @@ impl ClientMessage {
                 h.appearance.write(out);
                 finish_frame(out, start);
             }
-            Self::Claim(c) => {
-                let start = begin_frame(out, Kind::Claim);
-                out.extend_from_slice(&c.ack.to_le_bytes());
-                c.movement.write(out);
-                finish_frame(out, start);
-            }
+            Self::Claim(c) => c.write(out, Kind::Claim),
+            Self::Teleport(c) => c.write(out, Kind::Teleport),
             Self::Seen(tick) => {
                 let start = begin_frame(out, Kind::Seen);
                 out.extend_from_slice(&tick.to_le_bytes());
@@ -64,10 +78,8 @@ impl ClientMessage {
                 name: read_name(&mut r)?.to_owned(),
                 appearance: Appearance::read(&mut r)?,
             }),
-            Kind::Claim => Self::Claim(Claim {
-                ack: r.u32()?,
-                movement: Movement::read(&mut r)?,
-            }),
+            Kind::Claim => Self::Claim(Claim::read(&mut r)?),
+            Kind::Teleport => Self::Teleport(Claim::read(&mut r)?),
             Kind::Seen => Self::Seen(r.u32()?),
             other => return Err(Error::Unexpected(other as u8)),
         };
@@ -173,7 +185,7 @@ mod tests {
                 ..Appearance::default()
             },
         });
-        let claim = ClientMessage::Claim(Claim {
+        let claim = Claim {
             ack: 7,
             movement: Movement {
                 time: 1000,
@@ -182,8 +194,13 @@ mod tests {
                 facing: 0.5,
                 ..Movement::default()
             },
-        });
-        for msg in [hello, claim, ClientMessage::Seen(77)] {
+        };
+        for msg in [
+            hello,
+            ClientMessage::Claim(claim),
+            ClientMessage::Seen(77),
+            ClientMessage::Teleport(claim),
+        ] {
             let mut out = Vec::new();
             msg.write(&mut out);
             assert_eq!(ClientMessage::read(&one_frame(&out)), Ok(msg));

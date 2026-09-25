@@ -88,7 +88,7 @@ impl Liar {
                 }
                 ServerMessage::Batch(batch) => {
                     for record in batch {
-                        if let Ok(Record::Correct { seq, movement }) = record {
+                        if let Ok(Record::Correct { seq, movement, .. }) = record {
                             self.ack = seq;
                             (self.anchor_pos, self.anchor_ms) = (movement.pos, now);
                             self.corrections += 1;

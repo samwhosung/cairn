@@ -11,6 +11,8 @@ pub enum Error {
     FrameLength(usize),
     UnknownKind(u8),
     UnknownRecord(u8),
+    /// A correction's reason past [`crate::Why::ALL`].
+    UnknownWhy(u8),
     /// A name that is not UTF-8.
     Name,
     /// A kind the reading side never receives, such as a batch sent to the server.
@@ -25,6 +27,7 @@ impl fmt::Display for Error {
             Self::FrameLength(n) => write!(f, "a frame of {n} bytes"),
             Self::UnknownKind(k) => write!(f, "unknown message kind {k}"),
             Self::UnknownRecord(k) => write!(f, "unknown batch record {k}"),
+            Self::UnknownWhy(k) => write!(f, "unknown reason {k} for a correction"),
             Self::Name => f.write_str("a name that is not UTF-8"),
             Self::Unexpected(k) => write!(f, "message kind {k} is not for this side"),
         }

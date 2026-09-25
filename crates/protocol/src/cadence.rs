@@ -23,15 +23,16 @@ pub struct Cadence {
 }
 
 impl Cadence {
-    /// A client standing still where the server placed it.
-    pub fn new(spawn: &Movement) -> Self {
+    /// A client the server last knew at `m`: where it placed the client, or where the client
+    /// teleported.
+    pub fn new(m: &Movement) -> Self {
         Self {
-            flags: 0,
-            facing: spawn.facing,
-            fall_time: 0,
-            jump: Jump::default(),
-            sent_at: spawn.time,
-            sent_pos: spawn.pos,
+            flags: m.flags,
+            facing: m.facing,
+            fall_time: m.fall_time,
+            jump: m.jump,
+            sent_at: m.time,
+            sent_pos: m.pos,
             report: false,
         }
     }

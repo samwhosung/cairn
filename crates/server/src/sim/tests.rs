@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use libm::{cosf, sinf};
-use protocol::{Appearance, Claim, Hello, Movement, Record, ServerMessage, flags};
+use protocol::{Appearance, Claim, Hello, Movement, Record, ServerMessage, Why, flags};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::*;
@@ -116,7 +116,7 @@ enum Got {
     Appear(u32),
     Vanish(u32),
     Move(u32),
-    Correct(u32),
+    Correct(u32, Why),
 }
 
 struct Client {
@@ -153,7 +153,7 @@ impl Client {
                 Record::Move { slot, .. }
                 | Record::Turn { slot, .. }
                 | Record::State { slot, .. } => Got::Move(self.slots[&slot]),
-                Record::Correct { seq, .. } => Got::Correct(seq),
+                Record::Correct { seq, why, .. } => Got::Correct(seq, why),
             });
         }
         got
@@ -219,7 +219,11 @@ fn an_observer_sees_the_near_at_once_the_far_slowly_and_never_a_refused_claim() 
         assert!(!records.contains(&Got::Appear(2)));
         far_moves += moves_of(&records, 3);
         let own = rx[2].next_batch(t);
-        assert_eq!(own.contains(&Got::Correct(1)), t == 3, "tick {t}");
+        assert_eq!(
+            own.contains(&Got::Correct(1, Why::Speed)),
+            t == 3,
+            "tick {t}"
+        );
     }
     assert_eq!(
         far_moves, 3,

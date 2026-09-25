@@ -15,6 +15,7 @@ pub enum Kind {
     Welcome = 3,
     Batch = 4,
     Seen = 5,
+    Teleport = 6,
 }
 
 impl Kind {
@@ -25,6 +26,7 @@ impl Kind {
             3 => Ok(Self::Welcome),
             4 => Ok(Self::Batch),
             5 => Ok(Self::Seen),
+            6 => Ok(Self::Teleport),
             k => Err(Error::UnknownKind(k)),
         }
     }

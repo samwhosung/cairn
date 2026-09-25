@@ -49,6 +49,8 @@ pub struct Body {
     pub clock_spent_ms: u32,
     pub correction_seq: u32,
     pub corrected_at: Option<u32>,
+    /// Why the latest refused claim or teleport was refused.
+    pub refused_for: Option<Why>,
     pub moved_at: u32,
     pub flags_changed_at: u32,
     pub refused: u32,
@@ -345,6 +347,7 @@ impl Judge<'_> {
                 }
                 body.correction_seq = body.correction_seq.wrapping_add(1);
                 body.corrected_at = Some(tick);
+                body.refused_for = Some(why);
                 body.refused += 1;
                 done.refused[why as usize] += 1;
             }

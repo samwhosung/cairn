@@ -1,3 +1,4 @@
+pub use protocol::Why;
 use protocol::{Claim, Movement, flags};
 
 use crate::world::Body;
@@ -57,31 +58,6 @@ pub enum Verdict {
     Accept,
     Stale,
     Refuse(Why),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Why {
-    Malformed,
-    /// Earlier than the last accepted movement, or further ahead of the pinned clock than the
-    /// slack and the budget left allow.
-    Clock,
-    /// Further over the ground than the speed allows.
-    Speed,
-    Climb,
-    Fall,
-    /// A jump launched faster than a run.
-    Launch,
-}
-
-impl Why {
-    pub const ALL: [Self; 6] = [
-        Self::Malformed,
-        Self::Clock,
-        Self::Speed,
-        Self::Climb,
-        Self::Fall,
-        Self::Launch,
-    ];
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
