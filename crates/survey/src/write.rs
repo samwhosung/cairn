@@ -169,7 +169,6 @@ struct Page {
     entries: Vec<Entry>,
 }
 
-/// A cell of a page, and its line in the page's list.
 struct Entry {
     line: String,
     cell: Cell,

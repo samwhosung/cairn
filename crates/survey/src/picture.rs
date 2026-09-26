@@ -6,8 +6,8 @@ use mpq::Chain;
 
 use crate::pages::CELL;
 
-/// Writes `path` through `write`, which is handed a file beside it; the file takes its name only
-/// once it is whole, so a run stopped halfway leaves no half-written file behind.
+/// Writes `path` through `write`, which is handed a file beside it that takes `path`'s name only
+/// once it is whole: `path` is never half-written.
 pub fn write_atomically(
     path: &Path,
     write: impl FnOnce(&Path) -> Result<(), String>,

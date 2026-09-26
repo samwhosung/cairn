@@ -10,7 +10,7 @@ pub(crate) const COLUMNS: u32 = 5;
 pub(crate) const ROWS: u32 = 4;
 pub(crate) const PER_PAGE: usize = (COLUMNS * ROWS) as usize;
 pub(crate) const CELL: u32 = 240;
-/// A model's picture is this many pixels square: two cells of a page, which averages it down.
+/// A model's picture is this many pixels square.
 pub const PICTURE_SIDE: u32 = 2 * CELL;
 const LABEL: u32 = 26;
 const GUTTER: u32 = 6;

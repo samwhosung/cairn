@@ -22,7 +22,9 @@ pub use picture::{save_averaged, write_atomically};
 pub use text::ZoneSound;
 pub use write::{Lookups, Written, pictures_missing, write, write_pages};
 
-/// Everything the maps paint and place, each list sorted by key. Every list inside is most first.
+/// Everything the maps paint and place: the zones by map and area, the grounds and models by key,
+/// and every list inside those most first, but for a model's examples, its first placements by map
+/// and id.
 pub struct Survey {
     pub zones: Vec<Zone>,
     pub grounds: Vec<Ground>,
@@ -100,7 +102,8 @@ pub struct Model {
     pub kind: &'static str,
     /// `[min, max]` at scale 1 in its own axes, yards: x forward, y left, z up.
     pub bounds: Option<[[f32; 3]; 2]>,
-    /// One without a mesh only emits particles, light or sound, none of which shows at rest.
+    /// False for one that only emits particles, light or sound, none of which shows at rest, and for
+    /// one whose file doesn't read.
     pub mesh: bool,
     pub on_ground: u32,
     pub in_buildings: u32,
@@ -142,7 +145,8 @@ pub struct Scales {
     pub most: f32,
 }
 
-/// One placement of a model, in world coordinates: x north, y west, z up.
+/// One placement of a model, in world coordinates: x north, y west, z up. For a doodad a building
+/// places, the position and heading are the building's and the scale is the doodad's own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Example {
     pub map_directory: String,

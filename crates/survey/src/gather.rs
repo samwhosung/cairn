@@ -407,7 +407,7 @@ impl ModelAcc {
 }
 
 /// The box the model at `path` fills, as [`Model::bounds`]: a building's groups, or a doodad's
-/// vertices at rest.
+/// vertices at rest, or its header's box when it has none.
 pub fn model_bounds(chain: &Chain, path: &str) -> Option<[[f32; 3]; 2]> {
     if path.to_ascii_lowercase().ends_with(".wmo") {
         wmo_root(chain, path).bounds
