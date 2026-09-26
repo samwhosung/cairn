@@ -178,11 +178,12 @@ fn commits(root: &Path, range: &str) -> Result<()> {
     bail!("{}", bad.join("\n"))
 }
 
-const PICTURE_TESTS: [&str; 4] = [
+const PICTURE_TESTS: [&str; 5] = [
     "scenarios::pictures::",
     "scenarios::together::two_players",
     "scenarios::fight::",
     "scenarios::notes::",
+    "catalog::tests::",
 ];
 
 const WORLDS_LOADED_AT_ONCE: &str = "2";

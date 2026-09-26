@@ -6,6 +6,7 @@
 
 mod args;
 mod atlas;
+mod catalog;
 mod client;
 mod fixture;
 mod fly;
@@ -38,6 +39,9 @@ fn main() -> AppExit {
     }
     if argv.first().is_some_and(|arg| arg == "atlas") {
         return atlas::main(&argv[1..]);
+    }
+    if argv.first().is_some_and(|arg| arg == "catalog") {
+        return catalog::main(&argv[1..]);
     }
     let mut args = match args::parse(argv) {
         Ok(args) => args,

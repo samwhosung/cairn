@@ -1468,6 +1468,7 @@ dependencies = [
  "protocol",
  "server",
  "sound",
+ "survey",
  "terrain",
  "wdt",
  "world",

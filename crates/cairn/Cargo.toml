@@ -19,6 +19,7 @@ light = { path = "../light" }
 protocol = { path = "../protocol" }
 server = { path = "../server" }
 sound = { path = "../sound" }
+survey = { path = "../survey" }
 terrain = { path = "../terrain" }
 wdt = { path = "../wdt" }
 world = { path = "../world" }

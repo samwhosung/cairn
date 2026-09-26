@@ -44,7 +44,15 @@ usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no
          from the north-west and tinted by the water's depth, the land around the zone
          greyed, doodads as dots (trees dark green, shrubs light green, rocks grey, fences
          brown, props orange), buildings as red squares, and a ring at each point marked;
-         with --zone, the whole of a zone of its own
+         with --zone, the whole of a zone of its own. It counts the doodads standing in the
+         zone, each once
+       cairn catalog [DIR] [--draw N]
+         write the install's ground textures, doodads, buildings and zones into DIR (catalog
+         by default, which git ignores) for an agent to search and look through: an index of
+         each, a file of detail and a picture of each thing, each zone's sky, and pages of
+         pictures by kind and by zone; DIR/README.txt says how to use it. A run writes only
+         what is missing, drawing the models on the GPU and then the pages; --draw N draws
+         at most N models and leaves the pages to a run without it
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's

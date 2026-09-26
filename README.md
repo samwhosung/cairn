@@ -12,10 +12,12 @@ loot, quests and every other rule belong to the games built on it.
 **Status:** early. `WOW_DATA=<your install>/Data cargo run -p cairn` walks a character through the
 world as the client walks, swims and collides, lit by the hour under its sky and heard as the
 client hears it; `-- --help` shows the controls, the looks, the maps, the cameras, the headless
-shot and the atlas, which draws a zone from above. `--host` serves the world from the window for
-others to `--connect` to, and the `server` and `bots` crates serve it alone and walk a crowd
-against it; `cargo run -p bots -- scenario FILE` runs one of `crates/bots/scenarios` headless on
-the server's clock and prints its verdict.
+shot, the atlas, which draws a zone from above, and the catalog, which lays the install's ground
+textures, doodads, buildings and zones out in a git-ignored directory for an agent to search and
+look through. `--host` serves the world from the window for others to `--connect` to, and the
+`server` and `bots` crates serve it alone and walk a crowd against it; `cargo run -p bots --
+scenario FILE` runs one of `crates/bots/scenarios` headless on the server's clock and prints its
+verdict.
 
 ## Working on it
 
