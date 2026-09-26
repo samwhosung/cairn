@@ -37,16 +37,14 @@ pub(crate) fn resolve_light(
     };
     let eye = bevy_to_wow(camera.translation);
     let (stormy, ghost) = (false, false);
-    let atmosphere = catalog.0.as_ref().map_or(Atmosphere::DEFAULT, |c| {
-        c.sample(
-            map.id,
-            eye,
-            time.half_minutes(),
-            stormy,
-            underwater.0,
-            ghost,
-        )
-    });
+    let (half_minutes, under) = (time.half_minutes(), underwater.0);
+    let atmosphere = catalog
+        .0
+        .as_ref()
+        .map_or(Atmosphere::DEFAULT, |c| match map.borrowed {
+            Some(borrowed) => c.sample_light(borrowed.light, half_minutes, stormy, under, ghost),
+            None => c.sample(map.id, eye, half_minutes, stormy, under, ghost),
+        });
     let mut resolved = scene_light(&atmosphere, time.minute);
     if let Some((ambient, diffuse)) = underwater.0.ocean_depth_factors(eye[2]) {
         resolved.ambient = resolved.ambient.map(|c| c * ambient);

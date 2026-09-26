@@ -41,6 +41,7 @@ fn assembled(argv: &str) -> Result<App, String> {
     let map = CurrentMap {
         id: 0,
         directory: "Azeroth".into(),
+        borrowed: None,
     };
     let mut app = App::new();
     assemble(&mut app, args, &install, map, without_a_window).map_err(|e| e.to_string())?;

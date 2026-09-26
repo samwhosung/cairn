@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 
+use crate::CurrentMap;
 use crate::adt::AdtTile;
 use crate::coords::bevy_to_wow;
 use crate::ground::{Ground, ground_under, terrain_wow_z_under};
@@ -58,7 +59,8 @@ pub struct CurrentWmoInterior(pub Option<WmoInteriorKeys>);
 pub struct CurrentAreaInterior(pub Option<WmoInteriorKeys>);
 
 /// The `AreaTable` id the player stands in: the building's own area indoors, else the terrain
-/// chunk's. Held through a tile still decoding, gone with the body.
+/// chunk's, or the area a zone of its own borrows. Held through a tile still decoding, gone with
+/// the body.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CurrentArea(pub Option<u32>);
 
@@ -174,6 +176,7 @@ pub(crate) fn update_current_area(
     interior: Res<'_, CurrentAreaInterior>,
     areas: Option<Res<'_, WmoAreas>>,
     ground: (Res<'_, Streamer>, Res<'_, Assets<AdtTile>>),
+    map: Res<'_, CurrentMap>,
     mut area: ResMut<'_, CurrentArea>,
 ) {
     let Some(feet) = viewer.body else {
@@ -190,7 +193,10 @@ pub(crate) fn update_current_area(
             .filter(|&id| id != 0)
     });
     let found = indoors.or_else(|| match ground_under(&ground.0, &ground.1, feet) {
-        Ground::Tile(adt) => terrain::area_id_at(&adt.chunks, bevy_to_wow(feet)),
+        Ground::Tile(adt) => map.borrowed.map_or_else(
+            || terrain::area_id_at(&adt.chunks, bevy_to_wow(feet)),
+            |borrowed| Some(borrowed.area),
+        ),
         _ => None,
     });
     if let Some(id) = found.filter(|&id| id != 0) {

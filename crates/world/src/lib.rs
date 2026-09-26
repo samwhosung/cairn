@@ -67,7 +67,7 @@ pub use doodad_anim::DoodadAnimHost;
 pub use glow::FullScreenGlow;
 pub use light::{Fog, SceneLight};
 pub use m2::M2Model;
-pub use map::CurrentMap;
+pub use map::{Borrowed, CurrentMap};
 pub use model::{BillboardInfo, ModelSubmesh};
 pub use placements::{
     GLOBAL_WMO_ID, PlacedModel, Placement, Placements, PropPlacement, prop_placements,

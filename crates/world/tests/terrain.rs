@@ -163,6 +163,7 @@ fn maps_are_found_by_id_or_directory() {
     let kalimdor = CurrentMap {
         id: 1,
         directory: "Kalimdor".into(),
+        borrowed: None,
     };
     assert_eq!(map("1"), Ok(kalimdor.clone()));
     assert_eq!(map("kalimdor"), Ok(kalimdor));

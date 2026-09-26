@@ -7,11 +7,23 @@ use mpq::Chain;
 const MAP_DBC: &str = "DBFilesClient\\Map.dbc";
 const MAP_FIELDS: usize = 42;
 
-/// The map the world is on: its `Map.dbc` id, and the directory its files are under.
+/// The map the world is on: its id, the directory its files are under, and what it borrows when
+/// it is a zone of its own rather than one of `Map.dbc`'s.
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct CurrentMap {
     pub id: u32,
     pub directory: String,
+    pub borrowed: Option<Borrowed>,
+}
+
+/// What a zone of its own takes from one of the install's: the one light it is lit by wherever the
+/// camera is, and the area every chunk of its ground lies in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Borrowed {
+    /// A `Light.dbc` id.
+    pub light: u32,
+    /// An `AreaTable` id.
+    pub area: u32,
 }
 
 impl CurrentMap {
@@ -42,7 +54,11 @@ fn rows(maps: &RecordSet) -> impl Iterator<Item = CurrentMap> + '_ {
             return None;
         };
         let directory = maps.get_string(*dir).ok()?.into_owned();
-        Some(CurrentMap { id: *id, directory })
+        Some(CurrentMap {
+            id: *id,
+            directory,
+            borrowed: None,
+        })
     })
 }
 
