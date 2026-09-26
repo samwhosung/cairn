@@ -75,8 +75,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [Kind::Tree, Kind::Shrub, Kind::Rock, Kind::Fence, Kind::Prop];
-
     pub fn name(self) -> &'static str {
         match self {
             Kind::Tree => "tree",
@@ -88,14 +86,11 @@ impl Kind {
     }
 }
 
-/// Words that make a doodad a prop whatever else its name says: a lamp post is a lamp, a wall
-/// hanging a hanging.
 const PROP_WORDS: [&str; 21] = [
     "lamp", "lantern", "torch", "brazier", "candle", "light", "sign", "poster", "banner",
     "hanging", "scroll", "shield", "sword", "vial", "stove", "harness", "trail", "bones", "bed",
     "hut", "machine",
 ];
-/// The kinds a doodad's name can say, first match wins: a stone fence is a fence.
 const KIND_WORDS: [(Kind, &[&str]); 4] = [
     (Kind::Fence, &["fence", "post", "wall", "rail", "gate"]),
     (
@@ -116,8 +111,7 @@ const KIND_WORDS: [(Kind, &[&str]); 4] = [
         ],
     ),
 ];
-/// Names hold these, which hold a kind's word by chance.
-const NOT_WORDS: [&str; 2] = ["dustwallow", "spine"];
+const FALSE_MATCHES: [&str; 2] = ["dustwallow", "spine"];
 
 /// The kind of the doodad at `model`, an install path, from the words in its file name.
 pub fn kind(model: &str) -> Kind {
@@ -126,8 +120,8 @@ pub fn kind(model: &str) -> Kind {
         .next()
         .unwrap_or(model)
         .to_ascii_lowercase();
-    for not in NOT_WORDS {
-        b = b.replace(not, "");
+    for false_match in FALSE_MATCHES {
+        b = b.replace(false_match, "");
     }
     if PROP_WORDS.iter().any(|w| b.contains(w)) {
         return Kind::Prop;
@@ -146,6 +140,18 @@ pub struct Doodads {
     pub rocks: usize,
     pub fences: usize,
     pub props: usize,
+}
+
+impl Doodads {
+    pub fn count(&mut self, kind: Kind) {
+        *match kind {
+            Kind::Tree => &mut self.trees,
+            Kind::Shrub => &mut self.shrubs,
+            Kind::Rock => &mut self.rocks,
+            Kind::Fence => &mut self.fences,
+            Kind::Prop => &mut self.props,
+        } += 1;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -307,7 +313,6 @@ pub fn render<S: BuildHasher + Sync>(
 
 type ChunkIndex<'a> = HashMap<(i64, i64), &'a ChunkMesh>;
 
-/// Every chunk of `loaded` by its column and row on the map's grid of chunks.
 fn chunk_index(loaded: &[((u32, u32), TileMesh)]) -> ChunkIndex<'_> {
     let mut index = HashMap::new();
     for ((tx, ty), tm) in loaded {
@@ -321,7 +326,6 @@ fn chunk_index(loaded: &[((u32, u32), TileMesh)]) -> ChunkIndex<'_> {
     index
 }
 
-/// The chunk under world `(wx, wy)`, and how far into it the point lies, south then east, `0..1`.
 fn chunk_at<'a>(index: &ChunkIndex<'a>, wx: f32, wy: f32) -> Option<(&'a ChunkMesh, f32, f32)> {
     let (gxf, gyf) = (
         (32.0 * TILE_SIZE - wy) / CHUNK_SIZE,
@@ -331,8 +335,7 @@ fn chunk_at<'a>(index: &ChunkIndex<'a>, wx: f32, wy: f32) -> Option<(&'a ChunkMe
     Some((c, gyf - gyf.floor(), gxf - gxf.floor()))
 }
 
-/// The doodads standing in zone `zone`, or anywhere without one, each once though the tiles it
-/// overlaps all list it.
+/// In zone `zone`, or anywhere without one; each once: every tile a doodad overlaps lists it.
 fn census(
     loaded: &[((u32, u32), TileMesh)],
     index: &ChunkIndex<'_>,
@@ -351,13 +354,7 @@ fn census(
             if !inside || !seen.insert(d.unique_id) {
                 continue;
             }
-            *match kind(&d.model) {
-                Kind::Tree => &mut n.trees,
-                Kind::Shrub => &mut n.shrubs,
-                Kind::Rock => &mut n.rocks,
-                Kind::Fence => &mut n.fences,
-                Kind::Prop => &mut n.props,
-            } += 1;
+            n.count(kind(&d.model));
         }
     }
     n
