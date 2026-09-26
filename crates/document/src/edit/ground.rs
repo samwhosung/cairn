@@ -7,10 +7,10 @@ use crate::text::two_places;
 use crate::zone::Zone;
 
 #[derive(Clone, Copy, Debug)]
-struct Vertex {
-    inner: bool,
-    i: usize,
-    j: usize,
+pub struct Vertex {
+    pub inner: bool,
+    pub i: usize,
+    pub j: usize,
 }
 
 impl Vertex {
@@ -19,7 +19,7 @@ impl Vertex {
         [(self.i as f64 + o) * CELL, (self.j as f64 + o) * CELL]
     }
 
-    fn index(self, z: &Zone) -> usize {
+    pub fn index(self, z: &Zone) -> usize {
         let h = &z.heights;
         if self.inner {
             h.outer.len() + self.j * h.cols + self.i
@@ -29,7 +29,7 @@ impl Vertex {
     }
 }
 
-fn reached(z: &Zone, s: &Shape) -> Vec<(Vertex, Reach)> {
+pub fn reached(z: &Zone, s: &Shape) -> Vec<(Vertex, Reach)> {
     let (cols, rows) = (z.heights.cols, z.heights.rows);
     let [lo, hi] = s.bounds();
     let range = |a: f64, b: f64, n: usize, o: f64| {
@@ -56,7 +56,7 @@ fn reached(z: &Zone, s: &Shape) -> Vec<(Vertex, Reach)> {
     out
 }
 
-fn get(z: &Zone, v: Vertex) -> f32 {
+pub fn get(z: &Zone, v: Vertex) -> f32 {
     if v.inner {
         z.heights.inner(v.i, v.j)
     } else {

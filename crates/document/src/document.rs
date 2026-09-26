@@ -224,11 +224,13 @@ impl Document {
         }
         let (authors, palette) = (self.zone.authors.clone(), self.zone.palette.len());
         let mut done: Vec<(String, CommandRecord)> = Vec::with_capacity(cmds.len());
+        let mut written: Vec<Command> = Vec::with_capacity(cmds.len());
         let mut failed = None;
         for c in cmds {
             match edit::apply(&mut self.zone, author, c, install) {
                 Ok(a) => {
                     let after_digest = a.before.capture(&self.zone).digest();
+                    written.push(a.journaled);
                     done.push((
                         a.reply,
                         CommandRecord {
@@ -249,11 +251,11 @@ impl Document {
         }
         let join = join && self.steps.joinable(author);
         let first = self.journal.lines.len() + 1;
-        let written = match failed {
+        let lines = match failed {
             Some(e) => Err(e),
-            None => self.write_lines(time, author, cmds, join, first, &done),
+            None => self.write_lines(time, author, &written, join, first, &done),
         };
-        if let Err(e) = written {
+        if let Err(e) = lines {
             for (_, f) in done.iter().rev() {
                 f.before.restore(&mut self.zone);
             }

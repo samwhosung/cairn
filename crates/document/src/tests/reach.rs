@@ -43,6 +43,9 @@ const EDITS: &[&str] = &[
     "place World\\Canopy.m2 150,150",
     "scatter --models World\\Pine.m2 --rect 100,100 250,250 --count 15 --apart 8",
     "water 45 --rect 850,100 950,200",
+    "paint Tileset\\C.blp --at 380,190 --radius 45 --slope 3..90 --soft 2",
+    "scatter --models World\\RuledTree.m2 World\\RuledRock.m2 --at 650,180 --radius 60 --count 30 --water 1..",
+    "relief Elwynn Forest --at 800,150 --radius 70 --strength 0.8",
 ];
 
 fn zone(commands: &[&str], control: bool) -> Zone {

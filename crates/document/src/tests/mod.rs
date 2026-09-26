@@ -3,16 +3,20 @@ mod crash;
 mod damage;
 mod reach;
 mod readback;
+mod relief;
+mod rules;
 mod steps;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::choice::hash_bytes;
 use crate::document::Document;
 use crate::files::ZoneFile;
-use crate::install::{Install, ModelBox};
-use crate::zone::{Borrow, Zone};
+use crate::install::{Install, ModelBox, Rules};
+use crate::relief::{Ground, Source};
+use crate::zone::{Borrow, Heights, Zone};
 
 pub struct FakeInstall;
 
@@ -40,6 +44,50 @@ impl Install for FakeInstall {
             area: 12,
             name: name.to_owned(),
         })
+    }
+
+    fn rules(&mut self, model: &str) -> Result<Option<Rules>, String> {
+        let m = model.to_ascii_lowercase();
+        Ok(if m.contains("ruledtree") {
+            Some(Rules {
+                slope: [0.0, 30.0],
+                apart: 6.0,
+                scale: [0.8, 1.4],
+                lean: false,
+                placed: 400,
+            })
+        } else if m.contains("ruledrock") {
+            Some(Rules {
+                slope: [10.0, 70.0],
+                apart: 3.5,
+                scale: [0.5, 2.0],
+                lean: true,
+                placed: 90,
+            })
+        } else {
+            None
+        })
+    }
+
+    fn relief(&mut self, name: &str) -> Result<Arc<Source>, String> {
+        let (cols, rows) = (100, 100);
+        let h = |x: f64, y: f64| {
+            8.0 * libm::sin(x * 0.37) * libm::cos(y * 0.23) + if x > 50.0 { 12.0 } else { 0.0 }
+        };
+        let ground = Ground {
+            heights: Heights {
+                cols,
+                rows,
+                outer: (0..(cols + 1) * (rows + 1))
+                    .map(|k| h((k % (cols + 1)) as f64, (k / (cols + 1)) as f64) as f32)
+                    .collect(),
+                inner: (0..cols * rows)
+                    .map(|k| h((k % cols) as f64 + 0.5, (k / cols) as f64 + 0.5) as f32)
+                    .collect(),
+            },
+            known: vec![true; cols * rows],
+        };
+        Source::of(name, &ground).map(Arc::new)
     }
 }
 
@@ -87,6 +135,13 @@ pub const SCRIPT: &[&str] = &[
     "scatter --models World\\Azeroth\\Elwynn\\PassiveDoodads\\Trees\\ElwynnTreeMid01.m2 World\\Azeroth\\Elwynn\\PassiveDoodads\\Trees\\ElwynnTree01\\ElwynnPine01.m2 --poly 600,400 900,380 950,700 620,720 --count 80 --apart 9 --scale 0.8..1.3",
     "scatter --models World\\Azeroth\\Elwynn\\PassiveDoodads\\Bush\\ElwynnBush09.m2 --at 520,520 --radius 60 --count 20 --apart 4 --facing 0",
     "raise 3 --line 100,100 900,900 --width 40",
+    "paint Tileset\\Elwynn\\ElwynnRockBaseTest2.blp --at 300,300 --radius 160 --falloff 0 --slope 6..90 --soft 3",
+    "paint Tileset\\Elwynn\\ElwynnDirtBase2.blp --at 700,650 --radius 130 --water -4..6 --soft 2 --make-room",
+    "scatter --models World\\Azeroth\\RuledTree01.m2 World\\Azeroth\\RuledRock02.m2 --at 300,300 --radius 170 --count 70 --water 2.. --off Tileset\\Elwynn\\ElwynnDirtBase2.blp --seed 5",
+    "scatter --models World\\Azeroth\\RuledTree01.m2 --at 330,300 --radius 60 --count 12 --seed 5",
+    "relief Redridge Mountains --at 720,300 --radius 140 --strength 0.7 --seed 3",
+    "place World\\Azeroth\\RuledRock09.m2 310,250 --stands leaning",
+    "move 3 --stands leaning",
 ];
 
 pub fn journal(author: &str, commands: &[&str]) -> Vec<String> {

@@ -15,12 +15,15 @@ const SAVE_EVERY: Duration = Duration::from_secs(1);
 
 /// Run `cairn zone` with the words after it, printing what it says; an error is the message.
 pub fn main(args: &[String]) -> Result<(), String> {
-    let (author, args) = take_author(args)?;
+    let (Globals { author, catalog }, args) = take_globals(args)?;
     let Some((verb, rest)) = args.split_first() else {
         print!("{GUIDE}");
         return Ok(());
     };
     let mut install = Archives::from_env();
+    if catalog.is_some() {
+        install = install.with_catalog(catalog);
+    }
     let dir = |i: usize| -> Result<PathBuf, String> {
         rest.get(i)
             .map(PathBuf::from)
@@ -147,9 +150,14 @@ fn steps(
     write_build(&doc, install, t)
 }
 
-fn take_author(args: &[String]) -> Result<(String, Vec<String>), String> {
+struct Globals {
+    author: String,
+    catalog: Option<PathBuf>,
+}
+
+fn take_globals(args: &[String]) -> Result<(Globals, Vec<String>), String> {
     let mut rest = Vec::with_capacity(args.len());
-    let mut named = None;
+    let (mut named, mut catalog) = (None, None);
     let mut words = args.iter();
     while let Some(w) = words.next() {
         if w == "--as" {
@@ -159,6 +167,11 @@ fn take_author(args: &[String]) -> Result<(String, Vec<String>), String> {
                     .ok_or("--as NAME: who is changing the zone")?
                     .clone(),
             );
+        } else if w == "--catalog" {
+            let dir = words
+                .next()
+                .ok_or("--catalog DIR: the catalog `cairn catalog` wrote")?;
+            catalog = Some(PathBuf::from(dir));
         } else {
             rest.push(w.clone());
         }
@@ -168,7 +181,13 @@ fn take_author(args: &[String]) -> Result<(String, Vec<String>), String> {
         .or_else(|| std::env::var("USER").ok())
         .ok_or("who is changing the zone? --as NAME, or set CAIRN_AUTHOR")?;
     crate::zone::check_author(&name)?;
-    Ok((name, rest))
+    Ok((
+        Globals {
+            author: name,
+            catalog,
+        },
+        rest,
+    ))
 }
 
 fn write_build(doc: &Document, install: &mut dyn Install, since: Instant) -> Result<(), String> {

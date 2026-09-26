@@ -5,11 +5,14 @@ about it. Each change is a line of the zone's journal, with its author and time,
 undoes and redoes their own steps. Each verb that changes the zone writes the files cairn draws
 to ZONE/build as it ends, so `cairn shot --zone ZONE/build`, `cairn view --zone ZONE/build` and
 `cairn atlas --zone ZONE/build` show it. The verbs do what you say, where you say it, and nothing
-else; a scatter picks its spots, models, facings and scales from its own words, the same each
-time.
+else; a scatter picks its spots, models, facings and scales from its own words and the rules the
+catalog gives its models, the same each time, and the journal keeps those rules.
 
 Who: --as NAME on any verb, else $CAIRN_AUTHOR, else your login name. A name is a letter, then
 letters, digits, _ or -.
+
+The catalog: --catalog DIR on any verb, else $CAIRN_CATALOG: the catalog `cairn catalog` wrote,
+whose table of each model's rules a scatter keeps.
 
 Where: yards in the zone's own frame, x east and y south of its north-west corner; z is a world
 height. A tile is 533.33 yd square, a chunk 33.33 yd. A facing is a compass bearing of a model's
@@ -22,30 +25,54 @@ Make
   cairn zone set ZONE [--start X,Y[,FACING]] [--borrow ZONE] [--name NAME]
 
 Ground. A brush is --at X,Y --radius R, or --line X,Y X,Y ... --width W; --falloff 0 is a hard
-edge, 1 eases from the middle (0.5 if not given).
+edge, 1 eases from the middle (0.5 if not given). An AREA is a brush, --rect X,Y X,Y or --poly
+X,Y X,Y X,Y ..., whose falloff only a brush has.
   cairn zone raise ZONE 6 BRUSH           cairn zone lower ZONE 6 BRUSH
   cairn zone flatten ZONE 42 BRUSH [--strength 0..1]    or, without a height, along a --line
                                           to the heights its points carry (X,Y,Z), else the
                                           ground's under them
   cairn zone smooth ZONE BRUSH [--passes 4] [--strength 0..1]
   cairn zone roughen ZONE 2 --size 12 BRUSH [--seed N]
+  cairn zone relief ZONE Redridge Mountains AREA [--strength 0..4] [--falloff F] [--seed N]
+      adds the relief of the install's zone of that name, such as Elwynn Forest or Alterac
+      Mountains: its ground less its own smoothed shape, laid in patches 67 yd across blended
+      into each other. The shape already there stays under it
 
 Paint. A chunk holds at most four textures: a stroke that would bring a fifth leaves that chunk
 alone and says which; --make-room drops the chunk's least-used other texture instead.
-  cairn zone paint ZONE PATH BRUSH [--strength 0..1] [--make-room]
+  cairn zone paint ZONE PATH AREA [--strength 0..1] [--make-room] [--slope 35..90] [MASK]
   cairn zone texture ZONE PATH --effect N     its ground effect: the grass it grows and the
                                               sound of steps on it
 
+A range is LO..HI, LO.. or ..HI, both ends included. --slope is a paint's range of the ground's
+slope in degrees, from the corners of its cell, and a scatter's rule for its models. A MASK keeps a
+stroke or a scatter to part of its area:
+  --height ..48         the ground's height in yards
+  --water 3..           yards from the water's edge, less than 0 in the water
+  --on PATH ...         only where these textures cover the ground: fully where they cover
+                        three quarters of it or more, not where a quarter or less
+  --off PATH ...        only where they don't, eased the same way
+  --soft 4              each range's ends, --slope's too, ease over 4 of its own units (degrees
+                        or yards), half strength at the end itself
+
 Things. Each gets an id, its author's name and a count (sam.12); on the command line a bare
 number is one of your own. A thing stands on the ground (--dz above it, following the ground) or
-at a height (--z); --set N is a building's doodad set.
-  cairn zone place ZONE PATH X,Y [--facing D] [--scale S] [--dz D | --z H] [--set N]
+at a height (--z); --set N is a building's doodad set; --stands leaning tilts a model as the
+ground under it is, --stands upright stands it straight.
+  cairn zone place ZONE PATH X,Y [--facing D] [--scale S] [--dz D | --z H] [--set N] [--stands S]
   cairn zone move ZONE ID [X,Y] [--facing D] [--turn D] [--scale S] [--dz D | --z H] [--set N]
+                  [--stands S]
   cairn zone remove ZONE ID ...
-  cairn zone scatter ZONE --models A B ... AREA --count N --apart D [--scale 0.8..1.2]
-                     [--facing D] [--seed N]
-      AREA is a brush, --rect X,Y X,Y or --poly X,Y X,Y X,Y ...; the same scatter twice lands in
-      the same places (--seed varies it); it spreads over whatever already stands there
+  cairn zone scatter ZONE --models A B ... AREA --count N [--facing D] [--seed N] [MASK]
+                     [--apart D] [--scale 0.8..1.2] [--slope 0..30] [--stands upright|leaning]
+      Each model keeps its own rules, from where the install places it: the slopes it stands
+      on, how far apart, its scales, and whether it leans with the ground. A rule given here
+      overrides them: one value for every model, or one for each. A model the catalog doesn't
+      know keeps any slope, scale 1 and upright, and needs --apart. The journal keeps every rule
+      the scatter kept. A scatter replaces what an earlier one with its seed (0 if not given)
+      placed of its models inside its area, so the same scatter twice lands once, and two
+      unseeded scatters of one model replace each other where they overlap; a thing placed or
+      moved by hand stays. It spreads over whatever else stands there
   cairn zone water ZONE 41.5 AREA         cairn zone water ZONE --remove ID ...
 
 Steps
@@ -69,6 +96,6 @@ Ask
                                            stands near
   cairn zone things ZONE [--at X,Y [--radius R]] [--model WORDS]
 
-The zone's files are yours to read: zone.txt, things.txt (id x y z facing scale set model),
-water.txt, palette.txt, and journal.txt, every change in order. heights.bin, paint.bin and
-history.bin are the ground, the paint and what undo and redo need.
+The zone's files are yours to read: zone.txt, things.txt (id x y z facing scale set stands
+scattered model), water.txt, palette.txt, and journal.txt, every change in order. heights.bin,
+paint.bin and history.bin are the ground, the paint and what undo and redo need.

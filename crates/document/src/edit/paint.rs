@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use crate::command::Paint;
 use crate::frame::{CHUNK, TEXEL};
 use crate::image::Image;
+use crate::mask::Masking;
 use crate::shape::{Shape, falloff};
 use crate::text::two_places;
 use crate::zone::{ChunkPaint, MAX_LAYERS, PaintLayer, TEXELS_ACROSS, TEXELS_IN_CHUNK, Zone};
@@ -20,11 +21,11 @@ fn chunks_touched(z: &Zone, s: &Shape) -> Vec<(usize, usize)> {
     out
 }
 
-pub fn apply(z: &mut Zone, tex: u16, p: &Paint) -> (String, Image) {
+pub fn apply(z: &mut Zone, tex: u16, p: &Paint, masking: &Masking<'_>) -> (String, Image) {
     let east = z.chunks_east();
     let (mut touched, mut skipped, mut dropped) = (0usize, Vec::new(), Vec::new());
     let mut image = Image::default();
-    for (gx, gy) in chunks_touched(z, &p.brush) {
+    for (gx, gy) in chunks_touched(z, &p.area) {
         let o = [gx as f64 * CHUNK, gy as f64 * CHUNK];
         let share: Vec<u32> = (0..TEXELS_IN_CHUNK)
             .map(|k| {
@@ -32,10 +33,14 @@ pub fn apply(z: &mut Zone, tex: u16, p: &Paint) -> (String, Image) {
                     o[0] + ((k % TEXELS_ACROSS) as f64 + 0.5) * TEXEL,
                     o[1] + ((k / TEXELS_ACROSS) as f64 + 0.5) * TEXEL,
                 ];
-                p.brush.reach(at).map_or(0, |r| {
-                    (falloff(r.t, p.falloff) * p.strength * 255.0)
-                        .round()
-                        .clamp(0.0, 255.0) as u32
+                p.area.reach(at).map_or(0, |r| {
+                    let stroke = falloff(r.t, p.falloff) * p.strength;
+                    let lets = if stroke > 0.0 {
+                        masking.weight(z, at, p.slope.as_ref())
+                    } else {
+                        0.0
+                    };
+                    (stroke * lets * 255.0).round().clamp(0.0, 255.0) as u32
                 })
             })
             .collect();

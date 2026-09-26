@@ -184,11 +184,23 @@ fn differences(z: &Zone, b: &Built) -> Vec<String> {
             (f64::from(z.frame.origin.1) * TILE + p[1]) as f32,
         ];
         let heading = heading_of(t.facing_deg()) as f32;
+        let stands = |rot: [f32; 3]| {
+            if !t.lean {
+                return rot[0] == 0.0 && rot[2] == 0.0;
+            }
+            let [east, south] = z.heights.rise(p);
+            let len = (east * east + south * south + 1.0).sqrt();
+            let up = client_up(rot);
+            (up[0] - south / len).abs() < 1e-4
+                && (up[1] - east / len).abs() < 1e-4
+                && (up[2] - 1.0 / len).abs() < 1e-4
+        };
         let found = match t.set {
             None => doodads.remove(&unique).map(|(m, pos, rot, scale)| {
                 m.eq_ignore_ascii_case(&mmdx_name(&t.model))
                     && pos == position
                     && rot[1] == heading
+                    && stands(rot)
                     && scale == t.scale
             }),
             Some(set) => wmos.remove(&unique).map(|(m, pos, rot, s)| {
@@ -225,6 +237,30 @@ fn differences(z: &Zone, b: &Built) -> Vec<String> {
     out
 }
 
+fn client_up(rot: [f32; 3]) -> [f64; 3] {
+    let [rx, ry, rz] = rot.map(|d| f64::from(d).to_radians());
+    let about_x = |a: f64, v: [f64; 3]| {
+        let (s, c) = (a.sin(), a.cos());
+        [v[0], c * v[1] - s * v[2], s * v[1] + c * v[2]]
+    };
+    let about_y = |a: f64, v: [f64; 3]| {
+        let (s, c) = (a.sin(), a.cos());
+        [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]]
+    };
+    let about_z = |a: f64, v: [f64; 3]| {
+        let (s, c) = (a.sin(), a.cos());
+        [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]]
+    };
+    let quarter = std::f64::consts::FRAC_PI_2;
+    about_x(
+        quarter,
+        about_y(
+            ry - std::f64::consts::PI,
+            about_z(-rx, about_x(rz - quarter, [0.0, 0.0, 1.0])),
+        ),
+    )
+}
+
 fn built() -> (Zone, Built) {
     let doc = make(&scratch("readback"), &journal("sam", SCRIPT));
     let b = doc
@@ -253,6 +289,12 @@ fn the_files_read_back_through_cairns_readers() {
     let (z, b) = built();
     let found = differences(&z, &b);
     assert!(found.is_empty(), "{found:#?}");
+    let tilted = z
+        .things
+        .values()
+        .filter(|t| t.lean && z.heights.slope(t.at()) > 3.0)
+        .count();
+    assert!(tilted > 0, "something leans on sloping ground");
 }
 
 #[test]
@@ -296,11 +338,23 @@ fn the_controls_each_duty_undone_is_caught() {
             }
         }
     };
+    let upright = |b: &mut Built| {
+        for t in b.tiles.values_mut() {
+            let at = t.windows(4).position(|w| w == b"FDDM").unwrap_or(0);
+            let size = u32::from_le_bytes([t[at + 4], t[at + 5], t[at + 6], t[at + 7]]) as usize;
+            for record in (at + 8..at + 8 + size).step_by(36) {
+                for angle in [record + 20, record + 28] {
+                    t[angle..angle + 4].copy_from_slice(&0f32.to_le_bytes());
+                }
+            }
+        }
+    };
     for (name, undo) in [
         ("a base height a yard off", &base_off as &dyn Fn(&mut Built)),
         ("a tile left out of the WDT", &no_tile),
         ("a placement's unique id changed", &other_id),
         ("the water a yard high", &high),
+        ("every model stood upright", &upright),
     ] {
         let mut broken = Built {
             tiles: b.tiles.clone(),

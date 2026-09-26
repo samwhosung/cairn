@@ -8,14 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+adt = { path = "../adt" }
 dbc = { path = "../dbc" }
+fits = { path = "../fits" }
 libm = "0.2"
 m2 = { path = "../m2" }
 mpq = { path = "../mpq" }
 wmo = { path = "../wmo" }
 
 [dev-dependencies]
-adt = { path = "../adt" }
 terrain = { path = "../terrain" }
 wdl = { path = "../wdl" }
 wdt = { path = "../wdt" }

@@ -3,6 +3,7 @@
 
 mod ground;
 mod paint;
+mod relief;
 mod scatter;
 
 use std::fmt::Write as _;
@@ -11,6 +12,7 @@ use crate::command::{Command, Height, Move, New, Place, Set};
 use crate::frame::{Frame, compass};
 use crate::image::{Effect, Image};
 use crate::install::Install;
+use crate::mask::Masking;
 use crate::text::{centi, from_centi, scale_text, scale_u16, two_places};
 use crate::zone::{
     AUTHOR_LIMIT, Author, Id, MADE_LIMIT, Start, Texture, Thing, Water, Z, Zone, map_dir,
@@ -19,6 +21,7 @@ use crate::zone::{
 pub struct Applied {
     pub reply: String,
     pub before: Image,
+    pub journaled: Command,
 }
 
 pub fn create(n: &New, install: &mut dyn Install) -> Result<(Zone, String), String> {
@@ -58,13 +61,53 @@ pub fn apply(
     install: &mut dyn Install,
 ) -> Result<Applied, String> {
     let (authors, palette) = (z.authors.clone(), z.palette.len());
-    let done = change(z, author, cmd, install);
+    let done = match cmd {
+        Command::Scatter(sc) => scatter(z, author, sc, install),
+        _ => change(z, author, cmd, install).map(|(reply, before)| Applied {
+            reply,
+            before,
+            journaled: cmd.clone(),
+        }),
+    };
     if done.is_err() {
         z.authors = authors;
         z.palette.truncate(palette);
     }
-    let (reply, before) = done?;
-    Ok(Applied { reply, before })
+    done
+}
+
+fn scatter(
+    z: &mut Zone,
+    author: &str,
+    sc: &crate::command::Scatter,
+    install: &mut dyn Install,
+) -> Result<Applied, String> {
+    for m in &sc.models {
+        if m.to_ascii_lowercase().ends_with(".wmo") {
+            return Err(format!("{m}: scatter spreads models, not buildings"));
+        }
+        install.model_box(m)?;
+    }
+    let scatter::Resolved { journaled, rules } = scatter::resolve(sc, install)?;
+    let masking = Masking::new(z, &journaled.mask, install)?;
+    let things = scatter::spots(z, &journaled, &rules, &masking)?;
+    let gone = scatter::placed_by_same_seed(z, &journaled);
+    let ids = allocate(z, author, things.len())?;
+    let mut before = Image::default();
+    for id in &gone {
+        if let Some(t) = z.things.remove(id) {
+            before.things.push((id.clone(), Some(t)));
+        }
+    }
+    for (id, t) in ids.iter().zip(&things) {
+        before.things.push((id.clone(), None));
+        z.things.insert(id.clone(), t.clone());
+    }
+    Ok(Applied {
+        reply: scatter::reply(z, &journaled, &rules, &ids, &things, gone.len()),
+        before,
+        journaled: Command::Scatter(Box::new(journaled)),
+    })
 }
 
 fn change(
@@ -78,8 +121,9 @@ fn change(
         Command::Set(s) => set(z, s, install),
         Command::Ground(g) => ground::apply(z, g),
         Command::Paint(p) => {
+            let masking = Masking::new(z, &p.mask, install)?;
             let t = texture(z, &p.texture, install)?;
-            let (mut reply, image) = paint::apply(z, t.place, p);
+            let (mut reply, image) = paint::apply(z, t.place, p, &masking);
             if t.added {
                 let _ = write!(
                     reply,
@@ -120,22 +164,8 @@ fn change(
             }
             Ok((format!("{} removed", before.things.len()), before))
         }
-        Command::Scatter(sc) => {
-            for m in &sc.models {
-                if m.to_ascii_lowercase().ends_with(".wmo") {
-                    return Err(format!("{m}: scatter spreads models, not buildings"));
-                }
-                install.model_box(m)?;
-            }
-            let things = scatter::spots(z, sc)?;
-            let ids = allocate(z, author, things.len())?;
-            let mut before = Image::default();
-            for (id, t) in ids.iter().zip(&things) {
-                before.things.push((id.clone(), None));
-                z.things.insert(id.clone(), t.clone());
-            }
-            Ok((scatter::reply(z, sc, &ids, &things), before))
-        }
+        Command::Scatter(_) => Err("a scatter is applied on its own".into()),
+        Command::Relief(r) => relief::apply(z, r, &*install.relief(&r.zone)?),
         Command::Water { level, area } => {
             let [lo, hi] = area.bounds();
             let e = z.frame.extent();
@@ -289,6 +319,8 @@ fn place(
         facing: centi(p.facing.rem_euclid(360.0)),
         scale: scale_u16(p.scale)?,
         set: p.set,
+        lean: p.lean,
+        scattered: None,
     };
     let id = allocate(z, author, 1)?.remove(0);
     let k = t.scale_f();
@@ -346,6 +378,13 @@ fn shift(z: &mut Zone, m: &Move) -> Result<(String, Image), String> {
         }
         t.set = Some(s);
     }
+    if let Some(lean) = m.lean {
+        if lean && t.is_building() {
+            return Err("a building stands upright".into());
+        }
+        t.lean = lean;
+    }
+    t.scattered = None;
     let reply = format!(
         "{} now at {},{} z {} facing {} scale {}",
         m.id,

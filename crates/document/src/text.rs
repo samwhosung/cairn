@@ -70,19 +70,27 @@ pub fn thing_text(t: &Thing) -> String {
         Z::At(h) => format!("={}", from_centi(h)),
     };
     let set = t.set.map_or("-".to_owned(), |v| v.to_string());
+    let scattered = t.scattered.map_or("-".to_owned(), |s| s.to_string());
     format!(
-        "{} {} {z} {} {} {set} {}",
+        "{} {} {z} {} {} {set} {} {scattered} {}",
         from_centi(t.x),
         from_centi(t.y),
         from_centi(t.facing),
         scale_text(t.scale),
+        if t.lean { LEANING } else { UPRIGHT },
         t.model
     )
 }
 
+const UPRIGHT: &str = "upright";
+const LEANING: &str = "leaning";
+
 pub fn parse_thing(l: &str) -> Result<Thing, String> {
-    let mut f = l.splitn(7, char::is_whitespace);
-    let mut next = || f.next().ok_or("want `x y z facing scale set model`");
+    let mut f = l.splitn(9, char::is_whitespace);
+    let mut next = || {
+        f.next()
+            .ok_or("want `x y z facing scale set stands scattered model`")
+    };
     let x = centi(number(next()?, "x")?);
     let y = centi(number(next()?, "y")?);
     let zt = next()?;
@@ -96,6 +104,15 @@ pub fn parse_thing(l: &str) -> Result<Thing, String> {
         "-" => None,
         s => Some(number(s, "set")?),
     };
+    let lean = match next()? {
+        UPRIGHT => false,
+        LEANING => true,
+        s => return Err(format!("{s:?}: a thing stands {UPRIGHT} or {LEANING}")),
+    };
+    let scattered = match next()? {
+        "-" => None,
+        s => Some(number(s, "a scatter's seed")?),
+    };
     let model = next()?.trim().to_owned();
     if model.is_empty() {
         return Err("no model".into());
@@ -108,6 +125,8 @@ pub fn parse_thing(l: &str) -> Result<Thing, String> {
         facing,
         scale,
         set,
+        lean,
+        scattered,
     })
 }
 
@@ -159,8 +178,16 @@ mod tests {
             facing: 35_999,
             scale: 1126,
             set: None,
+            lean: true,
+            scattered: Some(u64::MAX),
         };
-        assert_eq!(parse_thing(&thing_text(&t)), Ok(t));
+        assert_eq!(parse_thing(&thing_text(&t)), Ok(t.clone()));
+        let placed = Thing {
+            lean: false,
+            scattered: None,
+            ..t
+        };
+        assert_eq!(parse_thing(&thing_text(&placed)), Ok(placed));
         let id = parse_id("#sam.12").expect("an id");
         assert_eq!(id.to_string(), "sam.12");
         assert!(parse_id("sam.0").is_err() && parse_id("12").is_err());

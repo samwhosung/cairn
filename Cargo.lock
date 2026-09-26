@@ -2121,6 +2121,7 @@ version = "0.0.0"
 dependencies = [
  "adt",
  "dbc",
+ "fits",
  "libm",
  "m2",
  "mpq",

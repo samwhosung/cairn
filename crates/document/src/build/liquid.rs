@@ -5,7 +5,7 @@
 //! corners are a yard deep; the flow is two empty records.
 
 use crate::frame::{CELL, CHUNK};
-use crate::zone::Zone;
+use crate::zone::{Heights, Water, Zone};
 
 pub const BLOCK: usize = 0x324;
 /// The MCNK flag of a chunk with river or lake water.
@@ -56,6 +56,22 @@ pub fn river(surface: &[f32; 81], ground: &[f32; 81], wet: &[bool; 64]) -> Vec<u
     b
 }
 
+/// Does `w` wet zone cell `(i, j)`: its middle in the outline and its lowest corner under the level.
+pub fn wets(w: &Water, h: &Heights, i: usize, j: usize) -> bool {
+    let middle = [
+        (i / 8) as f64 * CHUNK + ((i % 8) as f64 + 0.5) * CELL,
+        (j / 8) as f64 * CHUNK + ((j % 8) as f64 + 0.5) * CELL,
+    ];
+    if w.shape.reach(middle).is_none() {
+        return false;
+    }
+    let low = [(0, 0), (1, 0), (0, 1), (1, 1)]
+        .iter()
+        .map(|&(a, b)| f64::from(h.outer(i + a, j + b)))
+        .fold(f64::MAX, f64::min);
+    low < w.level as f64 / 100.0
+}
+
 /// The water of zone chunk `(gx, gy)`. Where two bodies wet one cell, the higher shows, whoever
 /// made it; vertices no wet cell touches take the mean level of those that do.
 pub fn chunk_water(z: &Zone, gx: usize, gy: usize) -> Option<Vec<u8>> {
@@ -73,19 +89,7 @@ pub fn chunk_water(z: &Zone, gx: usize, gy: usize) -> Option<Vec<u8>> {
         let level = w.level as f64 / 100.0;
         for (k, cell) in wet.iter_mut().enumerate() {
             let (r, c) = (k / 8, k % 8);
-            let middle = [
-                o[0] + (c as f64 + 0.5) * CELL,
-                o[1] + (r as f64 + 0.5) * CELL,
-            ];
-            if w.shape.reach(middle).is_none() {
-                continue;
-            }
-            let (i, j) = (gx * 8 + c, gy * 8 + r);
-            let low = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                .iter()
-                .map(|&(a, b)| f64::from(h.outer(i + a, j + b)))
-                .fold(f64::MAX, f64::min);
-            if low >= level {
+            if !wets(w, h, gx * 8 + c, gy * 8 + r) {
                 continue;
             }
             *cell = true;

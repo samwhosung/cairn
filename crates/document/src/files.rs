@@ -71,9 +71,11 @@ impl ZoneFile {
             ZoneFile::Palette => palette_text(&z.palette).into_bytes(),
             ZoneFile::Things => {
                 let mut s = String::from(
-                    "# id x y z facing scale set model: zone yards (x east, y south); z +d above \
-                     the ground or =h a world height; facing the compass bearing of the model's \
-                     front; set a building's doodad set\n",
+                    "# id x y z facing scale set stands scattered model: zone yards (x east, y \
+                     south); z +d above the ground or =h a world height; facing the compass \
+                     bearing of the model's front; set a building's doodad set; stands upright or \
+                     leaning as the ground does; scattered the seed of the scatter that placed \
+                     it\n",
                 );
                 for (id, t) in &z.things {
                     let _ = writeln!(s, "{id} {}", thing_text(t));

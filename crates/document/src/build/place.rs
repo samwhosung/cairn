@@ -21,6 +21,23 @@ fn turn(rotation: [f32; 3], v: [f64; 3]) -> [f64; 3] {
     [cs * v[0] - sn * v[1], sn * v[0] + cs * v[1], v[2]]
 }
 
+pub fn rotation_on_ground([east, south]: [f64; 2], heading: f64) -> [f32; 3] {
+    let normal = [south, east, 1.0];
+    let length = (normal[0] * normal[0] + normal[1] * normal[1] + 1.0).sqrt();
+    let back = -(heading + 180.0).to_radians();
+    let (sn, cs) = (libm::sin(back), libm::cos(back));
+    let n = [
+        (cs * normal[0] - sn * normal[1]) / length,
+        (sn * normal[0] + cs * normal[1]) / length,
+        normal[2] / length,
+    ];
+    [
+        libm::atan2(n[0], n[2]).to_degrees() as f32,
+        heading as f32,
+        -libm::asin(n[1].clamp(-1.0, 1.0)).to_degrees() as f32,
+    ]
+}
+
 /// World `(x north, y west, z)` of a placement-frame position.
 fn world(position: [f32; 3]) -> [f64; 3] {
     [
@@ -206,6 +223,26 @@ mod tests {
         assert!((c.x[1] - c.x[0] - 10.0).abs() < 1e-6 && (c.y[1] - c.y[0] - 2.0).abs() < 1e-6);
         let c = doodad("A.mdx", [0.0, 90.0, 0.0]).cover();
         assert!((c.x[1] - c.x[0] - 2.0).abs() < 1e-6 && (c.y[1] - c.y[0] - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_tilt_stands_a_model_square_to_the_ground() {
+        for (rise, heading) in [
+            ([0.3, -0.6], 0.0),
+            ([0.3, -0.6], 135.0),
+            ([-1.2, 0.1], 290.0),
+            ([0.0, 0.0], 45.0),
+        ] {
+            let up = turn(rotation_on_ground(rise, heading), [0.0, 0.0, 1.0]);
+            let n = [rise[1], rise[0], 1.0];
+            let len = (n[0] * n[0] + n[1] * n[1] + 1.0f64).sqrt();
+            for k in 0..3 {
+                assert!(
+                    (up[k] - n[k] / len).abs() < 1e-6,
+                    "{rise:?} {heading}: {up:?}"
+                );
+            }
+        }
     }
 
     #[test]

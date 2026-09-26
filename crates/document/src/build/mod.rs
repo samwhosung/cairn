@@ -12,7 +12,9 @@ use crate::frame::{CENTRE, MAP_TILES, TILE, heading_of};
 use crate::install::{Install, ModelBox};
 use crate::text::two_places;
 use crate::zone::{Start, Thing, Zone};
-use place::{Cover, Doodad, Wmo, doodad_tables, wmo_tables};
+use place::{Cover, Doodad, Wmo, doodad_tables, rotation_on_ground, wmo_tables};
+
+pub use liquid::wets;
 
 /// The textures one tile can name: the client's table has no room for more.
 const MAX_TILE_TEXTURES: usize = 99;
@@ -48,7 +50,12 @@ fn record(z: &Zone, unique_id: u32, t: &Thing, b: ModelBox) -> Record {
         t.world_z(&z.heights) as f32,
         (f64::from(o.1) * TILE + p[1]) as f32,
     ];
-    let rotation = [0.0, heading_of(t.facing_deg()) as f32, 0.0];
+    let heading = heading_of(t.facing_deg());
+    let rotation = if t.lean {
+        rotation_on_ground(z.heights.rise(p), heading)
+    } else {
+        [0.0, heading as f32, 0.0]
+    };
     match t.set {
         Some(set) => Record::Wmo(Wmo {
             model: t.model.clone(),

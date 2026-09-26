@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dbc::{DbcParser, FieldType, Record, Schema, SchemaField, Value};
+pub use fits::Rules;
 use mpq::Chain;
 
+use crate::relief::{self, Source};
 use crate::zone::Borrow;
 
 /// A model's or building's box in its own space, in yards, before it is scaled and turned.
@@ -30,6 +33,11 @@ pub trait Install {
     fn has_texture(&mut self, path: &str) -> Result<bool, String>;
     /// The top-level zone called `name`, matched blind to case.
     fn zone_named(&mut self, name: &str) -> Result<Borrow, String>;
+    /// How the install places a model on its ground, as the catalog counted it; `None` for a model
+    /// it never places there, or with no catalog to ask.
+    fn rules(&mut self, model: &str) -> Result<Option<Rules>, String>;
+    /// The relief of the top-level zone called `name`.
+    fn relief(&mut self, name: &str) -> Result<Arc<Source>, String>;
 }
 
 /// The name the archives hold a model under: `.mdx` and `.mdl` are read as `.m2`.
@@ -45,26 +53,50 @@ pub fn is_building(model: &str) -> bool {
     model.to_ascii_lowercase().ends_with(".wmo")
 }
 
-/// An install's archives, opened the first time something is asked of them.
+/// An install's archives, opened the first time something is asked of them, and the catalog
+/// `cairn catalog` wrote of it, for the models' rules.
 pub struct Archives {
     data: Option<PathBuf>,
+    catalog: Option<PathBuf>,
     chain: Option<Chain>,
     boxes: BTreeMap<String, ModelBox>,
-    zones: Option<Vec<(u32, String)>>,
+    areas: Option<Areas>,
+    book: Option<fits::rules::Book>,
+    reliefs: BTreeMap<String, Arc<Source>>,
 }
 
 impl Archives {
+    /// The install at `$WOW_DATA` and the catalog at `$CAIRN_CATALOG`.
     pub fn from_env() -> Archives {
         Archives::at(std::env::var_os("WOW_DATA").map(PathBuf::from))
+            .with_catalog(std::env::var_os("CAIRN_CATALOG").map(PathBuf::from))
     }
 
     pub fn at(data: Option<PathBuf>) -> Archives {
         Archives {
             data,
+            catalog: None,
             chain: None,
             boxes: BTreeMap::new(),
-            zones: None,
+            areas: None,
+            book: None,
+            reliefs: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: Option<PathBuf>) -> Archives {
+        self.catalog = catalog;
+        self.book = None;
+        self
+    }
+
+    fn areas(&mut self) -> Result<&Areas, String> {
+        if self.areas.is_none() {
+            let bytes = self.read(AREA_TABLE)?;
+            self.areas = Some(Areas::parse(&bytes)?);
+        }
+        self.areas.as_ref().ok_or_else(|| "no areas".to_owned())
     }
 
     pub fn chain(&mut self) -> Result<&Chain, String> {
@@ -130,59 +162,114 @@ impl Install for Archives {
     }
 
     fn zone_named(&mut self, name: &str) -> Result<Borrow, String> {
-        if self.zones.is_none() {
-            let bytes = self.read(AREA_TABLE)?;
-            self.zones = Some(top_zones(&bytes)?);
+        let zone = self.areas()?.zone_named(name)?;
+        Ok(Borrow {
+            area: zone.id,
+            name: zone.name.clone(),
+        })
+    }
+
+    fn rules(&mut self, model: &str) -> Result<Option<Rules>, String> {
+        let Some(catalog) = &self.catalog else {
+            return Ok(None);
+        };
+        if self.book.is_none() {
+            self.book = Some(fits::rules::read(&catalog.join(fits::IN_CATALOG))?);
         }
-        let zones = self.zones.as_deref().unwrap_or_default();
-        zones
-            .iter()
-            .filter(|(_, n)| n.eq_ignore_ascii_case(name.trim()))
-            .min_by_key(|(id, _)| *id)
-            .map(|(area, name)| Borrow {
-                area: *area,
-                name: name.clone(),
-            })
-            .ok_or_else(|| format!("the install has no zone named {name:?}"))
+        Ok(self.book.as_ref().and_then(|b| b.of(model)))
+    }
+
+    fn relief(&mut self, name: &str) -> Result<Arc<Source>, String> {
+        let key = name.trim().to_ascii_lowercase();
+        if let Some(s) = self.reliefs.get(&key) {
+            return Ok(Arc::clone(s));
+        }
+        let zone = self.areas()?.zone_named(name)?.name.clone();
+        self.chain()?;
+        let (Some(chain), Some(areas)) = (&self.chain, &self.areas) else {
+            return Err("no install".into());
+        };
+        let source = Arc::new(Source::of(&zone, &relief::read(chain, areas, &zone)?)?);
+        self.reliefs.insert(key, Arc::clone(&source));
+        Ok(source)
     }
 }
 
 const AREA_TABLE: &str = "DBFilesClient\\AreaTable.dbc";
 const AREA_COLUMNS: usize = 25;
 const AREA_ID: usize = 0;
+const AREA_MAP: usize = 1;
 const AREA_PARENT: usize = 2;
 const AREA_NAME: usize = 11;
+const MOST_PARENTS: usize = 7;
 
-fn top_zones(bytes: &[u8]) -> Result<Vec<(u32, String)>, String> {
-    let mut schema = Schema::new("AreaTable");
-    for i in 0..AREA_COLUMNS {
-        let ty = if i == AREA_NAME {
-            FieldType::String
-        } else {
-            FieldType::UInt32
-        };
-        schema.add_field(SchemaField::new("", ty));
-    }
-    let rows = DbcParser::parse(&mut Cursor::new(bytes))
-        .and_then(|p| p.with_schema(schema))
-        .and_then(|p| p.parse_records())
-        .map_err(|e| format!("reading {AREA_TABLE}: {e}"))?;
-    let number = |r: &Record, i: usize| match r.get_value(i) {
-        Some(Value::UInt32(v)) => Some(*v),
-        _ => None,
-    };
-    Ok(rows
-        .records()
-        .iter()
-        .filter(|r| number(r, AREA_PARENT) == Some(0))
-        .filter_map(|r| {
-            let Some(Value::StringRef(name)) = r.get_value(AREA_NAME) else {
-                return None;
+/// An `AreaTable` row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Area {
+    pub id: u32,
+    pub map: u32,
+    pub parent: u32,
+    pub name: String,
+}
+
+pub struct Areas(BTreeMap<u32, Area>);
+
+impl Areas {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Areas, String> {
+        let mut schema = Schema::new("AreaTable");
+        for i in 0..AREA_COLUMNS {
+            let ty = if i == AREA_NAME {
+                FieldType::String
+            } else {
+                FieldType::UInt32
             };
-            Some((
-                number(r, AREA_ID)?,
-                rows.get_string(*name).ok()?.into_owned(),
-            ))
-        })
-        .collect())
+            schema.add_field(SchemaField::new("", ty));
+        }
+        let rows = DbcParser::parse(&mut Cursor::new(bytes))
+            .and_then(|p| p.with_schema(schema))
+            .and_then(|p| p.parse_records())
+            .map_err(|e| format!("reading {AREA_TABLE}: {e}"))?;
+        let number = |r: &Record, i: usize| match r.get_value(i) {
+            Some(Value::UInt32(v)) => Some(*v),
+            _ => None,
+        };
+        Ok(Areas(
+            rows.records()
+                .iter()
+                .filter_map(|r| {
+                    let Some(Value::StringRef(name)) = r.get_value(AREA_NAME) else {
+                        return None;
+                    };
+                    let area = Area {
+                        id: number(r, AREA_ID)?,
+                        map: number(r, AREA_MAP)?,
+                        parent: number(r, AREA_PARENT)?,
+                        name: rows.get_string(*name).ok()?.into_owned(),
+                    };
+                    Some((area.id, area))
+                })
+                .collect(),
+        ))
+    }
+
+    /// The top-level zone called `name`, matched blind to case; the lowest id of two.
+    pub fn zone_named(&self, name: &str) -> Result<&Area, String> {
+        self.0
+            .values()
+            .find(|a| a.parent == 0 && a.name.eq_ignore_ascii_case(name.trim()))
+            .ok_or_else(|| format!("the install has no zone named {name:?}"))
+    }
+
+    /// The top-level zone `area` lies in, itself for one; `None` for an area the install lacks or
+    /// one more than seven parents deep.
+    pub fn top_zone(&self, area: u32) -> Option<u32> {
+        let mut id = area;
+        for _ in 0..=MOST_PARENTS {
+            match self.0.get(&id)?.parent {
+                0 => return Some(id),
+                parent => id = parent,
+            }
+        }
+        None
+    }
 }

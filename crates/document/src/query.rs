@@ -89,8 +89,9 @@ pub fn thing_line(
         }
     });
     let set = t.set.map_or(String::new(), |s| format!(" set {s}"));
+    let lean = if t.lean { " leaning" } else { "" };
     format!(
-        "{id}  {rel}at {},{} z {}  facing {} ({})  scale {}{set}  {size}  {}  {}",
+        "{id}  {rel}at {},{} z {}  facing {} ({})  scale {}{set}{lean}  {size}  {}  {}",
         from_centi(t.x),
         from_centi(t.y),
         two_places(t.world_z(&z.heights)),

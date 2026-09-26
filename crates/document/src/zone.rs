@@ -109,11 +109,26 @@ impl Heights {
         l1 * c[2] + l2 * a[2] + l3 * b[2]
     }
 
-    /// The slope at a point in degrees, from the ground a yard to each side.
+    /// How far the ground rises over a yard east and a yard south at a point, from the corners of
+    /// the cell holding it; at a cell's middle, the cell's own slope.
+    pub fn rise(&self, p: [f64; 2]) -> [f64; 2] {
+        let (u, v) = (p[0] / CELL, p[1] / CELL);
+        let ci = (u.floor().max(0.0) as usize).min(self.cols - 1);
+        let cj = (v.floor().max(0.0) as usize).min(self.rows - 1);
+        let (fu, fv) = (
+            (u - ci as f64).clamp(0.0, 1.0),
+            (v - cj as f64).clamp(0.0, 1.0),
+        );
+        let h = |i: usize, j: usize| f64::from(self.outer(ci + i, cj + j));
+        let east = ((h(1, 0) - h(0, 0)) * (1.0 - fv) + (h(1, 1) - h(0, 1)) * fv) / CELL;
+        let south = ((h(0, 1) - h(0, 0)) * (1.0 - fu) + (h(1, 1) - h(1, 0)) * fu) / CELL;
+        [east, south]
+    }
+
+    /// The slope at a point in degrees, of [`Heights::rise`].
     pub fn slope(&self, p: [f64; 2]) -> f64 {
-        let gx = (self.ground([p[0] + 1.0, p[1]]) - self.ground([p[0] - 1.0, p[1]])) / 2.0;
-        let gy = (self.ground([p[0], p[1] + 1.0]) - self.ground([p[0], p[1] - 1.0])) / 2.0;
-        libm::atan((gx * gx + gy * gy).sqrt()).to_degrees()
+        let [east, south] = self.rise(p);
+        libm::atan(east.hypot(south)).to_degrees()
     }
 }
 
@@ -163,6 +178,10 @@ pub struct Thing {
     pub scale: u16,
     /// A building's doodad set, shown beside set 0; `None` for a model.
     pub set: Option<u16>,
+    /// Tilted as the ground under it is, rather than upright.
+    pub lean: bool,
+    /// The seed of the scatter that placed it; `None` once placed or moved by hand.
+    pub scattered: Option<u64>,
 }
 
 impl Thing {
@@ -364,6 +383,26 @@ mod tests {
         let k = h.outer.len() + 3;
         let p = h.point(k);
         assert!((p[0] - 1.5 * CELL).abs() < 1e-9 && (p[1] - 1.5 * CELL).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_slope_is_the_cells_from_its_corners() {
+        let mut h = Heights::flat(3, 3, 0.0);
+        let rise = libm::tan(30f64.to_radians());
+        for j in 0..=3 {
+            for i in 0..=3 {
+                h.outer[j * 4 + i] = (i as f64 * CELL * rise) as f32;
+            }
+        }
+        h.inner[4] = 50.0;
+        for p in [
+            [0.2 * CELL, 1.5 * CELL],
+            [1.5 * CELL, 1.5 * CELL],
+            [2.9 * CELL, 0.1],
+        ] {
+            assert!((h.slope(p) - 30.0).abs() < 1e-4, "{p:?}: {}", h.slope(p));
+            assert!(h.rise(p)[1].abs() < 1e-9);
+        }
     }
 
     #[test]

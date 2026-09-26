@@ -2,25 +2,31 @@
 //! what `cairn zone` takes. Every value is printed as it was typed, so a command read back from
 //! its text is the same command.
 
+mod scatter;
+
 use std::fmt;
 
 use crate::frame::{MAP_TILES, MAX_ZONE_TILES};
 use crate::grammar::{Args, area, brush, check_word, join, point};
+use crate::mask::{self, Mask, Span};
 use crate::shape::Shape;
 use crate::text::{number, parse_id};
 use crate::zone::Id;
+
+pub use scatter::{PerModel, Scatter};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     New(New),
     Set(Set),
     Ground(Ground),
-    Paint(Paint),
+    Paint(Box<Paint>),
     Texture { path: String, effect: u32 },
     Place(Place),
     Move(Move),
     Remove(Vec<Id>),
-    Scatter(Scatter),
+    Scatter(Box<Scatter>),
+    Relief(Relief),
     Water { level: f64, area: Shape },
     Dry(Vec<Id>),
 }
@@ -77,11 +83,24 @@ pub struct Ground {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Paint {
     pub texture: String,
-    pub brush: Shape,
+    pub area: Shape,
     pub falloff: f64,
     pub strength: f64,
     /// Where a chunk already blends four textures, drop its least used other one first.
     pub make_room: bool,
+    pub slope: Option<Span>,
+    pub mask: Mask,
+}
+
+/// The relief of the install's zone `zone`, its ground less its own smoothed shape, laid onto an
+/// area in blended patches.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relief {
+    pub zone: String,
+    pub area: Shape,
+    pub falloff: f64,
+    pub strength: f64,
+    pub seed: u64,
 }
 
 /// How high a thing stands: above the ground under it, or at a world height, in yards.
@@ -99,6 +118,7 @@ pub struct Place {
     pub scale: f64,
     pub z: Height,
     pub set: Option<u16>,
+    pub lean: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,18 +130,7 @@ pub struct Move {
     pub scale: Option<f64>,
     pub z: Option<Height>,
     pub set: Option<u16>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Scatter {
-    pub models: Vec<String>,
-    pub area: Shape,
-    pub count: usize,
-    pub apart: f64,
-    pub scale: (f64, f64),
-    /// A fixed facing, or `None` for any.
-    pub facing: Option<f64>,
-    pub seed: u64,
+    pub lean: Option<bool>,
 }
 
 const BRUSH: [&str; 5] = ["at", "radius", "line", "width", "falloff"];
@@ -150,20 +159,29 @@ impl Command {
             }
             "raise" | "lower" | "flatten" | "smooth" | "roughen" => ground_command(verb, &a),
             "paint" => {
-                with(&[&BRUSH, &["strength", "make-room"]])?;
+                with(&[
+                    &AREA,
+                    &["falloff", "strength", "make-room", "slope"],
+                    &mask::FLAGS,
+                ])?;
                 let strength = a.num("strength")?.unwrap_or(1.0);
                 if !(0.0..=1.0).contains(&strength) {
                     return Err("--strength is 0 to 1".into());
                 }
-                Ok(Command::Paint(Paint {
+                Ok(Command::Paint(Box::new(Paint {
                     texture: a
                         .first("which texture? `paint PATH --at X,Y --radius R`")?
                         .to_owned(),
-                    brush: brush(&a)?,
+                    area: area(&a)?,
                     falloff: falloff_of(&a)?,
                     strength,
                     make_room: a.has("make-room"),
-                }))
+                    slope: a
+                        .one("slope")?
+                        .map(|s| Span::parse(s, "--slope"))
+                        .transpose()?,
+                    mask: Mask::parse(&a)?,
+                })))
             }
             "texture" => {
                 with(&[&["effect"]])?;
@@ -179,11 +197,11 @@ impl Command {
                 })
             }
             "place" => {
-                with(&[&["facing", "scale", "dz", "z", "set"]])?;
+                with(&[&["facing", "scale", "dz", "z", "set", "stands"]])?;
                 place(&a).map(Command::Place)
             }
             "move" => {
-                with(&[&["facing", "turn", "scale", "dz", "z", "set"]])?;
+                with(&[&["facing", "turn", "scale", "dz", "z", "set", "stands"]])?;
                 shift(&a, author).map(Command::Move)
             }
             "remove" => {
@@ -191,11 +209,12 @@ impl Command {
                 ids(&a.pos, author, "which things? `remove ID ...`").map(Command::Remove)
             }
             "scatter" => {
-                with(&[
-                    &AREA,
-                    &["models", "count", "apart", "scale", "facing", "seed"],
-                ])?;
-                scatter(&a).map(Command::Scatter)
+                a.allow_only(&scatter::allowed())?;
+                scatter::parse(&a).map(|s| Command::Scatter(Box::new(s)))
+            }
+            "relief" => {
+                with(&[&AREA, &["falloff", "strength", "seed"]])?;
+                relief(&a).map(Command::Relief)
             }
             "water" => {
                 with(&[&AREA, &["remove"]])?;
@@ -243,12 +262,16 @@ impl Command {
             Command::Paint(p) => {
                 w.word("paint");
                 w.word(&p.texture);
-                w.shape(&p.brush);
+                w.shape(&p.area);
                 w.num_flag("falloff", p.falloff);
                 w.num_flag("strength", p.strength);
                 if p.make_room {
                     w.flag("make-room", []);
                 }
+                if let Some(s) = p.slope {
+                    w.flag("slope", [s.text()]);
+                }
+                p.mask.words(&mut w);
             }
             Command::Texture { path, effect } => {
                 w.word("texture");
@@ -265,6 +288,9 @@ impl Command {
                 if let Some(s) = p.set {
                     w.flag("set", [s.to_string()]);
                 }
+                if p.lean {
+                    w.flag("stands", [scatter::stands_text(true)]);
+                }
             }
             Command::Move(m) => move_words(&mut w, m),
             Command::Remove(ids) => {
@@ -273,7 +299,15 @@ impl Command {
                     w.word(&id.to_string());
                 }
             }
-            Command::Scatter(s) => scatter_words(&mut w, s),
+            Command::Scatter(s) => scatter::words(&mut w, s),
+            Command::Relief(r) => {
+                w.word("relief");
+                w.word(&r.zone);
+                w.shape(&r.area);
+                w.num_flag("falloff", r.falloff);
+                w.num_flag("strength", r.strength);
+                w.flag("seed", [r.seed.to_string()]);
+            }
             Command::Water { level, area } => {
                 w.word("water");
                 w.word(&level.to_string());
@@ -295,19 +329,19 @@ impl fmt::Display for Command {
 }
 
 #[derive(Default)]
-struct Words(Vec<String>);
+pub(crate) struct Words(pub(crate) Vec<String>);
 
 impl Words {
     fn word(&mut self, s: &str) {
         self.0.push(s.to_owned());
     }
 
-    fn flag(&mut self, name: &str, values: impl IntoIterator<Item = String>) {
+    pub(crate) fn flag(&mut self, name: &str, values: impl IntoIterator<Item = String>) {
         self.0.push(format!("--{name}"));
         self.0.extend(values);
     }
 
-    fn num_flag(&mut self, name: &str, v: f64) {
+    pub(crate) fn num_flag(&mut self, name: &str, v: f64) {
         self.flag(name, [v.to_string()]);
     }
 
@@ -362,24 +396,9 @@ fn move_words(w: &mut Words, m: &Move) {
     if let Some(s) = m.set {
         w.flag("set", [s.to_string()]);
     }
-}
-
-fn scatter_words(w: &mut Words, s: &Scatter) {
-    w.word("scatter");
-    w.flag("models", s.models.iter().cloned());
-    w.shape(&s.area);
-    w.flag("count", [s.count.to_string()]);
-    w.num_flag("apart", s.apart);
-    let scale = if s.scale.0.to_bits() == s.scale.1.to_bits() {
-        s.scale.0.to_string()
-    } else {
-        format!("{}..{}", s.scale.0, s.scale.1)
-    };
-    w.flag("scale", [scale]);
-    if let Some(f) = s.facing {
-        w.num_flag("facing", f);
+    if let Some(l) = m.lean {
+        w.flag("stands", [scatter::stands_text(l)]);
     }
-    w.flag("seed", [s.seed.to_string()]);
 }
 
 fn ground_words(w: &mut Words, g: &Ground) {
@@ -585,12 +604,20 @@ fn set_of(a: &Args) -> Result<Option<u16>, String> {
     a.num("set").map(|s| s.map(|s| s as u16))
 }
 
+fn stands_of(a: &Args) -> Result<Option<bool>, String> {
+    a.one("stands")?.map(scatter::stands).transpose()
+}
+
 fn place(a: &Args) -> Result<Place, String> {
     let model = a.first("which model? `place PATH X,Y`")?.to_owned();
     let at = point(a.pos.get(1).ok_or("where? `place PATH X,Y`")?)?;
     let building = model.to_ascii_lowercase().ends_with(".wmo");
     if !building && a.has("set") {
         return Err("--set is a building's doodad set".into());
+    }
+    let lean = stands_of(a)?.unwrap_or(false);
+    if building && lean {
+        return Err("a building stands upright".into());
     }
     Ok(Place {
         at,
@@ -602,6 +629,7 @@ fn place(a: &Args) -> Result<Place, String> {
         } else {
             None
         },
+        lean,
         model,
     })
 }
@@ -616,36 +644,23 @@ fn shift(a: &Args, author: &str) -> Result<Move, String> {
         scale: a.num("scale")?,
         z: height_of(a)?,
         set: set_of(a)?,
+        lean: stands_of(a)?,
     })
 }
 
-fn scatter(a: &Args) -> Result<Scatter, String> {
-    let models: Vec<String> = a
-        .words("models")
-        .ok_or("--models A B ...: the models to spread")?
-        .iter()
-        .flat_map(|s| s.split(',').map(str::to_owned))
-        .filter(|s| !s.is_empty())
-        .collect();
-    if models.is_empty() {
-        return Err("scatter needs at least one model".into());
+fn relief(a: &Args) -> Result<Relief, String> {
+    if a.pos.is_empty() {
+        return Err("whose relief? `relief ZONE AREA`, the install's zone by name".into());
     }
-    let scale = match a.one("scale")? {
-        Some(s) => match s.split_once("..") {
-            Some((lo, hi)) => (number(lo, "--scale")?, number(hi, "--scale")?),
-            None => (number(s, "--scale")?, number(s, "--scale")?),
-        },
-        None => (1.0, 1.0),
-    };
-    Ok(Scatter {
-        models,
+    let strength = a.num("strength")?.unwrap_or(1.0);
+    if !(0.0..=4.0).contains(&strength) {
+        return Err("--strength is 0 to 4".into());
+    }
+    Ok(Relief {
+        zone: a.pos.join(" "),
         area: area(a)?,
-        count: a.num("count")?.ok_or("--count N: how many")? as usize,
-        apart: a
-            .num("apart")?
-            .ok_or("--apart D: no two closer than D yards")?,
-        scale,
-        facing: a.num("facing")?,
+        falloff: falloff_of(a)?,
+        strength,
         seed: a.num("seed")?.unwrap_or(0.0) as u64,
     })
 }
@@ -691,6 +706,11 @@ mod tests {
             "move 12 372,297 --turn -45 --dz -0.4",
             "remove sam.1 ai.2 3",
             "scatter --models A.m2,B.m2 C.m2 --poly 12,135 150,148 165,258 --count 240 --apart 9 --scale 1.3..2.6 --seed 1",
+            "scatter --models A.m2 B.m2 --rect 0,0 50,50 --count 9 --apart 2.6 30 --scale 0.8..1.2 1 --slope 0..47 3.. --stands upright leaning --water 1.5.. --off Tileset\\Road.blp --soft 2",
+            "paint Tileset\\Rock.blp --at 200,200 --radius 250 --falloff 0 --slope 35..90 --height ..140 --on A.blp B.blp --soft 4",
+            "relief Redridge Mountains --rect 0,0 533.33,533.33 --strength 0.5 --seed 2",
+            "place A.m2 1,2 --stands leaning",
+            "move 7 --stands upright",
             "water 40 --rect 291,84 315,99",
             "water --remove 7 ai.8",
         ];
@@ -709,5 +729,9 @@ mod tests {
         assert!(err("flatten --at 1,1 --radius 2").is_some_and(|e| e.contains("what height")));
         assert!(err("paint A --at 1,1 --radius 2 --radius 3").is_some());
         assert!(err("jump").is_some());
+        assert!(err("scatter --models A B C --at 1,1 --radius 9 --count 2 --apart 1 2").is_some());
+        assert!(err("paint A --at 1,1 --radius 2 --slope 40..30").is_some());
+        assert!(err("place A.wmo 1,1 --stands leaning").is_some());
+        assert!(err("relief --at 1,1 --radius 9").is_some());
     }
 }
