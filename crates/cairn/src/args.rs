@@ -8,7 +8,7 @@ use world::TimeOfDay;
 
 use crate::fixture::Fixture;
 use crate::shot::DEFAULT_WORLD_AGE;
-use crate::view::Pose;
+use crate::view::Aim;
 
 const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 
@@ -37,6 +37,11 @@ usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no
          size (1 by default), and shoot it S seconds (2.5 by default) after it appears, from
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
+       cairn view [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no-glow]
+                  [--age S] [--patch DIR]
+         load the place once, age it as a shot does, then answer commands from standard
+         input, one a line, each with a line on standard output: `ready` first, then `ok`
+         or `error:` for each command (VIEWING below)
        cairn atlas ZONE [--map MAP] [--yd N] [--mark X,Y]... [--patch DIR] --out FILE.png
        cairn atlas --zone DIR [--yd N] [--mark X,Y]... --out FILE.png
          draw the AreaTable zone ZONE from above, north up, N yards a pixel (2 by default),
@@ -79,6 +84,27 @@ CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
   --at X,Y,Z --az DEG --el DEG --dist YD  look at the point from DIST away: AZ 0 looks
                                           north, 90 west; EL is the height angle above it
 Without one, the camera looks north over Northshire. --size defaults to 1600x900.
+
+VIEWING, the viewer's commands; yards and degrees:
+  look CAMERA           look from the camera, given as a shot's flags give it
+  move forward|back|left|right|up|down YD ...     along the view, across it, straight up
+  turn left|right|up|down DEG ...                 where it stands
+  orbit left|right|up|down DEG | in|out YD ...    round the point it looks at
+  where                 the camera, as the flags that give it again to the last bit
+  shot FILE.png [--size WxH] [--cut-to X,Y,Z] [--cut-near YD] [--leave-out ID,...] [--seen]
+         shoot as `cairn shot` does, at the viewer's --size unless given, once everything
+         the camera sees has arrived; when the camera has moved since the world last ran,
+         the world runs S seconds more first, so a shot from where the last one stood is
+         the same picture again. --cut-to leaves out every placed model that sight lines from the camera to within
+         2 yd of the point meet short of it, but one whose box holds the point; --cut-near
+         leaves out those whose boxes come within YD of the camera; --leave-out those with
+         these unique ids. What they emit, light and water stays. --seen writes FILE.txt
+         beside it: the placements the frame shows, by unique id, with the share of the
+         frame each covers and the box of pixels it lies in, and FILE.ids.png, the frame
+         with each pixel in the colour the list gives its placement. A model covers a pixel
+         where it is the nearest thing drawn: a see-through part where at least half of it
+         shows, and never a part that only lights or shades what lies behind
+  quit                  or the end of the input
 
 LOOK, the character walked as: --race human|orc|dwarf|nightelf|undead|tauren|gnome|troll
 (or 1..8), --sex male|female, and --skin, --face, --hair, --hair-color, --facial-hair,
@@ -145,7 +171,7 @@ const DEFAULT_PORT: u16 = 7777;
 
 #[derive(Debug, PartialEq)]
 pub struct Args {
-    pub pose: Option<Pose>,
+    pub aim: Option<Aim>,
     pub size: UVec2,
     pub map: Map,
     pub time: TimeOfDay,
@@ -236,11 +262,16 @@ impl Look {
 pub enum Mode {
     Window(Joining),
     Shot(PathBuf),
+    /// Commands from standard input, one a line, each answered on a line of standard output.
+    View,
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut args = args.into_iter().peekable();
-    let shot = args.next_if(|arg| arg == "shot").is_some();
+    let verb = args.next_if(|arg| arg == "shot" || arg == "view");
+    let shot = verb.as_deref() == Some("shot");
+    let view = verb.as_deref() == Some("view");
+    let headless = shot || view;
     let mut given = BTreeMap::new();
     let mut start_flying = false;
     let mut glow = true;
@@ -287,11 +318,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--out is for a shot: cairn shot ...".into()
         });
     }
-    if shot && start_flying {
-        return Err("--fly is for the window".into());
-    }
-    if shot && mute {
-        return Err("--mute is for the window".into());
+    if headless && (start_flying || mute) {
+        let flag = if start_flying { "fly" } else { "mute" };
+        return Err(format!("--{flag} is for the window"));
     }
     if let Some(path) = &out
         && !path
@@ -302,14 +331,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     }
     let display = display(&mut given, shot)?;
     let world_age = match given.remove("age") {
-        Some(_) if !shot => return Err("--age is for a shot".into()),
+        Some(_) if !headless => return Err("--age is for a shot or the viewer".into()),
         Some(age) => Duration::try_from_secs_f32(parse_number("age", &age)?)
             .map_err(|_| format!("--age wants seconds from 0, not {age}"))?,
         None => DEFAULT_WORLD_AGE,
     };
-    let look = look(&mut given, shot)?;
+    let look = look(&mut given, headless)?;
     let notes = given.remove("notes").map(PathBuf::from);
-    if shot && notes.is_some() {
+    if headless && notes.is_some() {
         return Err("--notes is for the window".into());
     }
     let mode = match out {
@@ -317,10 +346,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             shot_joins_nothing(&given, host)?;
             Mode::Shot(path)
         }
+        None if view => {
+            shot_joins_nothing(&given, host)?;
+            Mode::View
+        }
         None => Mode::Window(join(&mut given, host, look)?),
     };
     Ok(Args {
-        pose: pose(&given)?,
+        aim: aim(&given)?,
         size,
         map,
         time,
@@ -425,7 +458,7 @@ fn join(
     }
 }
 
-fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String> {
+fn look(given: &mut BTreeMap<String, String>, headless: bool) -> Result<Look, String> {
     let mut look = Look::default();
     let flags = [
         "race",
@@ -436,7 +469,7 @@ fn look(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Look, String
         "hair-color",
         "facial-hair",
     ];
-    if shot && let Some(flag) = flags.iter().find(|f| given.contains_key(**f)) {
+    if headless && let Some(flag) = flags.iter().find(|f| given.contains_key(**f)) {
         return Err(format!("--{flag} is for the window"));
     }
     if let Some(race) = given.remove("race") {
@@ -533,33 +566,60 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
     }))
 }
 
-fn pose(given: &BTreeMap<String, String>) -> Result<Option<Pose>, String> {
+/// A camera from its flags alone.
+pub(crate) fn parse_aim(words: &[&str]) -> Result<Aim, String> {
+    let mut given = BTreeMap::new();
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        let flag = word
+            .strip_prefix("--")
+            .filter(|f| ["eye", "look", "at", "az", "el", "dist"].contains(f))
+            .ok_or_else(|| format!("{word} is not a camera's flag"))?;
+        let value = words
+            .next()
+            .ok_or_else(|| format!("{word} needs a value"))?;
+        if given.insert(flag.to_owned(), (*value).to_owned()).is_some() {
+            return Err(format!("{word} is given twice"));
+        }
+    }
+    aim(&given)?.ok_or_else(|| {
+        "give the camera as --eye and --look, or as --at, --az, --el and --dist".into()
+    })
+}
+
+fn aim(given: &BTreeMap<String, String>) -> Result<Option<Aim>, String> {
     let triple = |flag: &str| parse_triple(flag, &given[flag]);
     let number = |flag: &str| parse_number(flag, &given[flag]);
     match given.keys().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => Ok(None),
         ["eye", "look"] => {
-            let (eye, look) = (triple("eye")?, triple("look")?);
-            if eye == look {
+            let (eye, at) = (triple("eye")?, triple("look")?);
+            if eye == at {
                 return Err("--eye and --look are the same point".into());
             }
-            Ok(Some(Pose::look(eye, look)))
+            Ok(Some(Aim::Look { eye, at }))
         }
         ["at", "az", "dist", "el"] => {
-            let (dist, el) = (number("dist")?, number("el")?);
+            let (dist, el_deg) = (number("dist")?, number("el")?);
             if dist <= 0.0 {
                 return Err("--dist must be above 0".into());
             }
-            if el.abs() > 90.0 {
+            if el_deg.abs() > 90.0 {
                 return Err("--el must lie within -90..90".into());
             }
-            Ok(Some(Pose::orbit(triple("at")?, number("az")?, el, dist)))
+            let (at, az_deg) = (triple("at")?, number("az")?);
+            Ok(Some(Aim::Orbit {
+                at,
+                az_deg,
+                el_deg,
+                dist,
+            }))
         }
         _ => Err("give the camera as --eye and --look, or as --at, --az, --el and --dist".into()),
     }
 }
 
-fn parse_number(flag: &str, value: &str) -> Result<f32, String> {
+pub(crate) fn parse_number(flag: &str, value: &str) -> Result<f32, String> {
     value
         .trim()
         .parse::<f32>()
@@ -568,7 +628,7 @@ fn parse_number(flag: &str, value: &str) -> Result<f32, String> {
         .ok_or_else(|| format!("--{flag} wants a number, not {value}"))
 }
 
-fn parse_triple(flag: &str, value: &str) -> Result<Vec3, String> {
+pub(crate) fn parse_triple(flag: &str, value: &str) -> Result<Vec3, String> {
     let numbers: Vec<f32> = value
         .split(',')
         .map(|part| parse_number(flag, part))
@@ -588,7 +648,7 @@ fn parse_time(value: &str) -> Result<TimeOfDay, String> {
         .ok_or_else(|| format!("--time wants HH:MM, 00:00 to 23:59, not {value}"))
 }
 
-fn parse_size(value: &str) -> Result<UVec2, String> {
+pub(crate) fn parse_size(value: &str) -> Result<UVec2, String> {
     let side = |s: &str| s.parse::<u32>().ok().filter(|n| (1..=MAX_SIDE).contains(n));
     value
         .split_once('x')

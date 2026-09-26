@@ -20,7 +20,7 @@ use world::collision::CollisionResidency;
 use crate::fixture::FRAME_STEP;
 use crate::view::{Pose, camera};
 
-const IDENTICAL_CAPTURES: u32 = 3;
+pub(crate) const IDENTICAL_CAPTURES: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_WORLD_AGE: Duration = Duration::from_millis(2500);
 

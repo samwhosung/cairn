@@ -345,7 +345,7 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     let feet = Vec3::from(bevy_to_wow(p.app.world().resource::<Player>().pos));
     let walk = note.line("walk there: cairn ").split_whitespace();
     let stands = args::parse(walk.map(str::to_owned)).expect("the window takes them");
-    let stands = stands.pose.expect("a camera");
+    let stands = stands.aim.expect("a camera").pose();
     let (above, aside) = (
         stands.target.z - feet.z,
         stands.target.truncate() - feet.truncate(),

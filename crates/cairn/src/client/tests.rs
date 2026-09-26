@@ -20,7 +20,7 @@ use crate::args;
 use crate::net::{self, Net, OtherPlayer};
 use crate::player::PlayerBody;
 use crate::player::state::Player;
-use crate::view::Pose;
+use crate::view::Aim;
 
 const FIRST_FRAMES: usize = 3;
 
@@ -45,7 +45,7 @@ fn assembled(argv: &str) -> Result<App, String> {
         borrowed: None,
     };
     let mut app = App::new();
-    let start = Pose::human_start();
+    let start = Aim::human_start();
     assemble(&mut app, args, &install, map, start, without_a_window).map_err(|e| e.to_string())?;
     Ok(app)
 }
@@ -83,6 +83,7 @@ fn the_client_starts_in_every_mode() {
         "--fly --mute",
         "shot --out a.png",
         "shot --display 1 --out a.png",
+        "view --size 64x36",
     ] {
         let mut app = client(argv);
         let failures = schedule_build_failures(&mut app);
@@ -142,7 +143,7 @@ fn plays_through_its_server(app: &mut App) -> Result<server::Summary, String> {
     if !frames_until(app, welcomed) {
         return Err("no welcome".into());
     }
-    let pose = Pose::human_start();
+    let pose = Aim::human_start().pose();
     let player = app.world().resource::<Player>();
     let placed = (player.pos, player.face_yaw);
     if placed != (wow_to_bevy(pose.target.to_array()), pose.heading) {

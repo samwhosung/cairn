@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::HUMAN_START;
+use crate::view::{HUMAN_START, Pose};
 
 fn parsed(line: &str) -> Result<Args, String> {
     parse(line.split_whitespace().map(str::to_owned))
@@ -23,11 +23,11 @@ fn a_bare_command_walks_northshire() {
     };
     assert_eq!(args.mode, Mode::Window(alone));
     assert!(!args.start_flying);
-    assert_eq!(args.pose, None, "the map's own start");
-    assert_eq!(Pose::human_start().target, HUMAN_START);
+    assert_eq!(args.aim, None, "the map's own start");
+    assert_eq!(Aim::human_start().pose().target, HUMAN_START);
     assert_eq!(args.size, DEFAULT_SIZE);
     assert_eq!(
-        Pose::human_start(),
+        Aim::human_start().pose(),
         Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0)
     );
     assert_eq!((args.map, args.time.minute), (install("Azeroth"), 720));
@@ -46,13 +46,16 @@ fn a_shot_takes_either_camera_form() {
     let orbit = parsed("shot --at 1,2,3 --az 90 --el 30 --dist 10 --out a/b.png --size 64x32")
         .expect("parses");
     assert_eq!(
-        orbit.pose,
+        orbit.aim.map(Aim::pose),
         Some(Pose::orbit(Vec3::new(1.0, 2.0, 3.0), 90.0, 30.0, 10.0))
     );
     assert_eq!(orbit.size, UVec2::new(64, 32));
     assert_eq!(orbit.mode, Mode::Shot(PathBuf::from("a/b.png")));
     let look = parsed("shot --out x.PNG --look 1,0,0 --eye 0,0,0").expect("parses");
-    assert_eq!(look.pose, Some(Pose::look(Vec3::ZERO, Vec3::X)));
+    assert_eq!(
+        look.aim.map(Aim::pose),
+        Some(Pose::look(Vec3::ZERO, Vec3::X))
+    );
 }
 
 #[test]
@@ -106,7 +109,7 @@ fn the_walker_is_a_human_male_unless_told() {
 fn a_window_joins_alone_by_address_or_hosting_on_a_port_as_its_race_unless_named() {
     let joining = |line: &str| match parsed(line).expect("parses").mode {
         Mode::Window(joining) => Some(joining),
-        Mode::Shot(_) => None,
+        Mode::Shot(_) | Mode::View => None,
     };
     let as_ = |how, name: &str| {
         Some(Joining {
@@ -137,7 +140,7 @@ fn a_window_joins_alone_by_address_or_hosting_on_a_port_as_its_race_unless_named
 fn a_window_that_serves_itself_may_run_a_game_on_knobs_it_names() {
     let game = |line: &str| match parsed(line).expect("parses").mode {
         Mode::Window(joining) => joining.game,
-        Mode::Shot(_) => None,
+        Mode::Shot(_) | Mode::View => None,
     };
     assert_eq!(game(""), None);
     assert_eq!(
@@ -161,7 +164,7 @@ fn a_window_that_serves_itself_may_run_a_game_on_knobs_it_names() {
 fn a_window_keeps_its_own_world_where_it_is_told() {
     let world = |line: &str| match parsed(line).expect("parses").mode {
         Mode::Window(joining) => joining.world,
-        Mode::Shot(_) => None,
+        Mode::Shot(_) | Mode::View => None,
     };
     assert_eq!(world("--host"), None, "the default is the binary's to give");
     assert_eq!(world("--world a.sqlite"), Some(PathBuf::from("a.sqlite")));
@@ -203,11 +206,11 @@ fn the_window_and_the_shot_alike_open_a_zone_of_its_own_in_place_of_a_map() {
     for line in ["--zone a/b --fly", "shot --zone a/b --out a.png"] {
         let args = parsed(line).expect("parses");
         assert_eq!(args.map, Map::Zone(PathBuf::from("a/b")), "{line}");
-        assert_eq!(args.pose, None, "{line}: the zone's own start");
+        assert_eq!(args.aim, None, "{line}: the zone's own start");
     }
     let args = parsed("--zone a --at 1,2,3 --az 0 --el 10 --dist 5").expect("parses");
     assert_eq!(
-        args.pose,
+        args.aim.map(Aim::pose),
         Some(Pose::orbit(Vec3::new(1.0, 2.0, 3.0), 0.0, 10.0, 5.0))
     );
     for wrong in [
@@ -227,6 +230,40 @@ fn a_shot_ages_its_world_two_and_a_half_seconds_unless_told() {
     assert_eq!(age("shot --out a.png"), Duration::from_millis(2500));
     assert_eq!(age("shot --age 0 --out a.png"), Duration::ZERO);
     assert_eq!(age("shot --age 4 --out a.png"), Duration::from_secs(4));
+}
+
+#[test]
+fn the_viewer_takes_a_shots_place_camera_size_and_age_and_nothing_of_the_windows() {
+    let args = parsed("view --zone a/b --eye 1,2,3 --look 4,5,6 --size 64x36 --age 0 --no-glow")
+        .expect("parses");
+    assert_eq!(args.mode, Mode::View);
+    assert_eq!(args.map, Map::Zone(PathBuf::from("a/b")));
+    assert_eq!(
+        args.aim,
+        Some(Aim::Look {
+            eye: Vec3::new(1.0, 2.0, 3.0),
+            at: Vec3::new(4.0, 5.0, 6.0)
+        })
+    );
+    assert_eq!(
+        (args.size, args.world_age),
+        (UVec2::new(64, 36), Duration::ZERO)
+    );
+    assert!(!args.glow);
+    assert_eq!(parsed("view").expect("parses").world_age, DEFAULT_WORLD_AGE);
+    for wrong in [
+        "view --out a.png",
+        "view --fly",
+        "view --mute",
+        "view --display 1",
+        "view --race orc",
+        "view --host",
+        "view --connect 127.0.0.1:7000",
+        "view --game melee",
+        "view --notes a",
+    ] {
+        assert!(parsed(wrong).is_err(), "{wrong}");
+    }
 }
 
 #[test]

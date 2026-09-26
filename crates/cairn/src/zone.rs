@@ -11,7 +11,7 @@ use light::LightCatalog;
 use terrain::CHUNK_SIZE;
 use world::{Borrowed, CurrentMap, Install};
 
-use crate::view::Pose;
+use crate::view::Aim;
 
 pub const FILE: &str = "zone.txt";
 const KEYS: [&str; 4] = ["name", "start", "facing", "borrows"];
@@ -44,8 +44,8 @@ impl Zone {
         parse(root, &text)
     }
 
-    pub fn start(&self) -> Pose {
-        Pose::start(self.feet_wow, self.facing_deg)
+    pub fn start(&self) -> Aim {
+        Aim::start(self.feet_wow, self.facing_deg)
     }
 
     pub fn open(&self, patched: &Install) -> Result<CurrentMap, String> {

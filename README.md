@@ -12,12 +12,12 @@ loot, quests and every other rule belong to the games built on it.
 **Status:** early. `WOW_DATA=<your install>/Data cargo run -p cairn` walks a character through the
 world as the client walks, swims and collides, lit by the hour under its sky and heard as the
 client hears it; `-- --help` shows the controls, the looks, the maps, the cameras, the headless
-shot, the atlas, which draws a zone from above, and the catalog, which lays the install's ground
-textures, doodads, buildings and zones out in a git-ignored directory for an agent to search and
-look through. `--host` serves the world from the window for others to `--connect` to, and the
-`server` and `bots` crates serve it alone and walk a crowd against it; `cargo run -p bots --
-scenario FILE` runs one of `crates/bots/scenarios` headless on the server's clock and prints its
-verdict.
+shot, the viewer that stays open for shot after shot, the atlas, which draws a zone from above,
+and the catalog, which lays the install's ground textures, doodads, buildings and zones out in a
+git-ignored directory for an agent to search and look through. `--host` serves the world from the
+window for others to `--connect` to, and the `server` and `bots` crates serve it alone and walk a
+crowd against it; `cargo run -p bots -- scenario FILE` runs one of `crates/bots/scenarios` headless
+on the server's clock and prints its verdict.
 
 ## Working on it
 
@@ -34,7 +34,7 @@ gates enforce the rest.
 - [`atlas`](crates/atlas) — Draws a zone of World of Warcraft 1.12.1 from above: the ground in its textures' colours, hill shading and water, and doodads and buildings as marks
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`bots`](crates/bots) — Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict
-- [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, draws a zone of it from above, or writes a catalog of its assets
+- [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, renders shots of it to PNG files, alone or from a viewer that stays open, draws a zone of it from above, or writes a catalog of its assets
 - [`catalog`](crates/catalog) — The games cairn carries, looked up by name for the server, the client and the bots
 - [`character`](crates/character) — World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns

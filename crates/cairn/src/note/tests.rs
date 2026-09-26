@@ -148,9 +148,9 @@ fn the_flags_a_note_gives_are_taken_by_the_shot_and_the_window_alike() {
     };
     let shot = flags("see it: cairn ").expect("the shot takes them");
     let window = flags("walk there: cairn ").expect("the window takes them");
-    assert_eq!(shot.pose, window.pose);
+    assert_eq!(shot.aim, window.aim);
     let [eye, look] = [facts().eye_wow, LOOK].map(Vec3::from_array);
-    let pose = shot.pose.expect("a camera");
+    let pose = shot.aim.expect("a camera").pose();
     assert_eq!((pose.eye, pose.target), (eye, look));
     assert_eq!(
         (shot.size, window.size),

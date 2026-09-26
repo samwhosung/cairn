@@ -33,7 +33,7 @@ use crate::player::flags::FALLING;
 use crate::player::state::Player;
 use crate::player::{Mode, PlayerBody, PlayerPlugin, Teleported};
 use crate::shot::{Pipelines, headless_plugins, watch_pipelines, write_png};
-use crate::view::Pose;
+use crate::view::{Aim, Pose};
 
 pub(super) const STEP: Duration = Duration::from_nanos(16_666_667);
 pub(super) const SIZE: UVec2 = UVec2::new(1280, 720);
@@ -159,7 +159,7 @@ impl Painter {
             name: "Azeroth".into(),
             patch: None,
         };
-        let pose = Pose::start(Vec3::from_array(feet), heading_deg);
+        let pose = Aim::start(Vec3::from_array(feet), heading_deg).pose();
         Self::build_on(&azeroth, Some(pose), look, through)
     }
 
@@ -178,7 +178,7 @@ impl Painter {
         };
         let (install, map, start) = crate::open(opened).expect("the map opens");
         let tables = CharacterTables::load(&install).expect("the character tables");
-        let pose = pose.unwrap_or(start);
+        let pose = pose.unwrap_or_else(|| start.pose());
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
         let judge_on_drop = through.as_ref().is_some_and(Through::hosted);
         let (net, frames) = match through {

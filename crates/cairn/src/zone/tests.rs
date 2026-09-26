@@ -83,11 +83,11 @@ fn a_zone_file_names_the_map_the_start_and_the_zone_it_borrows() {
             borrows: "Elwynn Forest".into(),
         }
     );
-    assert_eq!(zone.start(), Pose::start(feet_wow, 90.0));
+    assert_eq!(zone.start(), Aim::start(feet_wow, 90.0));
     let facing_north = parsed("name=A_1\nstart=1,2,3\nborrows=Duskwood").expect("parses");
     assert_eq!(
         facing_north.start(),
-        Pose::start(Vec3::new(1.0, 2.0, 3.0), 0.0)
+        Aim::start(Vec3::new(1.0, 2.0, 3.0), 0.0)
     );
 }
 

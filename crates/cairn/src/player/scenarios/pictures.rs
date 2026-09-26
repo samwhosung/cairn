@@ -286,7 +286,7 @@ fn a_tauren_and_a_gnome_stand_where_the_human_does() {
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_walker_starts_where_a_bare_window_looks() {
-    let pose = crate::view::Pose::human_start();
+    let pose = crate::view::Aim::human_start().pose();
     let (feet, heading) = (pose.target.to_array(), pose.heading.to_degrees());
     let look = CharacterLook::naked(1, 0);
     let through = Some(Through::ItsOwn { record: None });

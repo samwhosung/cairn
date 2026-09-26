@@ -4,19 +4,20 @@ use world::unit::{BodySkin, CharacterLook};
 use world::{CurrentMap, Install};
 
 use crate::args::{self, Args, Mode};
-use crate::view::Pose;
-use crate::{fixture, net, note, player, shot};
+use crate::view::Aim;
+use crate::{fixture, net, note, player, shot, viewer};
 
 pub fn assemble(
     app: &mut App,
     args: Args,
     install: &Install,
     map: CurrentMap,
-    start: Pose,
+    start: Aim,
     default_plugins: impl FnOnce(PluginGroupBuilder) -> PluginGroupBuilder,
 ) -> Result<(), net::CannotHost> {
     world::register_source(app, install);
-    let pose = args.pose.unwrap_or(start);
+    let aim = args.aim.unwrap_or(start);
+    let pose = aim.pose();
     match args.mode {
         Mode::Window(joining) => {
             let look = character_look(args.look);
@@ -69,6 +70,17 @@ pub fn assemble(
             if let Some(display) = args.display {
                 app.add_plugins(fixture::FixturePlugin(display));
             }
+        }
+        Mode::View => {
+            app.add_plugins((
+                default_plugins(shot::headless_plugins()),
+                viewer::ViewerPlugin {
+                    aim,
+                    size: args.size,
+                    age: args.world_age,
+                },
+                world::collision::CollisionPlugin,
+            ));
         }
     }
     app.insert_resource(map)
