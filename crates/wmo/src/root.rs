@@ -14,6 +14,8 @@ pub struct WmoRoot {
     pub texture_offset_index_map: HashMap<u32, u32>,
     pub materials: Vec<Material>,
     pub n_groups: u32,
+    /// The building's own box, lower corner then upper, in its model space.
+    pub bounds: [[f32; 3]; 2],
 }
 
 /// One `MOMT` material.
@@ -38,6 +40,8 @@ impl Material {
 }
 
 const MOMT_SIZE: usize = 64;
+const MOHD_BOX_MIN: usize = 0x24;
+const MOHD_BOX_MAX: usize = 0x30;
 
 pub(crate) fn parse_root(b: &[u8]) -> Result<WmoRoot, Error> {
     let mut root = WmoRoot {
@@ -45,10 +49,18 @@ pub(crate) fn parse_root(b: &[u8]) -> Result<WmoRoot, Error> {
         texture_offset_index_map: HashMap::new(),
         materials: Vec::new(),
         n_groups: 0,
+        bounds: [[0.0; 3]; 2],
     };
     for (magic, p) in chunks(b) {
         match &magic {
-            b"DHOM" => root.n_groups = p.u32_at(4).ok_or(Error::Truncated("MOHD"))?,
+            b"DHOM" => {
+                root.n_groups = p.u32_at(4).ok_or(Error::Truncated("MOHD"))?;
+                for (corner, o) in root.bounds.iter_mut().zip([MOHD_BOX_MIN, MOHD_BOX_MAX]) {
+                    for (k, v) in corner.iter_mut().enumerate() {
+                        *v = p.f32_at(o + 4 * k).ok_or(Error::Truncated("MOHD"))?;
+                    }
+                }
+            }
             b"XTOM" => {
                 (root.textures, root.texture_offset_index_map) = parse_motx(p);
             }

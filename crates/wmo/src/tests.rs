@@ -36,6 +36,9 @@ fn group_with_liquid(mliq: &[u8]) -> Vec<u8> {
 fn root_parses_textures_materials_and_group_count() {
     let mut mohd = vec![0u8; 64];
     mohd[4..8].copy_from_slice(&7u32.to_le_bytes());
+    for (i, v) in [-1.0f32, -2.0, 0.0, 3.0, 4.0, 5.5].iter().enumerate() {
+        mohd[0x24 + 4 * i..0x28 + 4 * i].copy_from_slice(&v.to_le_bytes());
+    }
     let motx = b"a.blp\0\0b.blp\0";
     let mut momt = vec![0u8; 64];
     momt[8..12].copy_from_slice(&1u32.to_le_bytes());
@@ -50,6 +53,7 @@ fn root_parses_textures_materials_and_group_count() {
         panic!("expected a root");
     };
     assert_eq!(root.n_groups, 7);
+    assert_eq!(root.bounds, [[-1.0, -2.0, 0.0], [3.0, 4.0, 5.5]]);
     assert_eq!(root.textures, ["a.blp", "b.blp"]);
     let [m] = root.materials.as_slice() else {
         panic!("expected one material");
