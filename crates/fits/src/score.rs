@@ -211,7 +211,6 @@ impl<'a> Evidence<'a> {
         order
     }
 
-    /// What says why any model stands where it does on the lists for `spot`.
     pub fn explain(&'a self, spot: &'a Spot) -> Why<'a> {
         let (reach, neighbours) = spot.neighbours();
         let seen_beside = (0..self.tables.models.len())
@@ -287,7 +286,6 @@ pub struct Why<'a> {
 }
 
 impl Why<'_> {
-    /// `m` on a list with its `score`, and why.
     pub fn fit(&self, m: usize, score: f64) -> Fit {
         let e = self.evidence;
         Fit {
