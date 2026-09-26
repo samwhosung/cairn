@@ -1,9 +1,10 @@
 use std::collections::{BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::archive::{Archive, BlockEntry};
 use crate::crypto::canonical;
 use crate::error::ChainError;
+use crate::patch::Patch;
 
 /// The base archives, lowest priority first. `base.MPQ` and `backup.MPQ` are not in the client's
 /// chain.
@@ -26,12 +27,14 @@ pub struct ChainEntry {
     pub size: u64,
 }
 
-/// The archives the client mounts, lowest priority first. A file in a later archive replaces the
-/// same path in earlier ones, and a delete marker hides it. Reads open their own file handles, so
-/// threads can read through one shared chain in parallel. The default chain mounts nothing.
+/// The archives the client mounts, lowest priority first, and a patch directory over them all. A
+/// file in a later archive replaces the same path in earlier ones, and a delete marker hides it.
+/// Reads open their own file handles, so threads can read through one shared chain in parallel.
+/// The default chain mounts nothing.
 #[derive(Default)]
 pub struct Chain {
     archives: Vec<Archive>,
+    patch: Option<Patch>,
 }
 
 impl Chain {
@@ -46,6 +49,7 @@ impl Chain {
             })?;
             return Ok(Self {
                 archives: vec![archive],
+                patch: None,
             });
         }
         let listing = std::fs::read_dir(path).map_err(|source| ChainError::List {
@@ -68,22 +72,40 @@ impl Chain {
         if archives.is_empty() {
             return Err(ChainError::NoArchives(path.to_path_buf()));
         }
-        Ok(Self { archives })
+        Ok(Self {
+            archives,
+            patch: None,
+        })
     }
 
-    /// Whether some archive has an entry for `name` and the winning one is not a delete marker.
+    /// Lays the directory `dir` over every archive, as one more patch archive would be: a file in
+    /// it at the path the archives name a file by is read in place of theirs. The directory is
+    /// read at each lookup, so a file written into it later is read as it is then.
+    pub fn with_patch(mut self, dir: impl AsRef<Path>) -> Result<Self, ChainError> {
+        self.patch = Some(Patch::open(dir.as_ref())?);
+        Ok(self)
+    }
+
+    /// Whether the patch directory has `name`, or some archive has an entry for it and the
+    /// winning one is not a delete marker.
     pub fn contains(&self, name: &str) -> bool {
-        self.resolve(name)
-            .is_some_and(|(_, entry)| !entry.is_delete_marker())
+        matches!(self.patched(name), Ok(Some(_)))
+            || self
+                .resolve(name)
+                .is_some_and(|(_, entry)| !entry.is_delete_marker())
     }
 
-    /// The archive whose entry for `name` wins, even when that entry is a delete marker.
+    /// The archive whose entry for `name` wins, even when that entry is a delete marker, whether
+    /// or not the patch directory has the file.
     pub fn archive_of(&self, name: &str) -> Option<&Path> {
         self.resolve(name).map(|(archive, _)| archive.path())
     }
 
-    /// Reads `name` from the archive whose entry for it wins.
+    /// Reads `name` from the patch directory, or else from the archive whose entry for it wins.
     pub fn read(&self, name: &str) -> Result<Vec<u8>, ChainError> {
+        if let Some(path) = self.patched(name)? {
+            return std::fs::read(&path).map_err(|source| ChainError::Patch { path, source });
+        }
         let (archive, entry) = self
             .resolve(name)
             .ok_or_else(|| ChainError::NotFound(name.to_owned()))?;
@@ -100,8 +122,9 @@ impl Chain {
         })
     }
 
-    /// Every file an archive's `(listfile)` names and the chain contains, with the size its
-    /// winning archive gives. Files that no listfile names can be read but are not listed.
+    /// Every file an archive's `(listfile)` names and the archives hold, with the size its
+    /// winning archive gives. Files that no listfile names can be read but are not listed, and the
+    /// patch directory is not listed.
     pub fn list(&self) -> Vec<ChainEntry> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -128,6 +151,12 @@ impl Chain {
             }
         }
         out
+    }
+
+    fn patched(&self, name: &str) -> Result<Option<PathBuf>, ChainError> {
+        self.patch
+            .as_ref()
+            .map_or(Ok(None), |patch| patch.find(name))
     }
 
     fn resolve(&self, name: &str) -> Option<(&Archive, BlockEntry)> {
@@ -273,5 +302,118 @@ mod tests {
             listed,
             [("kept.txt".to_owned(), 4), ("replaced.txt".to_owned(), 7)]
         );
+    }
+
+    fn base_and_patch() -> (TempDir, TempDir) {
+        let data = TempDir::new();
+        data.write(
+            "dbc.MPQ",
+            &archive(&[
+                Entry::new("World\\kept.txt", FLAG_EXISTS, b"base"),
+                Entry::new("World\\replaced.txt", FLAG_EXISTS, b"base"),
+                Entry::new("World\\deleted.txt", FLAG_EXISTS, b"base"),
+            ]),
+        );
+        data.write(
+            "patch.MPQ",
+            &archive(&[Entry::new(
+                "World\\deleted.txt",
+                FLAG_EXISTS | FLAG_DELETE_MARKER,
+                &[],
+            )]),
+        );
+        data.write("outside.txt", b"outside");
+        let patch = TempDir::new();
+        patch.write("WORLD/Replaced.TXT", b"patched");
+        patch.write("WORLD/deleted.txt", b"patched");
+        patch.write("WORLD/new.txt", b"patched");
+        std::fs::create_dir_all(patch.path().join("WORLD/kept.txt")).expect("a directory");
+        (data, patch)
+    }
+
+    #[test]
+    fn the_patch_directory_is_read_before_every_archive() {
+        let (data, patch) = base_and_patch();
+        let bare = Chain::open(data.path()).expect("open the chain");
+        assert_eq!(bare.read("world/replaced.txt").expect("read"), b"base");
+        assert!(!bare.contains("world/new.txt"));
+        let chain = bare.with_patch(patch.path()).expect("lay the patch");
+        for name in [
+            "World\\replaced.txt",
+            "world/REPLACED.txt",
+            "WORLD\\Replaced.TXT",
+        ] {
+            assert_eq!(chain.read(name).expect("read"), b"patched", "{name}");
+        }
+        assert_eq!(chain.read("world\\deleted.txt").expect("read"), b"patched");
+        assert_eq!(chain.read("world/new.txt").expect("read"), b"patched");
+        assert!(chain.contains("world/new.txt") && chain.contains("world/deleted.txt"));
+        assert_eq!(chain.read("world\\kept.txt").expect("read"), b"base");
+        patch.write("WORLD/new.txt", b"rewritten");
+        patch.write("WORLD/later.txt", b"later");
+        assert_eq!(chain.read("world/new.txt").expect("read"), b"rewritten");
+        assert_eq!(chain.read("world/later.txt").expect("read"), b"later");
+    }
+
+    #[test]
+    fn no_name_leads_out_of_the_patch_directory() {
+        let (data, patch) = base_and_patch();
+        let chain = Chain::open(data.path())
+            .and_then(|chain| chain.with_patch(patch.path()))
+            .expect("lay the patch");
+        let absolute = data.path().join("outside.txt").display().to_string();
+        let data_dir = data.path().file_name().expect("a name").display();
+        let relative = format!("../{data_dir}/outside.txt");
+        assert!(patch.path().join(&relative).is_file());
+        for name in [
+            relative.as_str(),
+            &relative.replace('/', "\\"),
+            &absolute,
+            "world/../world/new.txt",
+            "",
+            "world/",
+        ] {
+            assert!(!chain.contains(name), "{name}");
+            assert!(
+                matches!(chain.read(name), Err(ChainError::NotFound(_))),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn entries_that_only_case_tells_apart_answer_as_one() {
+        let (data, patch) = base_and_patch();
+        patch.write("world/Both.txt", b"lower");
+        if patch.path().join("WORLD/both.txt").exists() {
+            eprintln!("skipped: the temporary directory ignores case");
+            return;
+        }
+        patch.write("world/other.txt", b"lower");
+        let chain = Chain::open(data.path())
+            .and_then(|chain| chain.with_patch(patch.path()))
+            .expect("lay the patch");
+        assert_eq!(chain.read("World\\Other.txt").expect("read"), b"lower");
+        assert_eq!(chain.read("world/replaced.txt").expect("read"), b"patched");
+        patch.write("WORLD/both.TXT", b"upper");
+        assert!(matches!(
+            chain.read("world/both.txt"),
+            Err(ChainError::Ambiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn a_patch_directory_that_cannot_be_listed_is_refused() {
+        let (data, patch) = base_and_patch();
+        let missing = patch.path().join("missing");
+        let file = patch.path().join("WORLD/new.txt");
+        for dir in [missing, file] {
+            let refused = Chain::open(data.path()).and_then(|chain| chain.with_patch(&dir));
+            assert!(
+                matches!(refused, Err(ChainError::Patch { ref path, .. }) if *path == dir),
+                "{}",
+                dir.display()
+            );
+        }
     }
 }

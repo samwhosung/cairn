@@ -58,6 +58,14 @@ pub enum ChainError {
         archive: PathBuf,
         source: Error,
     },
+    /// The patch directory, or a file or directory in it, could not be read.
+    Patch { path: PathBuf, source: io::Error },
+    /// Two files in the patch directory answer to one name.
+    Ambiguous {
+        name: String,
+        first: PathBuf,
+        second: PathBuf,
+    },
 }
 
 impl fmt::Display for ChainError {
@@ -77,6 +85,19 @@ impl fmt::Display for ChainError {
                 archive,
                 source,
             } => write!(f, "reading {name} from {}: {source}", archive.display()),
+            Self::Patch { path, source } => {
+                write!(f, "reading the patch at {}: {source}", path.display())
+            }
+            Self::Ambiguous {
+                name,
+                first,
+                second,
+            } => write!(
+                f,
+                "two files in the patch answer to {name}: {} and {}",
+                first.display(),
+                second.display()
+            ),
         }
     }
 }

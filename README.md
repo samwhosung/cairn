@@ -41,7 +41,7 @@ gates enforce the rest.
 - [`m2`](crates/m2) — Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks
 - [`melee`](games/melee) — A game on the rule API: every player fights every other hand to hand, and the dead rise at their spawn
 - [`model`](crates/model) — The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation
-- [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them
+- [`mpq`](crates/mpq) — Reads World of Warcraft 1.12.1 MPQ archives, the patch chain that stacks them, and a directory laid over it
 - [`protocol`](crates/protocol) — The native wire between cairn's client and server: frames, the messages each side sends, and their encoding
 - [`server`](crates/server) — The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process, and keeps the world in an SQLite file
 - [`sound`](crates/sound) — World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, the kit player, zone music and ambience and the world's emitters, mixed by kira on the device or offline

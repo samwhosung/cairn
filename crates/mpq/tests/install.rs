@@ -80,3 +80,28 @@ fn delete_markers_hide_the_base_copy() {
         assert!(!listed.contains(&name.to_ascii_lowercase()), "{name}");
     }
 }
+
+#[test]
+fn a_patch_directory_is_read_in_place_of_the_install() {
+    let Some(data) = wow_data_or_skip() else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("mpq-install-patch-{}", std::process::id()));
+    let maps = dir.join("world/MAPS/azeroth");
+    std::fs::create_dir_all(&maps).expect("make the patch");
+    std::fs::write(maps.join("AZEROTH_32_48.ADT"), b"patched").expect("write the patch");
+    let install = Chain::open(&data).expect("open the chain");
+    let patched = Chain::open(&data)
+        .and_then(|chain| chain.with_patch(&dir))
+        .expect("lay the patch");
+    let (tile, beside) = (
+        "World\\Maps\\Azeroth\\Azeroth_32_48.adt",
+        "World\\Maps\\Azeroth\\Azeroth_32_49.adt",
+    );
+    assert_eq!(patched.read(tile).expect("the patched tile"), b"patched");
+    let original = install.read(tile).expect("the install's tile");
+    assert_eq!(&original[..4], b"REVM");
+    let unpatched = install.read(beside).expect("the install's tile beside");
+    assert_eq!(patched.read(beside).expect("the tile beside"), unpatched);
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}

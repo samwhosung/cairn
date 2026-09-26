@@ -1,6 +1,6 @@
 [package]
 name = "mpq"
-description = "Reads World of Warcraft 1.12.1 MPQ archives and the patch chain that stacks them"
+description = "Reads World of Warcraft 1.12.1 MPQ archives, the patch chain that stacks them, and a directory laid over it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

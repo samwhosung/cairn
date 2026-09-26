@@ -99,6 +99,9 @@ impl TempDir {
 
     pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.0.join(name);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).expect("create a temp file's directory");
+        }
         std::fs::write(&path, bytes).expect("write a temp file");
         path
     }
