@@ -1,24 +1,16 @@
-//! The catalog's text: an index a row a thing for each of models, ground and zones, and a file of
-//! detail for each thing.
-
 use std::fmt::Write as _;
 
-use atlas::Kind;
+use crate::scan::TEXELS_PER_CHUNK;
+use crate::{Model, Scales, Survey, Tally, Zone};
 
-use crate::{Model, Survey, WATERS, Zone};
-
-/// Yards a chunk's side.
 const CHUNK_YARDS: f64 = 100.0 / 3.0;
-const TEXELS_PER_CHUNK: f64 = 4096.0;
+const CELLS_PER_CHUNK: f64 = 64.0;
 const CELL_YARDS: f64 = CHUNK_YARDS / 8.0;
-/// A zone's ground or models listed in its row of the index, most first.
-const ROW_TOP: usize = 5;
-/// Painted-beside grounds listed for a texture.
+const ZONE_ROW_TOP: usize = 5;
 const BESIDE_TOP: usize = 8;
-/// A ground painted beside another in less of its ground than this isn't listed as beside it.
-const BESIDE_LEAST: f64 = 0.01;
+const MIN_BESIDE_SHARE: f64 = 0.01;
+const SAME_SCALE: f32 = 0.005;
 
-/// `1234567` as `1,234,567`.
 pub(crate) fn thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
@@ -31,7 +23,6 @@ pub(crate) fn thousands(n: u64) -> String {
     out
 }
 
-/// The stem of a path's file name.
 pub(crate) fn stem(path: &str) -> &str {
     let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
     name.rsplit_once('.').map_or(name, |(s, _)| s)
@@ -49,7 +40,6 @@ pub(crate) fn sky(z: &Zone) -> String {
     format!("zones/{}-sky.png", z.key)
 }
 
-/// `4.1 yd tall, 0.4 x 2.3 across`.
 pub(crate) fn size(bounds: Option<[[f32; 3]; 2]>) -> String {
     match bounds {
         None => "size unknown".to_owned(),
@@ -62,16 +52,20 @@ pub(crate) fn size(bounds: Option<[[f32; 3]; 2]>) -> String {
     }
 }
 
+fn one_scale(s: &Scales) -> bool {
+    (s.most - s.least).abs() < SAME_SCALE
+}
+
 fn scales(m: &Model) -> String {
-    match m.scales {
+    match &m.scales {
         None => String::new(),
-        Some([lo, _, _, _, hi]) if (hi - lo).abs() < 0.005 => format!("{lo:.2}"),
-        Some([lo, _, _, _, hi]) => format!("{lo:.2} to {hi:.2}"),
+        Some(s) if one_scale(s) => format!("{:.2}", s.least),
+        Some(s) => format!("{:.2} to {:.2}", s.least, s.most),
     }
 }
 
-fn placed(on_ground: u32, in_buildings: u32) -> String {
-    match (on_ground, in_buildings) {
+fn placed(t: Tally) -> String {
+    match (t.on_ground, t.in_buildings) {
         (g, 0) => thousands(g.into()),
         (0, i) => format!("{} inside buildings", thousands(i.into())),
         (g, i) => format!(
@@ -82,25 +76,26 @@ fn placed(on_ground: u32, in_buildings: u32) -> String {
     }
 }
 
-fn zone_label(inv: &Survey, z: usize) -> &str {
-    &inv.zones[z].name
-}
-
 pub(crate) fn models_tsv(inv: &Survey) -> String {
     let mut out = String::from("kind\tpath\tsize\tplaced\tscales\tzones\tpicture\n");
     for m in &inv.models {
         let zones: Vec<String> = m
             .zones
             .iter()
-            .map(|&(z, g, i)| format!("{} {}", zone_label(inv, z), placed(g, i)))
+            .map(|&t| format!("{} {}", inv.zones[t.index].name, placed(t)))
             .collect();
+        let whole = Tally {
+            index: 0,
+            on_ground: m.on_ground,
+            in_buildings: m.in_buildings,
+        };
         let _ = writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             m.kind,
             m.path,
             size(m.bounds),
-            placed(m.on_ground, m.in_buildings),
+            placed(whole),
             scales(m),
             zones.join(", "),
             picture(m)
@@ -120,8 +115,8 @@ pub(crate) fn share(part: f64, whole: f64) -> String {
     }
 }
 
-fn zone_texels(z: &Zone) -> f64 {
-    f64::from(z.chunks) * TEXELS_PER_CHUNK
+pub(crate) fn zone_texels(z: &Zone) -> f64 {
+    f64::from(z.chunks) * TEXELS_PER_CHUNK as f64
 }
 
 pub(crate) fn ground_tsv(inv: &Survey) -> String {
@@ -138,7 +133,7 @@ pub(crate) fn ground_tsv(inv: &Survey) -> String {
         let beside: Vec<String> = g
             .beside
             .iter()
-            .filter(|(_, s)| *s >= BESIDE_LEAST)
+            .filter(|(_, s)| *s >= MIN_BESIDE_SHARE)
             .take(BESIDE_TOP)
             .map(|&(o, s)| format!("{} {:.0}%", stem(&inv.grounds[o].path), 100.0 * s))
             .collect();
@@ -177,7 +172,7 @@ pub(crate) fn zones_tsv(inv: &Survey, sounds: &dyn Fn(&Zone) -> ZoneSound) -> St
         let ground: Vec<String> = z
             .grounds
             .iter()
-            .take(ROW_TOP)
+            .take(ZONE_ROW_TOP)
             .map(|&(g, t)| {
                 format!(
                     "{} {}",
@@ -189,12 +184,12 @@ pub(crate) fn zones_tsv(inv: &Survey, sounds: &dyn Fn(&Zone) -> ZoneSound) -> St
         let models: Vec<String> = z
             .models
             .iter()
-            .take(ROW_TOP)
-            .map(|&(m, g, i)| {
+            .take(ZONE_ROW_TOP)
+            .map(|t| {
                 format!(
                     "{} {}",
-                    stem(&inv.models[m].path),
-                    thousands((g + i).into())
+                    stem(&inv.models[t.index].path),
+                    thousands(t.placed().into())
                 )
             })
             .collect();
@@ -221,11 +216,15 @@ pub(crate) fn zones_tsv(inv: &Survey, sounds: &dyn Fn(&Zone) -> ZoneSound) -> St
 }
 
 fn water(z: &Zone) -> String {
-    let wet: Vec<String> = WATERS
-        .iter()
-        .zip(z.water)
+    let wet: Vec<String> = z
+        .wet_cells
+        .by_kind()
+        .into_iter()
         .filter(|(_, n)| *n > 0)
-        .map(|(kind, n)| format!("{kind} {}", share(f64::from(n), f64::from(z.chunks) * 64.0)))
+        .map(|(kind, n)| {
+            let cells = f64::from(z.chunks) * CELLS_PER_CHUNK;
+            format!("{kind} {}", share(f64::from(n), cells))
+        })
         .collect();
     if wet.is_empty() {
         "none".to_owned()
@@ -268,27 +267,34 @@ pub(crate) fn model_txt(inv: &Survey, m: &Model, px_per_yard: Option<f32>) -> St
         thousands(m.on_ground.into()),
         thousands(m.in_buildings.into())
     );
-    if let Some([lo, p10, mid, p90, hi]) = m.scales {
-        let _ = writeln!(
-            out,
-            "scales: {lo:.2} to {hi:.2}; a tenth below {p10:.2}, half below {mid:.2}, a tenth above {p90:.2}"
-        );
+    match &m.scales {
+        Some(s) if one_scale(s) => {
+            let _ = writeln!(out, "scale: always {:.2}", s.least);
+        }
+        Some(s) => {
+            let _ = writeln!(
+                out,
+                "scales: {:.2} to {:.2}; a tenth below {:.2}, half below {:.2}, a tenth above {:.2}",
+                s.least, s.most, s.p10, s.p50, s.p90
+            );
+        }
+        None => {}
     }
     let _ = writeln!(out, "where:");
-    for &(z, g, i) in &m.zones {
-        let zone = &inv.zones[z];
+    for &t in &m.zones {
+        let zone = &inv.zones[t.index];
         let places: Vec<String> = m
             .places
             .iter()
-            .filter(|(pz, _, _)| *pz == z)
-            .map(|(_, name, n)| format!("{name} {}", thousands((*n).into())))
+            .filter(|p| p.zone == t.index)
+            .map(|p| format!("{} {}", p.area, thousands(p.placements.into())))
             .collect();
         let _ = writeln!(
             out,
             "  {} ({}): {} — {}",
             zone.name,
             zone.map_directory,
-            placed(g, i),
+            placed(t),
             places.join(", ")
         );
     }
@@ -310,6 +316,7 @@ pub(crate) fn model_txt(inv: &Survey, m: &Model, px_per_yard: Option<f32>) -> St
 
 pub(crate) fn ground_txt(inv: &Survey, g: usize) -> String {
     let ground = &inv.grounds[g];
+    let texels_per_chunk = TEXELS_PER_CHUNK as f64;
     let mut out = String::new();
     let _ = writeln!(out, "{}", ground.path);
     let _ = writeln!(out, "kind: {} (from its name)", ground.kind);
@@ -324,8 +331,8 @@ pub(crate) fn ground_txt(inv: &Survey, g: usize) -> String {
         out,
         "painted: in {} chunks, showing on {} chunks' worth of ground ({} yd²)",
         thousands(ground.chunks.into()),
-        thousands((ground.texels / TEXELS_PER_CHUNK).round() as u64),
-        thousands((ground.texels / TEXELS_PER_CHUNK * CHUNK_YARDS * CHUNK_YARDS).round() as u64)
+        thousands((ground.texels / texels_per_chunk).round() as u64),
+        thousands((ground.texels / texels_per_chunk * CHUNK_YARDS * CHUNK_YARDS).round() as u64)
     );
     let _ = writeln!(out, "by zone, as a share of the zone's ground:");
     for &(z, t) in &ground.zones {
@@ -342,17 +349,14 @@ pub(crate) fn ground_txt(inv: &Survey, g: usize) -> String {
         out,
         "painted beside, as the share of its ground in chunks that paint that one too:"
     );
-    for &(o, s) in ground.beside.iter().filter(|(_, s)| *s >= BESIDE_LEAST) {
+    for &(o, s) in ground.beside.iter().filter(|(_, s)| *s >= MIN_BESIDE_SHARE) {
         let other = &inv.grounds[o];
         let _ = writeln!(out, "  {} ({}) {:.0}%", other.path, other.kind, 100.0 * s);
     }
     out
 }
 
-/// What the lighting tables say of a zone's sky, by the hours it is drawn at.
-pub struct SkyLines(pub Vec<String>);
-
-pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &SkyLines) -> String {
+pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &[String]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{}", z.name);
     let _ = writeln!(
@@ -361,8 +365,8 @@ pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &SkyLines
         z.map_directory, z.map, z.area
     );
     let yards = f64::from(z.chunks) * CHUNK_YARDS * CHUNK_YARDS;
-    let tiles = z.tiles.map_or(String::new(), |[x0, x1, y0, y1]| {
-        format!(" in tiles {x0}..={x1} by {y0}..={y1}")
+    let tiles = z.tiles.map_or(String::new(), |t| {
+        format!(" in tiles {}..={} by {}..={}", t.x0, t.x1, t.y0, t.y1)
     });
     let _ = writeln!(
         out,
@@ -384,7 +388,7 @@ pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &SkyLines
     let _ = writeln!(out, "places, by chunks: {}", places.join(", "));
     if z.heart.is_some() {
         let _ = writeln!(out, "sky: {}-sky.png", z.key);
-        for line in &sky.0 {
+        for line in sky {
             let _ = writeln!(out, "  {line}");
         }
     }
@@ -402,11 +406,15 @@ pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &SkyLines
     for line in &sound.ambience_lines {
         let _ = writeln!(out, "  {line}");
     }
-    let census: Vec<String> = Kind::ALL
-        .iter()
-        .zip(z.doodads)
-        .map(|(k, n)| format!("{} {}s", thousands(n.into()), k.name()))
-        .collect();
+    let d = &z.doodads;
+    let census = [
+        (d.trees, "trees"),
+        (d.shrubs, "shrubs"),
+        (d.rocks, "rocks"),
+        (d.fences, "fences"),
+        (d.props, "props"),
+    ]
+    .map(|(n, kind)| format!("{} {kind}", thousands(n as u64)));
     let _ = writeln!(
         out,
         "doodads standing on its ground, each once: {}; {} buildings",
@@ -425,12 +433,12 @@ pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &SkyLines
         );
     }
     let _ = writeln!(out, "models placed in it, most first:");
-    for &(m, g, i) in &z.models {
-        let model = &inv.models[m];
+    for &t in &z.models {
+        let model = &inv.models[t.index];
         let _ = writeln!(
             out,
             "  {} {} ({}; {})",
-            placed(g, i),
+            placed(t),
             model.path,
             model.kind,
             size(model.bounds)

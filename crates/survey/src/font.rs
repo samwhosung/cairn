@@ -1,13 +1,13 @@
-//! A 5×7 pixel font for the labels on the pages, each glyph seven rows of five bits, the high bit
-//! at the left. Lowercase letters are drawn as capitals.
-
 use image::{Rgb, RgbImage};
 
 pub(crate) const WIDTH: u32 = 5;
-/// Pixels from one glyph's left edge to the next's, at scale 1.
+const HEIGHT: usize = 7;
 pub(crate) const ADVANCE: u32 = WIDTH + 1;
+const LEFT_BIT: u8 = 1 << (WIDTH - 1);
 
-const GLYPHS: [(char, [u8; 7]); 50] = [
+type Glyph = [u8; HEIGHT];
+
+const GLYPHS: [(char, Glyph); 50] = [
     (' ', [0, 0, 0, 0, 0, 0, 0]),
     ('0', [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E]),
     ('1', [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E]),
@@ -60,17 +60,15 @@ const GLYPHS: [(char, [u8; 7]); 50] = [
     ('?', [0x0E, 0x11, 0x01, 0x02, 0x04, 0, 0x04]),
 ];
 
-fn glyph(c: char) -> [u8; 7] {
+fn glyph(c: char) -> Glyph {
     let c = c.to_ascii_uppercase();
     GLYPHS
         .iter()
         .find(|(g, _)| *g == c)
         .or_else(|| GLYPHS.iter().find(|(g, _)| *g == '?'))
-        .map_or([0; 7], |(_, rows)| *rows)
+        .map_or([0; HEIGHT], |(_, rows)| *rows)
 }
 
-/// Draws `text` with its top-left corner at `(x, y)`, each font pixel `scale` pixels square,
-/// clipped to the image and to `max_chars` glyphs.
 pub(crate) fn draw(
     img: &mut RgbImage,
     (x, y): (u32, u32),
@@ -83,7 +81,7 @@ pub(crate) fn draw(
         let left = x + i as u32 * ADVANCE * scale;
         for (row, bits) in glyph(c).iter().enumerate() {
             for col in 0..WIDTH {
-                if bits & (0x10 >> col) == 0 {
+                if bits & (LEFT_BIT >> col) == 0 {
                     continue;
                 }
                 for dy in 0..scale {
@@ -106,9 +104,9 @@ mod tests {
     #[test]
     fn every_glyph_fits_its_cell_and_is_its_own() {
         for (c, rows) in GLYPHS {
-            assert!(rows.iter().all(|r| *r < 0x20), "{c}");
+            assert!(rows.iter().all(|r| *r < LEFT_BIT << 1), "{c}");
         }
-        let mut seen: Vec<[u8; 7]> = GLYPHS.iter().map(|(_, r)| *r).collect();
+        let mut seen: Vec<Glyph> = GLYPHS.iter().map(|(_, r)| *r).collect();
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), GLYPHS.len());

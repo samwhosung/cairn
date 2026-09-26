@@ -1,31 +1,32 @@
-//! The tiles' paint and placements, gathered by texture, by model and by zone.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
-use atlas::{Areas, Kind};
+use atlas::{Areas, Doodads};
 use mpq::Chain;
 use rayon::prelude::*;
 
-use crate::scan::{self, Chunk, MapTiles, Tile};
-use crate::{Example, Ground, Model, Survey, Zone, key, spelling};
+use crate::scan::{self, ChunkSummary, MapTiles, TileSummary};
+use crate::{
+    Example, Ground, Model, Place, Scales, Survey, Tally, TileSpan, WetCells, Zone, key, spelling,
+};
 
-/// A layer on less of its chunk than this, in texels, isn't painted beside the others there.
-const BESIDE_FLOOR: f32 = 41.0;
+const MIN_BESIDE_TEXELS: f32 = 41.0;
 const EXAMPLES: usize = 5;
+const DEFAULT_DOODAD_SET: u16 = 0;
+const WHOLE_MAP_BUILDING_ID: u32 = u32::MAX;
 
 type ZoneId = (usize, u32);
 
 #[derive(Default)]
 struct ZoneAcc {
     chunks: u32,
-    tiles: Option<[u32; 4]>,
+    tiles: Option<TileSpan>,
     middles: Vec<[f32; 3]>,
-    water: [u32; 4],
+    wet_cells: WetCells,
     places: BTreeMap<u32, u32>,
     grounds: BTreeMap<usize, f64>,
     models: BTreeMap<usize, (u32, u32)>,
-    doodads: [u32; 5],
+    doodads: Doodads,
     buildings: u32,
 }
 
@@ -49,7 +50,6 @@ struct ModelAcc {
     examples: Vec<(u32, u32, Example)>,
 }
 
-/// One placement, each once: on which map, the area under it, and what it places.
 struct Placed<'a> {
     map: usize,
     area: Option<u32>,
@@ -61,10 +61,14 @@ struct Placed<'a> {
     doodad_set: u16,
 }
 
-/// A building's root, read once: its box and the doodads each of its sets shows.
-struct Root {
+struct WmoRoot {
     bounds: Option<[[f32; 3]; 2]>,
-    sets: Vec<Vec<(String, f32)>>,
+    doodad_sets: Vec<Vec<SetDoodad>>,
+}
+
+struct SetDoodad {
+    model: String,
+    scale: f32,
 }
 
 pub(crate) fn survey(chain: &Chain) -> Result<Survey, String> {
@@ -83,7 +87,7 @@ pub(crate) fn survey(chain: &Chain) -> Result<Survey, String> {
         t.doodads.iter().map(|d| {
             let p = &d.placed;
             (
-                d.area,
+                d.area_here,
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
@@ -95,23 +99,22 @@ pub(crate) fn survey(chain: &Chain) -> Result<Survey, String> {
     });
     let wmos = buildings(&tiles, &maps, &areas);
     let root_keys: BTreeMap<String, &str> = wmos.iter().map(|w| (key(w.model), w.model)).collect();
-    let roots: BTreeMap<String, Root> = root_keys
+    let roots: BTreeMap<String, WmoRoot> = root_keys
         .par_iter()
-        .map(|(k, path)| (k.clone(), root(chain, path)))
+        .map(|(k, path)| (k.clone(), wmo_root(chain, path)))
         .collect();
     gathering.place_doodads(&doodads);
     gathering.place_buildings(&wmos, &roots);
     Ok(gathering.finish(chain, &roots, &grounds))
 }
 
-/// Every building once, the whole-map buildings of maps without terrain among them.
-fn buildings<'a>(tiles: &'a [Tile], maps: &'a [MapTiles], areas: &Areas) -> Vec<Placed<'a>> {
+fn buildings<'a>(tiles: &'a [TileSummary], maps: &'a [MapTiles], areas: &Areas) -> Vec<Placed<'a>> {
     let mut wmos = each_once(tiles, |t| {
         t.wmos.iter().map(|w| {
             let p = &w.placed;
             let set = p.doodad_set;
             (
-                w.area,
+                w.area_here,
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
@@ -126,7 +129,7 @@ fn buildings<'a>(tiles: &'a [Tile], maps: &'a [MapTiles], areas: &Areas) -> Vec<
             wmos.push(Placed {
                 map,
                 area: areas.zones_on(m.id).first().copied(),
-                unique_id: u32::MAX,
+                unique_id: WHOLE_MAP_BUILDING_ID,
                 model: &g.model,
                 position: g.position,
                 heading: g.rotation[1],
@@ -138,7 +141,6 @@ fn buildings<'a>(tiles: &'a [Tile], maps: &'a [MapTiles], areas: &Areas) -> Vec<
     wmos
 }
 
-/// The textures, models and zones as they are gathered, by key.
 struct Gathering<'a> {
     areas: &'a Areas,
     maps: &'a [MapTiles],
@@ -147,7 +149,6 @@ struct Gathering<'a> {
     buildings: BTreeSet<String>,
 }
 
-/// The ground textures, by key.
 struct Grounds {
     keys: BTreeSet<String>,
     accs: Vec<GroundAcc>,
@@ -158,11 +159,11 @@ impl Gathering<'_> {
         (map, area.and_then(|a| self.areas.top_zone(a)).unwrap_or(0))
     }
 
-    fn paint(&mut self, tiles: &[Tile]) -> Grounds {
+    fn paint(&mut self, tiles: &[TileSummary]) -> Grounds {
         let keys: BTreeSet<String> = tiles
             .iter()
             .flat_map(|t| &t.chunks)
-            .flat_map(|c| c.paint.iter().map(|(p, _)| key(p)))
+            .flat_map(|c| c.paint.iter().map(|p| key(&p.texture)))
             .collect();
         let index: BTreeMap<&str, usize> = keys
             .iter()
@@ -183,14 +184,17 @@ impl Gathering<'_> {
     fn place_doodads(&mut self, doodads: &[Placed<'_>]) {
         for d in doodads {
             let zone = self.zone_of(d.map, d.area);
-            self.zones.entry(zone).or_default().doodads[kind_slot(d.model)] += 1;
+            self.zones
+                .entry(zone)
+                .or_default()
+                .doodads
+                .count(atlas::kind(d.model));
             let m = self.models.entry(key(d.model)).or_default();
             m.place(d, self.maps, zone, true, None);
         }
     }
 
-    /// Each building, and every doodad its default set and its own set place inside it.
-    fn place_buildings(&mut self, wmos: &[Placed<'_>], roots: &BTreeMap<String, Root>) {
+    fn place_buildings(&mut self, wmos: &[Placed<'_>], roots: &BTreeMap<String, WmoRoot>) {
         for w in wmos {
             let zone = self.zone_of(w.map, w.area);
             self.zones.entry(zone).or_default().buildings += 1;
@@ -199,15 +203,15 @@ impl Gathering<'_> {
             let m = self.models.entry(k.clone()).or_default();
             m.place(w, self.maps, zone, true, None);
             let Some(root) = roots.get(&k) else { continue };
-            let shown = std::iter::once(0).chain((w.doodad_set != 0).then_some(w.doodad_set));
-            for set in shown {
-                for (model, scale) in root.sets.get(usize::from(set)).into_iter().flatten() {
+            let own = (w.doodad_set != DEFAULT_DOODAD_SET).then_some(w.doodad_set);
+            for set in std::iter::once(DEFAULT_DOODAD_SET).chain(own) {
+                for d in root.doodad_sets.get(usize::from(set)).into_iter().flatten() {
                     let inside = Placed {
-                        scale: *scale,
-                        model,
+                        scale: d.scale,
+                        model: &d.model,
                         ..*w
                     };
-                    let m = self.models.entry(key(model)).or_default();
+                    let m = self.models.entry(key(&d.model)).or_default();
                     m.place(&inside, self.maps, zone, false, Some(w.model));
                 }
             }
@@ -217,7 +221,7 @@ impl Gathering<'_> {
     fn finish(
         mut self,
         chain: &Chain,
-        roots: &BTreeMap<String, Root>,
+        roots: &BTreeMap<String, WmoRoot>,
         grounds: &Grounds,
     ) -> Survey {
         let model_keys: Vec<&String> = self.models.keys().collect();
@@ -229,9 +233,8 @@ impl Gathering<'_> {
             })
             .collect();
         for (i, m) in self.models.values().enumerate() {
-            for (&zone, &(ground, inside)) in &m.zones {
-                let z = self.zones.entry(zone).or_default();
-                z.models.insert(i, (ground, inside));
+            for (&zone, &placed) in &m.zones {
+                self.zones.entry(zone).or_default().models.insert(i, placed);
             }
         }
         let zone_ids: Vec<ZoneId> = self.zones.keys().copied().collect();
@@ -275,8 +278,8 @@ impl Gathering<'_> {
 }
 
 fn paint(
-    chunk: &Chunk,
-    tile: &Tile,
+    chunk: &ChunkSummary,
+    tile: &TileSummary,
     zone: ZoneId,
     acc: &mut ZoneAcc,
     index: &BTreeMap<&str, usize>,
@@ -285,20 +288,32 @@ fn paint(
     acc.chunks += 1;
     let (x, y) = tile.at;
     acc.tiles = Some(match acc.tiles {
-        None => [x, x, y, y],
-        Some([x0, x1, y0, y1]) => [x0.min(x), x1.max(x), y0.min(y), y1.max(y)],
+        None => TileSpan {
+            x0: x,
+            x1: x,
+            y0: y,
+            y1: y,
+        },
+        Some(t) => TileSpan {
+            x0: t.x0.min(x),
+            x1: t.x1.max(x),
+            y0: t.y0.min(y),
+            y1: t.y1.max(y),
+        },
     });
     acc.middles.push(chunk.middle);
-    for (sum, wet) in acc.water.iter_mut().zip(chunk.water) {
-        *sum += u32::from(wet);
-    }
+    let (sum, wet) = (&mut acc.wet_cells, chunk.wet_cells);
+    sum.water += wet.water;
+    sum.ocean += wet.ocean;
+    sum.magma += wet.magma;
+    sum.slime += wet.slime;
     *acc.places.entry(chunk.area).or_default() += 1;
     let mut shown: BTreeMap<usize, (f32, &str)> = BTreeMap::new();
-    for (path, texels) in &chunk.paint {
+    for p in &chunk.paint {
         let e = shown
-            .entry(index[key(path).as_str()])
-            .or_insert((0.0, path));
-        e.0 += texels;
+            .entry(index[key(&p.texture).as_str()])
+            .or_insert((0.0, &p.texture));
+        e.0 += p.texels;
     }
     for (&g, &(texels, path)) in &shown {
         let acc_g = &mut grounds[g];
@@ -307,11 +322,11 @@ fn paint(
         acc_g.chunks += 1;
         *acc_g.zones.entry(zone).or_default() += f64::from(texels);
         *acc.grounds.entry(g).or_default() += f64::from(texels);
-        if texels < BESIDE_FLOOR {
+        if texels < MIN_BESIDE_TEXELS {
             continue;
         }
         for (&other, &(t, _)) in &shown {
-            if other != g && t >= BESIDE_FLOOR {
+            if other != g && t >= MIN_BESIDE_TEXELS {
                 *grounds[g].beside.entry(other).or_default() += f64::from(texels);
             }
         }
@@ -320,9 +335,11 @@ fn paint(
 
 type Listing<'a> = (Option<u32>, u32, &'a str, [f32; 3], f32, f32, u16);
 
-/// Every placement once by its unique id on its map, taken from the tile it stands on when one
-/// lists it, in map order and then id order.
-fn each_once<'a, I>(tiles: &'a [Tile], listed: impl Fn(&'a Tile) -> I) -> Vec<Placed<'a>>
+/// A tile lists every placement that overlaps it, and an id is unique on its map.
+fn each_once<'a, I>(
+    tiles: &'a [TileSummary],
+    listed: impl Fn(&'a TileSummary) -> I,
+) -> Vec<Placed<'a>>
 where
     I: Iterator<Item = Listing<'a>>,
 {
@@ -391,40 +408,31 @@ impl ModelAcc {
     }
 }
 
-fn kind_slot(model: &str) -> usize {
-    let k = atlas::kind(model);
-    Kind::ALL.iter().position(|x| *x == k).unwrap_or(0)
-}
-
-/// The box a model fills at scale 1 in its own axes: a building's groups, or a doodad's vertices at
-/// rest.
-pub(crate) fn model_bounds(chain: &Chain, path: &str) -> Option<[[f32; 3]; 2]> {
+/// The box the model at `path` fills, as [`Model::bounds`]: a building's groups, or a doodad's
+/// vertices at rest.
+pub fn model_bounds(chain: &Chain, path: &str) -> Option<[[f32; 3]; 2]> {
     if path.to_ascii_lowercase().ends_with(".wmo") {
-        root(chain, path).bounds
+        wmo_root(chain, path).bounds
     } else {
         doodad_shape(chain, path).map(|s| s.bounds)
     }
 }
 
-/// A model's box, and whether it has a mesh of its own: one that only emits particles, light or
-/// sound has none, and takes the header's box.
 struct Shape {
     bounds: [[f32; 3]; 2],
     mesh: bool,
 }
 
-fn root(chain: &Chain, path: &str) -> Root {
+fn wmo_root(chain: &Chain, path: &str) -> WmoRoot {
+    let none = || WmoRoot {
+        bounds: None,
+        doodad_sets: Vec::new(),
+    };
     let Ok(bytes) = chain.read(path) else {
-        return Root {
-            bounds: None,
-            sets: Vec::new(),
-        };
+        return none();
     };
     let Ok(root) = model::parse_wmo_root(&bytes) else {
-        return Root {
-            bounds: None,
-            sets: Vec::new(),
-        };
+        return none();
     };
     let bounds = root
         .group_infos()
@@ -435,7 +443,7 @@ fn root(chain: &Chain, path: &str) -> Root {
                 Some([lo, hi]) => [min3(lo, g.bbox_min), max3(hi, g.bbox_max)],
             })
         });
-    let sets = root
+    let doodad_sets = root
         .doodad_sets()
         .iter()
         .map(|s| {
@@ -444,14 +452,19 @@ fn root(chain: &Chain, path: &str) -> Root {
                 .skip(s.start as usize)
                 .take(s.count as usize)
                 .filter(|d| !d.model.is_empty())
-                .map(|d| (d.model.clone(), d.scale))
+                .map(|d| SetDoodad {
+                    model: d.model.clone(),
+                    scale: d.scale,
+                })
                 .collect()
         })
         .collect();
-    Root { bounds, sets }
+    WmoRoot {
+        bounds,
+        doodad_sets,
+    }
 }
 
-/// The box an M2's vertices fill at rest, or the header's box when it has none.
 fn doodad_shape(chain: &Chain, path: &str) -> Option<Shape> {
     let m2 = match path.to_ascii_lowercase().rsplit_once('.') {
         Some((stem, "mdx" | "mdl")) => format!("{stem}.m2"),
@@ -505,19 +518,24 @@ fn slug(name: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
-/// Each zone's file name: its name, then its map's when another zone shares that, then its map's
-/// id and its area's when those are shared too.
+#[derive(Clone, Copy)]
+enum KeySuffix {
+    MapDirectory,
+    MapId,
+    Area,
+}
+
 fn zone_keys(ids: &[ZoneId], names: &[String], maps: &[MapTiles]) -> Vec<String> {
     let unique = |keys: &[String], i: usize| keys.iter().filter(|k| **k == keys[i]).count() == 1;
     let mut keys: Vec<String> = names.iter().map(|n| slug(n)).collect();
-    for widening in 0..3 {
+    for suffix in [KeySuffix::MapDirectory, KeySuffix::MapId, KeySuffix::Area] {
         let shared: Vec<usize> = (0..keys.len()).filter(|&i| !unique(&keys, i)).collect();
         for i in shared {
             let (map, area) = ids[i];
-            let more = match widening {
-                0 => slug(&maps[map].directory),
-                1 => maps[map].id.to_string(),
-                _ => area.to_string(),
+            let more = match suffix {
+                KeySuffix::MapDirectory => slug(&maps[map].directory),
+                KeySuffix::MapId => maps[map].id.to_string(),
+                KeySuffix::Area => area.to_string(),
             };
             keys[i] = format!("{}-{more}", keys[i]);
         }
@@ -542,12 +560,16 @@ fn finish_zone(
     places.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let mut grounds: Vec<(usize, f64)> = acc.grounds.into_iter().collect();
     grounds.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    let mut models: Vec<(usize, u32, u32)> = acc
+    let mut models: Vec<Tally> = acc
         .models
         .into_iter()
-        .map(|(m, (g, i))| (m, g, i))
+        .map(|(index, (on_ground, in_buildings))| Tally {
+            index,
+            on_ground,
+            in_buildings,
+        })
         .collect();
-    models.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)).then(a.0.cmp(&b.0)));
+    models.sort_by(|a, b| b.placed().cmp(&a.placed()).then(a.index.cmp(&b.index)));
     Zone {
         area,
         name: name.to_owned(),
@@ -557,7 +579,7 @@ fn finish_zone(
         chunks: acc.chunks,
         tiles: acc.tiles,
         heart,
-        water: acc.water,
+        wet_cells: acc.wet_cells,
         places,
         grounds,
         models,
@@ -566,7 +588,6 @@ fn finish_zone(
     }
 }
 
-/// The middle nearest the mean of `middles`, the one furthest north and then west on a tie.
 fn heart(middles: &[[f32; 3]]) -> Option<[f32; 3]> {
     if middles.is_empty() {
         return None;
@@ -617,27 +638,45 @@ fn finish_model(
     } else {
         atlas::kind(&path).name()
     };
-    let mut zones: Vec<(usize, u32, u32)> = acc
+    let mut zones: Vec<Tally> = acc
         .zones
         .iter()
-        .map(|(z, &(g, i))| (zone_index[z], g, i))
+        .map(|(z, &(on_ground, in_buildings))| Tally {
+            index: zone_index[z],
+            on_ground,
+            in_buildings,
+        })
         .collect();
-    zones.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)).then(a.0.cmp(&b.0)));
-    let mut places: Vec<(usize, String, u32)> = acc
+    zones.sort_by(|a, b| b.placed().cmp(&a.placed()).then(a.index.cmp(&b.index)));
+    let mut places: Vec<Place> = acc
         .places
         .iter()
-        .map(|(&(z, area), &n)| (zone_index[&z], zone_name(areas, area), n))
+        .map(|(&(z, area), &placements)| Place {
+            zone: zone_index[&z],
+            area: zone_name(areas, area),
+            placements,
+        })
         .collect();
-    let rank: BTreeMap<usize, usize> = zones.iter().enumerate().map(|(r, z)| (z.0, r)).collect();
+    let rank: BTreeMap<usize, usize> = zones
+        .iter()
+        .enumerate()
+        .map(|(r, z)| (z.index, r))
+        .collect();
     places.sort_by(|a, b| {
-        rank[&a.0]
-            .cmp(&rank[&b.0])
-            .then(b.2.cmp(&a.2))
-            .then(a.1.cmp(&b.1))
+        rank[&a.zone]
+            .cmp(&rank[&b.zone])
+            .then(b.placements.cmp(&a.placements))
+            .then(a.area.cmp(&b.area))
     });
     acc.scales.sort_by(f32::total_cmp);
-    let at = |q: usize| acc.scales[(acc.scales.len() - 1) * q / 100];
-    let scales = (!acc.scales.is_empty()).then(|| [at(0), at(10), at(50), at(90), at(100)]);
+    let at = |percentile: usize| acc.scales[(acc.scales.len() - 1) * percentile / 100];
+    let scales = (!acc.scales.is_empty()).then(|| Scales {
+        least: at(0),
+        p10: at(10),
+        p50: at(50),
+        p90: at(90),
+        most: at(100),
+    });
     Model {
         path,
         key: k,

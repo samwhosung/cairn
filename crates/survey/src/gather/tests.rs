@@ -3,14 +3,14 @@ use terrain::Doodad;
 use super::*;
 use crate::scan::Listed;
 
-fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> Tile {
-    Tile {
+fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> TileSummary {
+    TileSummary {
         map,
         at,
         chunks: Vec::new(),
         doodads: doodads
             .into_iter()
-            .map(|(unique_id, area, model)| Listed {
+            .map(|(unique_id, area_here, model)| Listed {
                 placed: Doodad {
                     model: model.into(),
                     position: [1.0, 2.0, 3.0],
@@ -18,19 +18,19 @@ fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> T
                     scale: 1.0,
                     unique_id,
                 },
-                area,
+                area_here,
             })
             .collect(),
         wmos: Vec::new(),
     }
 }
 
-fn once(tiles: &[Tile]) -> Vec<(usize, u32, Option<u32>, &str)> {
+fn once(tiles: &[TileSummary]) -> Vec<(usize, u32, Option<u32>, &str)> {
     each_once(tiles, |t| {
         t.doodads.iter().map(|d| {
             let p = &d.placed;
             (
-                d.area,
+                d.area_here,
                 p.unique_id,
                 p.model.as_str(),
                 p.position,

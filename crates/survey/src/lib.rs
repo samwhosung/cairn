@@ -13,10 +13,13 @@ mod write;
 
 use std::collections::BTreeMap;
 
+use atlas::Doodads;
 use mpq::Chain;
 
+pub use gather::model_bounds as bounds;
+pub use pages::PICTURE_SIDE;
 pub use picture::{save_averaged, write_atomically};
-pub use text::{SkyLines, ZoneSound};
+pub use text::ZoneSound;
 pub use write::{Written, pictures_missing, write, write_pages};
 
 /// Everything the maps paint and place, each list sorted by key. Every list inside is most first.
@@ -34,21 +37,46 @@ pub struct Zone {
     pub map_directory: String,
     pub key: String,
     pub chunks: u32,
-    /// `[x0, x1, y0, y1]` of the tiles holding its chunks.
-    pub tiles: Option<[u32; 4]>,
+    pub tiles: Option<TileSpan>,
     /// The middle of the chunk nearest the middle of them all, where its sky is read.
     pub heart: Option<[f32; 3]>,
-    /// Wet cells by [`WATERS`].
-    pub water: [u32; 4],
+    pub wet_cells: WetCells,
     /// Its areas, itself among them, by the chunks they cover.
     pub places: Vec<(String, u32)>,
     /// Ground by the texels it shows on, 4096 a chunk.
     pub grounds: Vec<(usize, f64)>,
-    /// Models placed in it: on the ground, and inside buildings.
-    pub models: Vec<(usize, u32, u32)>,
-    /// Doodads standing on its ground, each once, by [`atlas::Kind::ALL`].
-    pub doodads: [u32; 5],
+    pub models: Vec<Tally>,
+    /// Doodads standing on its ground, each once.
+    pub doodads: Doodads,
     pub buildings: u32,
+}
+
+/// The tiles holding a zone's chunks, numbered as `Map_x_y.adt` numbers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileSpan {
+    pub x0: u32,
+    pub x1: u32,
+    pub y0: u32,
+    pub y1: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WetCells {
+    pub water: u32,
+    pub ocean: u32,
+    pub magma: u32,
+    pub slime: u32,
+}
+
+impl WetCells {
+    pub fn by_kind(self) -> [(&'static str, u32); 4] {
+        [
+            ("water", self.water),
+            ("ocean", self.ocean),
+            ("magma", self.magma),
+            ("slime", self.slime),
+        ]
+    }
 }
 
 /// A ground texture the chunks paint.
@@ -78,13 +106,42 @@ pub struct Model {
     pub mesh: bool,
     pub on_ground: u32,
     pub in_buildings: u32,
-    /// Zone, on the ground, inside buildings.
-    pub zones: Vec<(usize, u32, u32)>,
-    /// Zone, area within it, placements.
-    pub places: Vec<(usize, String, u32)>,
-    /// The least, the 10th, 50th and 90th percentiles, and the most.
-    pub scales: Option<[f32; 5]>,
+    pub zones: Vec<Tally>,
+    pub places: Vec<Place>,
+    pub scales: Option<Scales>,
     pub examples: Vec<Example>,
+}
+
+/// How often a model is placed in a zone; `index` is the model's in a zone's list, the zone's in a
+/// model's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tally {
+    pub index: usize,
+    pub on_ground: u32,
+    pub in_buildings: u32,
+}
+
+impl Tally {
+    pub fn placed(self) -> u32 {
+        self.on_ground + self.in_buildings
+    }
+}
+
+/// An area within a zone, and how often a model is placed in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub zone: usize,
+    pub area: String,
+    pub placements: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scales {
+    pub least: f32,
+    pub p10: f32,
+    pub p50: f32,
+    pub p90: f32,
+    pub most: f32,
 }
 
 /// One placement of a model, in world coordinates: x north, y west, z up.
@@ -98,9 +155,6 @@ pub struct Example {
     pub building: Option<String>,
 }
 
-pub const WATERS: [&str; 4] = scan::WATERS;
-
-/// The most common spelling, the least of those in byte order on a tie.
 fn spelling(counts: &BTreeMap<String, u32>) -> String {
     counts
         .iter()
@@ -126,12 +180,6 @@ pub fn key(path: &str) -> String {
             }
         })
         .collect()
-}
-
-/// The box the model at `path` fills, as [`Model::bounds`]: a building's groups, or a doodad's
-/// vertices at rest.
-pub fn bounds(chain: &Chain, path: &str) -> Option<[[f32; 3]; 2]> {
-    gather::model_bounds(chain, path)
 }
 
 pub fn read(chain: &Chain) -> Result<Survey, String> {

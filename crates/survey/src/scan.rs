@@ -1,6 +1,3 @@
-//! Every map's tiles read in parallel, each boiled down to what it paints and places before the
-//! next is kept, so the whole install fits in memory.
-
 use std::io::Cursor;
 
 use atlas::layer_weights;
@@ -10,12 +7,14 @@ use rayon::prelude::*;
 use terrain::{ALPHA_MAP_SIZE, CHUNK_SIZE, ChunkMesh, Doodad, LiquidKind, WmoInstance};
 use wdt::{GlobalWmo, WdtReader};
 
+use crate::WetCells;
+
 const MAP_DBC: &str = "DBFilesClient\\Map.dbc";
 const MAP_FIELDS: usize = 42;
-const TEXELS: usize = (ALPHA_MAP_SIZE * ALPHA_MAP_SIZE) as usize;
+pub(crate) const TEXELS_PER_CHUNK: usize = (ALPHA_MAP_SIZE * ALPHA_MAP_SIZE) as usize;
 const OUTER_ROW: usize = 17;
+const OUTER_VERTICES: usize = 81;
 
-/// A map `Map.dbc` lists and the install has a table of tiles for.
 pub(crate) struct MapTiles {
     pub(crate) id: u32,
     pub(crate) directory: String,
@@ -23,30 +22,27 @@ pub(crate) struct MapTiles {
     pub(crate) global_wmo: Option<GlobalWmo>,
 }
 
-/// One terrain chunk: its area, its middle, what paints it and what water lies on it.
-pub(crate) struct Chunk {
+pub(crate) struct ChunkSummary {
     pub(crate) area: u32,
     pub(crate) middle: [f32; 3],
-    /// Each layer's texture and the texels of the chunk's 64×64 it shows on.
-    pub(crate) paint: Vec<(String, f32)>,
-    /// Wet cells of the chunk's 8×8, by [`WATERS`].
-    pub(crate) water: [u16; 4],
+    pub(crate) paint: Vec<Paint>,
+    pub(crate) wet_cells: WetCells,
 }
 
-/// The kinds of water a cell can hold, as the catalog names them.
-pub(crate) const WATERS: [&str; 4] = ["water", "ocean", "magma", "slime"];
+pub(crate) struct Paint {
+    pub(crate) texture: String,
+    pub(crate) texels: f32,
+}
 
-/// A placement a tile lists, with the area under it when it stands on this tile.
 pub(crate) struct Listed<T> {
     pub(crate) placed: T,
-    pub(crate) area: Option<u32>,
+    pub(crate) area_here: Option<u32>,
 }
 
-/// One tile, read and boiled down.
-pub(crate) struct Tile {
+pub(crate) struct TileSummary {
     pub(crate) map: usize,
     pub(crate) at: (u32, u32),
-    pub(crate) chunks: Vec<Chunk>,
+    pub(crate) chunks: Vec<ChunkSummary>,
     pub(crate) doodads: Vec<Listed<Doodad>>,
     pub(crate) wmos: Vec<Listed<WmoInstance>>,
 }
@@ -99,9 +95,7 @@ pub(crate) fn maps(chain: &Chain) -> Result<Vec<MapTiles>, String> {
     Ok(maps)
 }
 
-/// Every tile of every map, in map order and then rows from the north-west. A tile that fails to
-/// read or mesh is left out, as the client would draw nothing there.
-pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<Tile> {
+pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
     let wanted: Vec<(usize, (u32, u32))> = maps
         .iter()
         .enumerate()
@@ -115,12 +109,12 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<Tile> {
                 .read(&format!("World\\Maps\\{dir}\\{dir}_{x}_{y}.adt"))
                 .ok()?;
             let mesh = terrain::adt_to_tile_mesh(&bytes).ok()?;
-            let area = |p: [f32; 3]| terrain::area_id_at(&mesh.chunks, p);
+            let area_here = |p: [f32; 3]| terrain::area_id_at(&mesh.chunks, p);
             let doodads = mesh
                 .doodads
                 .iter()
                 .map(|d| Listed {
-                    area: area(d.position),
+                    area_here: area_here(d.position),
                     placed: d.clone(),
                 })
                 .collect();
@@ -128,11 +122,11 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<Tile> {
                 .wmos
                 .iter()
                 .map(|w| Listed {
-                    area: area(w.position),
+                    area_here: area_here(w.position),
                     placed: w.clone(),
                 })
                 .collect();
-            Some(Tile {
+            Some(TileSummary {
                 map,
                 at: (x, y),
                 chunks: mesh.chunks.iter().map(chunk).collect(),
@@ -143,11 +137,11 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<Tile> {
         .collect()
 }
 
-fn chunk(c: &ChunkMesh) -> Chunk {
-    let n = c.layer_textures.len().min(4);
+fn chunk(c: &ChunkMesh) -> ChunkSummary {
+    let layers = c.layer_textures.len().min(4);
     let mut shown = [0f32; 4];
-    for texel in 0..TEXELS {
-        let w = layer_weights(c.alpha_map.as_deref(), texel, n);
+    for texel in 0..TEXELS_PER_CHUNK {
+        let w = layer_weights(c.alpha_map.as_deref(), texel, layers);
         for (sum, w) in shown.iter_mut().zip(w) {
             *sum += w;
         }
@@ -155,27 +149,30 @@ fn chunk(c: &ChunkMesh) -> Chunk {
     let paint = c
         .layer_textures
         .iter()
-        .take(n)
+        .take(layers)
         .zip(shown)
-        .map(|(t, w)| (t.clone(), w))
+        .map(|(texture, texels)| Paint {
+            texture: texture.clone(),
+            texels,
+        })
         .collect();
-    let mut water = [0u16; 4];
+    let mut wet_cells = WetCells::default();
     for l in &c.liquids {
-        let slot = match l.kind {
-            LiquidKind::Still | LiquidKind::Rapids => 0,
-            LiquidKind::Ocean => 1,
-            LiquidKind::Magma => 2,
-            LiquidKind::Slime => 3,
-        };
-        water[slot] += l.wet.iter().filter(|w| **w).count() as u16;
+        let wet = l.wet.iter().filter(|w| **w).count() as u32;
+        match l.kind {
+            LiquidKind::Still | LiquidKind::Rapids => wet_cells.water += wet,
+            LiquidKind::Ocean => wet_cells.ocean += wet,
+            LiquidKind::Magma => wet_cells.magma += wet,
+            LiquidKind::Slime => wet_cells.slime += wet,
+        }
     }
     let [x, y, _] = c.positions[0];
     let outer = (0..9).flat_map(|r| (0..9).map(move |k| r * OUTER_ROW + k));
-    let z = outer.map(|i| c.positions[i][2]).sum::<f32>() / 81.0;
-    Chunk {
+    let z = outer.map(|i| c.positions[i][2]).sum::<f32>() / OUTER_VERTICES as f32;
+    ChunkSummary {
         area: c.area_id,
         middle: [x - CHUNK_SIZE / 2.0, y - CHUNK_SIZE / 2.0, z],
         paint,
-        water,
+        wet_cells,
     }
 }

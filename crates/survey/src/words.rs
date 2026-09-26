@@ -1,7 +1,3 @@
-//! What a ground texture is, told by the words in its file name: a guess its swatch confirms.
-
-/// The kinds, each with the words that name it, first match wins: a rock road is a road and a
-/// rocky mud is mud.
 const GROUND_KINDS: [(&str, &[&str]); 12] = [
     (
         "road",
@@ -34,7 +30,6 @@ const GROUND_KINDS: [(&str, &[&str]); 12] = [
     ("dirt", &["dirt", "ground", "earth", "footprint", "crack"]),
 ];
 
-/// The kind of the ground texture at `path`, `other` when no word names one.
 pub(crate) fn ground_kind(path: &str) -> &'static str {
     let name = path
         .rsplit(['\\', '/'])
@@ -47,7 +42,6 @@ pub(crate) fn ground_kind(path: &str) -> &'static str {
         .map_or("other", |(kind, _)| kind)
 }
 
-/// Every ground kind, in the order the catalog lists them.
 pub(crate) fn ground_kinds() -> impl Iterator<Item = &'static str> {
     GROUND_KINDS
         .iter()

@@ -55,7 +55,14 @@ fn the_maps_are_read_whole_each_placement_once() {
         .iter()
         .find(|z| z.name == "Elwynn Forest")
         .expect("Elwynn");
-    assert_eq!(elwynn.doodads, [2121, 4723, 666, 1347, 1788]);
+    let census = atlas::Doodads {
+        trees: 2121,
+        shrubs: 4723,
+        rocks: 666,
+        fences: 1347,
+        props: 1788,
+    };
+    assert_eq!(elwynn.doodads, census, "as atlas counts it");
     let lamp = inv
         .models
         .iter()
@@ -64,7 +71,7 @@ fn the_maps_are_read_whole_each_placement_once() {
     let [lo, hi] = lamp.bounds.expect("its box");
     assert!((hi[2] - lo[2] - 4.1).abs() < 0.01, "4.1 yd tall");
     assert_eq!(
-        lamp.zones.first().map(|z| inv.zones[z.0].name.as_str()),
+        lamp.zones.first().map(|z| inv.zones[z.index].name.as_str()),
         Some("Elwynn Forest")
     );
     let grass = inv

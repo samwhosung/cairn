@@ -1,6 +1,3 @@
-//! The catalog on disk: every file written only when it is missing, each whole or not at all, and
-//! the same install always giving the same bytes.
-
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -12,7 +9,7 @@ use crate::pages::{self, Cell, PER_PAGE};
 use crate::picture::{swatch as draw_swatch, write_atomically};
 use crate::sky::{self, HOURS, hex};
 use crate::text::{
-    self, SkyLines, ZoneSound, ground_tsv, models_tsv, picture, size, stem, thousands, zones_tsv,
+    self, ZoneSound, ground_tsv, models_tsv, picture, size, stem, thousands, zones_tsv,
 };
 use crate::{Model, Survey, Zone, words};
 
@@ -55,7 +52,8 @@ fn picture_file(
     Ok(Written { wrote: 1, kept: 0 })
 }
 
-/// Writes the indexes, the detail files, the ground swatches and the zones' skies into `dir`.
+/// Writes the indexes, the detail files, the ground swatches and the zones' skies into `dir`: only
+/// the files missing there, each whole or not at all, the same survey always to the same bytes.
 /// `sounds` names a zone's music and ambience; `px_per_yard` says at what scale a model's picture
 /// is drawn.
 pub fn write(
@@ -98,7 +96,7 @@ pub fn write(
         .par_iter()
         .map(|z| {
             let skies = z.heart.map(|heart| sky::skies(&lights, z.map, heart));
-            let lines = SkyLines(skies.as_ref().map_or_else(Vec::new, sky_lines));
+            let lines = skies.as_ref().map_or_else(Vec::new, sky_lines);
             let mut w = text_file(dir, &format!("zones/{}.txt", z.key), || {
                 text::zone_txt(inv, z, &sounds(z), &lines)
             })?;
@@ -127,8 +125,8 @@ fn sky_lines(skies: &[light::Atmosphere; 4]) -> Vec<String> {
                 "{hour}: dome from the zenith down {}, fog {} from {:.0} to {:.0} yd; sun {}, ambient {}; river {} to {} deep, ocean {} to {} deep",
                 dome.join(" "),
                 hex(a.fog_color),
-                a.fog_start_frac * a.fog_end.min(350.0),
-                a.fog_end.min(350.0),
+                a.fog_start_frac * a.fog_end.min(FAR_CLIP),
+                a.fog_end.min(FAR_CLIP),
                 hex(a.sun_diffuse),
                 hex(a.ambient),
                 hex(a.water_river[0]),
@@ -147,15 +145,20 @@ pub fn pictures_missing(inv: &Survey, dir: &Path) -> Vec<usize> {
         .collect()
 }
 
-/// The models of a page by kind and by zone: each page names its own cells.
 struct Page {
     rel: String,
     title: String,
     first: usize,
-    cells: Vec<(String, Cell)>,
+    entries: Vec<Entry>,
 }
 
-fn model_cell(m: &Model, count: u32) -> (String, Cell) {
+/// A cell of a page, and its line in the page's list.
+struct Entry {
+    line: String,
+    cell: Cell,
+}
+
+fn model_entry(m: &Model, count: u32) -> Entry {
     let line = format!(
         "{}\t{}\t{} placed\t{}",
         m.path,
@@ -171,16 +174,16 @@ fn model_cell(m: &Model, count: u32) -> (String, Cell) {
         name: stem(&m.path).to_owned(),
         facts: format!("{tall}{} placed", thousands(count.into())),
     };
-    (line, cell)
+    Entry { line, cell }
 }
 
-fn paged(rel: &str, title: &str, cells: Vec<(String, Cell)>) -> Vec<Page> {
-    let total = cells.len();
+fn paged(rel: &str, title: &str, entries: Vec<Entry>) -> Vec<Page> {
+    let total = entries.len();
     let pages = total.div_ceil(PER_PAGE);
-    let mut cells = cells.into_iter();
+    let mut entries = entries.into_iter();
     (0..pages)
         .map(|p| {
-            let chunk: Vec<(String, Cell)> = cells.by_ref().take(PER_PAGE).collect();
+            let chunk: Vec<Entry> = entries.by_ref().take(PER_PAGE).collect();
             let (first, last) = (p * PER_PAGE + 1, p * PER_PAGE + chunk.len());
             Page {
                 rel: format!("{rel}-{:02}", p + 1),
@@ -189,12 +192,14 @@ fn paged(rel: &str, title: &str, cells: Vec<(String, Cell)>) -> Vec<Page> {
                     p + 1
                 ),
                 first,
-                cells: chunk,
+                entries: chunk,
             }
         })
         .collect()
 }
 
+/// The client draws fog no farther than its far clip.
+const FAR_CLIP: f32 = 350.0;
 const MODEL_KINDS: [&str; 6] = ["tree", "shrub", "rock", "fence", "prop", "building"];
 
 fn plan(inv: &Survey) -> Vec<Page> {
@@ -206,14 +211,14 @@ fn plan(inv: &Survey) -> Vec<Page> {
                 .cmp(&(a.on_ground + a.in_buildings))
                 .then(a.key.cmp(&b.key))
         });
-        let cells = of
+        let entries = of
             .iter()
-            .map(|m| model_cell(m, m.on_ground + m.in_buildings))
+            .map(|m| model_entry(m, m.on_ground + m.in_buildings))
             .collect();
         pages.extend(paged(
             &format!("pages/kind/{kind}"),
             &format!("{kind}s, most placed first"),
-            cells,
+            entries,
         ));
     }
     for kind in words::ground_kinds() {
@@ -226,50 +231,47 @@ fn plan(inv: &Survey) -> Vec<Page> {
                 .total_cmp(&inv.grounds[a].texels)
                 .then(a.cmp(&b))
         });
-        let cells = of.iter().map(|&g| ground_cell(inv, g, None)).collect();
+        let entries = of.iter().map(|&g| ground_entry(inv, g, None)).collect();
         pages.extend(paged(
             &format!("pages/ground/{kind}"),
             &format!("{kind} ground, most painted first"),
-            cells,
+            entries,
         ));
     }
     for z in &inv.zones {
         for kind in MODEL_KINDS {
-            let cells: Vec<(String, Cell)> = z
+            let entries: Vec<Entry> = z
                 .models
                 .iter()
-                .filter(|(m, _, _)| inv.models[*m].kind == kind)
-                .map(|&(m, g, i)| model_cell(&inv.models[m], g + i))
+                .filter(|t| inv.models[t.index].kind == kind)
+                .map(|t| model_entry(&inv.models[t.index], t.placed()))
                 .collect();
             let title = format!("{kind}s placed in {}, most first", z.name);
             pages.extend(paged(
                 &format!("pages/zone/{}/{kind}", z.key),
                 &title,
-                cells,
+                entries,
             ));
         }
-        let cells = z
+        let entries = z
             .grounds
             .iter()
-            .map(|&(g, t)| ground_cell(inv, g, Some((t, z))))
+            .map(|&(g, t)| ground_entry(inv, g, Some((t, z))))
             .collect();
         let title = format!("ground painted in {}, most first", z.name);
         pages.extend(paged(
             &format!("pages/zone/{}/ground", z.key),
             &title,
-            cells,
+            entries,
         ));
     }
     pages
 }
 
-fn ground_cell(inv: &Survey, g: usize, in_zone: Option<(f64, &Zone)>) -> (String, Cell) {
+fn ground_entry(inv: &Survey, g: usize, in_zone: Option<(f64, &Zone)>) -> Entry {
     let ground = &inv.grounds[g];
     let how = match in_zone {
-        Some((t, z)) => format!(
-            "{} of its ground",
-            text::share(t, f64::from(z.chunks) * 4096.0)
-        ),
+        Some((t, z)) => format!("{} of its ground", text::share(t, text::zone_texels(z))),
         None => format!("{} chunks", thousands(ground.chunks.into())),
     };
     let line = format!(
@@ -283,11 +285,16 @@ fn ground_cell(inv: &Survey, g: usize, in_zone: Option<(f64, &Zone)>) -> (String
         name: stem(&ground.path).to_owned(),
         facts: format!("{}, {how}", ground.kind),
     };
-    (line, cell)
+    Entry { line, cell }
 }
 
-/// Writes the pages of pictures and their lists, and `pages.tsv`, once every picture is in `dir`.
+/// Writes the pages of pictures, their lists and `pages.tsv` into `dir` as [`write`] writes, once
+/// every model's picture is there.
 pub fn write_pages(inv: &Survey, dir: &Path) -> Result<Written, String> {
+    let missing = pictures_missing(inv, dir).len();
+    if missing > 0 {
+        return Err(format!("{missing} models are not drawn yet"));
+    }
     let pages = plan(inv);
     let mut index = String::from("page\ttitle\tlist\n");
     for p in &pages {
@@ -300,18 +307,18 @@ pub fn write_pages(inv: &Survey, dir: &Path) -> Result<Written, String> {
             let first = p.first;
             let mut w = text_file(dir, &format!("{}.txt", p.rel), || {
                 let mut out = format!("{}\n", p.title);
-                for (i, (line, _)) in p.cells.iter().enumerate() {
-                    let _ = writeln!(out, "{}\t{line}", first + i);
+                for (i, entry) in p.entries.iter().enumerate() {
+                    let _ = writeln!(out, "{}\t{}", first + i, entry.line);
                 }
                 out
             })?;
             let cells: Vec<Cell> = p
-                .cells
+                .entries
                 .iter()
-                .map(|(_, c)| Cell {
-                    picture: dir.join(&c.picture),
-                    name: c.name.clone(),
-                    facts: c.facts.clone(),
+                .map(|e| Cell {
+                    picture: dir.join(&e.cell.picture),
+                    name: e.cell.name.clone(),
+                    facts: e.cell.facts.clone(),
                 })
                 .collect();
             w.add(picture_file(dir, &format!("{}.png", p.rel), |out| {
@@ -347,19 +354,23 @@ What is here
                ground/ ground textures by kind, most painted first
                zone/   a zone's models by kind and its ground, most first
 
-Searching: every .tsv is tab-separated, a header first, a row a thing. Search them with grep:
-  grep -i farmhouse models.tsv              models whose path says farmhouse
-  grep -i pine models.tsv | grep 'Elwynn'   pines placed in Elwynn Forest
-  awk -F'\\t' '$1 == \"tree\" && /Duskwood/' models.tsv   trees placed in Duskwood
-  grep -i cobble ground.tsv                 cobbled ground
+Searching: every .tsv is tab-separated, a header first, a row a thing. A row names every zone its
+thing is placed in, and zone names hold words too (Silverpine Forest holds pine), so match the
+words of a name against the path, the second column:
+  awk -F'\\t' 'tolower($2) ~ /farmhouse/' models.tsv                  farmhouses
+  awk -F'\\t' 'tolower($2) ~ /pine/ && /Elwynn Forest/' models.tsv    pines placed in Elwynn Forest
+  awk -F'\\t' '$1 == \"tree\" && /Duskwood/' models.tsv                  trees placed in Duskwood
+  awk -F'\\t' 'tolower($2) ~ /cobble/' ground.tsv                     cobbled ground
 Names say only so much: an Elwynn pine is named ElwynnPine01, but many trees name no species. Look
 at pages/zone/elwynn-forest/tree-01.png and the pages after it to see all of Elwynn's trees.
 
 The pictures: each model is drawn from the north-west, 25 degrees above it, with its front (+x)
 to the viewer's left and its left side (+y) to the right, through an orthographic camera, so a
-yard is the same length anywhere in the picture. The dark figure beside it stands on the same
-ground and is a player's height, 2.03 yd. Models are drawn at rest, lit by Azeroth's noon, on a
-flat backdrop. A building shows the doodads its default set places.
+yard is the same length anywhere in the picture: its .txt says how many pixels. The dark figure
+beside it stands on the same ground and is a player's height, 2.03 yd. Seen from above, a thing's
+height in the picture takes in its depth: a lamp post's arm, reaching back, rises above its post.
+Models are drawn at rest, lit by Azeroth's noon, on a flat backdrop. A building is drawn whole,
+with the doodads its default set places: a dungeon, which has no outside, shows its rooms.
 
 Kinds are guesses from the words in a file's name; the pictures are the truth.
 Sizes are yards at scale 1: how tall, then its extent forward (x) by left (y). Placements count

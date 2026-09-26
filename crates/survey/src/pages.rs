@@ -1,6 +1,3 @@
-//! Pages of pictures: twenty to a page, each numbered and named, so an agent can choose by looking
-//! and then read the page's list to learn which file a number is.
-
 use std::path::{Path, PathBuf};
 
 use image::imageops::FilterType;
@@ -13,22 +10,22 @@ pub(crate) const COLUMNS: u32 = 5;
 pub(crate) const ROWS: u32 = 4;
 pub(crate) const PER_PAGE: usize = (COLUMNS * ROWS) as usize;
 pub(crate) const CELL: u32 = 240;
+/// A model's picture is this many pixels square: two cells of a page, which averages it down.
+pub const PICTURE_SIDE: u32 = 2 * CELL;
 const LABEL: u32 = 26;
 const GUTTER: u32 = 6;
 const TITLE: u32 = 24;
 const PAGE: [u8; 3] = [38, 40, 44];
 const INK: [u8; 3] = [232, 232, 232];
 const DIM: [u8; 3] = [170, 176, 184];
-const MISSING: [u8; 3] = [90, 30, 30];
+const NUMBER_SCALE: u32 = 2;
 
-/// One cell of a page: the picture, and two short lines under it.
 pub(crate) struct Cell {
     pub(crate) picture: PathBuf,
     pub(crate) name: String,
     pub(crate) facts: String,
 }
 
-/// Draws `cells` (at most [`PER_PAGE`]) numbered from `first`, under `title`.
 pub(crate) fn draw(title: &str, first: usize, cells: &[Cell], out: &Path) -> Result<(), String> {
     let width = GUTTER + COLUMNS * (CELL + GUTTER);
     let rows = (cells.len() as u32).div_ceil(COLUMNS).max(1);
@@ -41,19 +38,12 @@ pub(crate) fn draw(title: &str, first: usize, cells: &[Cell], out: &Path) -> Res
             GUTTER + col * (CELL + GUTTER),
             TITLE + row * (CELL + LABEL + GUTTER),
         );
-        match thumbnail(&cell.picture) {
-            Some(thumb) => image::imageops::replace(&mut page, &thumb, x.into(), y.into()),
-            None => {
-                for yy in y..y + CELL {
-                    for xx in x..x + CELL {
-                        page.put_pixel(xx, yy, Rgb(MISSING));
-                    }
-                }
-            }
-        }
+        let thumb = thumbnail(&cell.picture)
+            .ok_or_else(|| format!("{}: no picture", cell.picture.display()))?;
+        image::imageops::replace(&mut page, &thumb, x.into(), y.into());
         let number = (first + i).to_string();
-        font::draw(&mut page, (x, y + CELL + 4), &number, 2, 4, INK);
-        let text_x = x + (number.len() as u32 * font::ADVANCE + 1) * 2;
+        font::draw(&mut page, (x, y + CELL + 4), &number, NUMBER_SCALE, 4, INK);
+        let text_x = x + (number.len() as u32 * font::ADVANCE + 1) * NUMBER_SCALE;
         let room = ((x + CELL).saturating_sub(text_x) / font::ADVANCE) as usize;
         font::draw(&mut page, (text_x, y + CELL + 4), &cell.name, 1, room, INK);
         font::draw(
@@ -68,14 +58,12 @@ pub(crate) fn draw(title: &str, first: usize, cells: &[Cell], out: &Path) -> Res
     write_atomically(out, |part| save_png(&page, part))
 }
 
-/// The picture at `path` fitted to a cell: halved by averaging when it is twice the cell, as the
-/// catalog's own pictures are, else resampled.
 fn thumbnail(path: &Path) -> Option<RgbImage> {
     let img = image::open(path).ok()?.to_rgb8();
     if img.dimensions() == (CELL, CELL) {
         return Some(img);
     }
-    if img.dimensions() == (2 * CELL, 2 * CELL) {
+    if img.dimensions() == (PICTURE_SIDE, PICTURE_SIDE) {
         let mut out = RgbImage::new(CELL, CELL);
         for (x, y, px) in out.enumerate_pixels_mut() {
             let mut sum = [0u32; 3];
