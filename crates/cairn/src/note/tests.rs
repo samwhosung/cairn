@@ -90,6 +90,7 @@ fn facts() -> Facts {
         feet_wow: [-9436.1, 49.0, 81.6],
         heading: -std::f32::consts::FRAC_PI_2,
         spot: UVec2::new(812, 395),
+        patch: None,
     }
 }
 
@@ -148,6 +149,27 @@ fn the_flags_a_note_gives_are_taken_by_the_shot_and_the_window_alike() {
         (UVec2::new(3200, 1800), UVec2::new(1600, 900))
     );
     assert!(!shot.glow && !window.glow);
+}
+
+#[test]
+fn a_note_taken_through_a_patch_draws_again_through_it() {
+    let patch = PathBuf::from("/work/walk/B");
+    let text = Facts {
+        patch: Some(patch.clone()),
+        ..facts()
+    }
+    .text(LOOK, None);
+    for prefix in ["see it: cairn ", "walk there: cairn "] {
+        let line = text.lines().find_map(|l| l.strip_prefix(prefix));
+        let args = crate::args::parse(line.expect(prefix).split_whitespace().map(str::to_owned));
+        assert_eq!(args.expect(prefix).patch.as_ref(), Some(&patch), "{prefix}");
+    }
+    let spaced = Facts {
+        patch: Some(PathBuf::from("/a b/it's")),
+        ..facts()
+    }
+    .text(LOOK, None);
+    assert!(spaced.contains(" --patch '/a b/it'\\''s' "), "{spaced}");
 }
 
 #[test]

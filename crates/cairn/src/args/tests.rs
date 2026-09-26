@@ -174,6 +174,16 @@ fn the_window_leaves_its_notes_where_it_is_told() {
 }
 
 #[test]
+fn the_window_and_the_shot_alike_read_through_a_patch_directory() {
+    assert_eq!(parsed("").expect("parses").patch, None);
+    for line in ["--patch a/b --fly", "shot --patch a/b --out a.png"] {
+        let patch = parsed(line).expect("parses").patch;
+        assert_eq!(patch, Some(PathBuf::from("a/b")), "{line}");
+    }
+    assert!(parsed("--patch a --patch b").is_err());
+}
+
+#[test]
 fn a_shot_ages_its_world_two_and_a_half_seconds_unless_told() {
     let age = |line: &str| parsed(line).expect("parses").world_age;
     assert_eq!(age("shot --out a.png"), Duration::from_millis(2500));

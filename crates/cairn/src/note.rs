@@ -24,12 +24,14 @@ const MAGENTA: Color = Color::srgb(1.0, 0.0, 1.0);
 
 pub struct NotePlugin {
     pub dir: Option<PathBuf>,
+    pub patch: Option<PathBuf>,
 }
 
 impl Plugin for NotePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Notes {
             dir: self.dir.clone(),
+            patch: self.patch.clone(),
             written: Vec::new(),
         })
         .init_resource::<Pointer>()
@@ -54,6 +56,7 @@ pub enum Pointer {
 #[derive(Resource)]
 pub struct Notes {
     dir: Option<PathBuf>,
+    patch: Option<PathBuf>,
     pub written: Vec<PathBuf>,
 }
 
@@ -108,11 +111,12 @@ fn take_note(
         warn!("no note: there is no data directory for notes; give --notes DIR");
         return;
     };
-    let (Ok((_, _, target)), Some(pending)) = (scene.camera.single(), gather(&scene, *pointer))
+    let (Ok((_, _, target)), Some(mut pending)) = (scene.camera.single(), gather(&scene, *pointer))
     else {
         warn!("no note: the camera has no frame yet");
         return;
     };
+    pending.facts.patch.clone_from(&notes.patch);
     let mut note = Some(Note {
         root,
         name: UtcTime::at(pending.facts.taken).dir_name(),
@@ -199,6 +203,7 @@ fn gather(scene: &Scene<'_, '_>, pointer: Pointer) -> Option<PendingNote> {
         feet_wow: bevy_to_wow(feet),
         heading: scene.player.face_yaw,
         spot,
+        patch: None,
     };
     Some(PendingNote {
         facts,
@@ -237,6 +242,7 @@ struct Facts {
     feet_wow: [f32; 3],
     heading: f32,
     spot: UVec2,
+    patch: Option<PathBuf>,
 }
 
 impl Facts {
@@ -248,8 +254,12 @@ impl Facts {
             flag_xyz(self.eye_wow),
             flag_xyz(look_wow)
         );
+        let patch = self
+            .patch
+            .as_deref()
+            .map_or_else(String::new, |dir| format!(" --patch {}", shell_word(dir)));
         let view = format!(
-            "--map {} --time {hour:02}:{minute:02}{glow} {camera}",
+            "--map {}{patch} --time {hour:02}:{minute:02}{glow} {camera}",
             self.map
         );
         let heading = self.heading.to_degrees().rem_euclid(360.0);
@@ -335,6 +345,18 @@ fn named(seen: &Seen, adt: &str) -> String {
 
 fn flag_xyz([x, y, z]: [f32; 3]) -> String {
     format!("{x},{y},{z}")
+}
+
+fn shell_word(path: &Path) -> String {
+    let text = path.display().to_string();
+    if !text.is_empty()
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-+,:@".contains(&b))
+    {
+        return text;
+    }
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 struct Note {

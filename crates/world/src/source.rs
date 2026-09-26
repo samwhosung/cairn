@@ -26,6 +26,11 @@ impl Install {
     pub fn open(data: &Path) -> Result<Self, ChainError> {
         Ok(Self(Arc::new(Chain::open(data)?)))
     }
+
+    /// Opens the patch chain in `data` with the directory `patch` laid over it.
+    pub fn open_patched(data: &Path, patch: &Path) -> Result<Self, ChainError> {
+        Ok(Self(Arc::new(Chain::open(data)?.with_patch(patch)?)))
+    }
 }
 
 /// Registers the `mpq://` source over `install` and keeps `install` as a resource. Call it before

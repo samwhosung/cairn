@@ -182,6 +182,7 @@ impl Painter {
                 world::WorldPlugin,
                 NotePlugin {
                     dir: Some(PathBuf::from(&out).join("notes")),
+                    patch: None,
                 },
             ));
         let joins = net.is_some();

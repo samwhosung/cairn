@@ -51,7 +51,10 @@ fn main() -> AppExit {
     if matches!(args.mode, args::Mode::Window(_)) && args.notes.is_none() {
         args.notes = server::data_dir().map(|dir| dir.join("notes"));
     }
-    let install = match install() {
+    args.patch = args
+        .patch
+        .map(|patch| std::path::absolute(&patch).unwrap_or(patch));
+    let install = match install(args.patch.as_deref()) {
         Ok(install) => install,
         Err(exit) => return exit,
     };
@@ -84,12 +87,17 @@ fn main() -> AppExit {
     app.run()
 }
 
-fn install() -> Result<Install, AppExit> {
+fn install(patch: Option<&Path>) -> Result<Install, AppExit> {
     let Some(data) = std::env::var_os("WOW_DATA") else {
         eprintln!("cairn: set WOW_DATA to the Data directory of a WoW 1.12.1 install");
         return Err(AppExit::from_code(2));
     };
-    Install::open(Path::new(&data)).map_err(|e| {
+    let data = Path::new(&data);
+    match patch {
+        Some(patch) => Install::open_patched(data, patch),
+        None => Install::open(data),
+    }
+    .map_err(|e| {
         eprintln!("cairn: {e}");
         AppExit::error()
     })

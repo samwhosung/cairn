@@ -11,6 +11,7 @@ pub struct Order {
     pub map: Option<String>,
     pub yards: f32,
     pub marks: Vec<[f32; 2]>,
+    pub patch: Option<PathBuf>,
     pub out: PathBuf,
 }
 
@@ -22,7 +23,7 @@ pub fn main(argv: &[String]) -> AppExit {
             return AppExit::from_code(2);
         }
     };
-    let install = match crate::install() {
+    let install = match crate::install(order.patch.as_deref()) {
         Ok(install) => install,
         Err(exit) => return exit,
     };
@@ -40,7 +41,7 @@ pub fn main(argv: &[String]) -> AppExit {
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Order, String> {
     let mut args = args.into_iter();
-    let (mut zone, mut map, mut yards, mut out) = (None, None, None, None);
+    let (mut zone, mut map, mut yards, mut patch, mut out) = (None, None, None, None, None);
     let mut marks = Vec::new();
     while let Some(arg) = args.next() {
         let Some(flag) = arg.strip_prefix("--") else {
@@ -55,9 +56,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Order, String> {
         match flag {
             "map" if map.is_none() => map = Some(value),
             "yd" if yards.is_none() => yards = Some(parse_yards(&value)?),
+            "patch" if patch.is_none() => patch = Some(PathBuf::from(value)),
             "out" if out.is_none() => out = Some(PathBuf::from(value)),
             "mark" => marks.push(parse_point(&value)?),
-            "map" | "yd" | "out" => return Err(format!("{arg} is given twice")),
+            "map" | "yd" | "patch" | "out" => return Err(format!("{arg} is given twice")),
             _ => return Err(format!("unknown argument {arg}")),
         }
     }
@@ -74,6 +76,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Order, String> {
         map,
         yards: yards.unwrap_or(DEFAULT_YARDS),
         marks,
+        patch,
         out,
     })
 }
@@ -169,16 +172,19 @@ mod tests {
                 map: None,
                 yards: 2.0,
                 marks: Vec::new(),
+                patch: None,
                 out: PathBuf::from("a.png"),
             }
         );
-        let order = parsed("--yd 0.5 --mark 1,-2 Tanaris --map 1 --mark -3.5,4 --out b/c.PNG")
-            .expect("parses");
+        let order =
+            parsed("--yd 0.5 --mark 1,-2 Tanaris --map 1 --patch p/q --mark -3.5,4 --out b/c.PNG")
+                .expect("parses");
         assert_eq!(
             (order.zone.as_str(), order.map.as_deref(), order.yards),
             ("Tanaris", Some("1"), 0.5)
         );
         assert_eq!(order.marks, vec![[1.0, -2.0], [-3.5, 4.0]]);
+        assert_eq!(order.patch, Some(PathBuf::from("p/q")));
     }
 
     #[test]
@@ -197,6 +203,7 @@ mod tests {
             "Westfall --yd 1 --yd 2 --out a.png",
             "Westfall --map 0 --map 1 --out a.png",
             "Westfall --out a.png --out b.png",
+            "Westfall --patch p --patch q --out a.png",
             "Westfall --mark 1 --out a.png",
             "Westfall --mark 1,2,3 --out a.png",
             "Westfall --mark 1,x --out a.png",

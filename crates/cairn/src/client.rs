@@ -39,7 +39,10 @@ pub fn assemble(
                     look: look.clone(),
                 },
                 sound_plugin(args.mute),
-                note::NotePlugin { dir: args.notes },
+                note::NotePlugin {
+                    dir: args.notes,
+                    patch: args.patch,
+                },
             ));
             let start = args.pose.target.to_array();
             net::join(app, &joining, &look, map.id, start, args.pose.heading)?;

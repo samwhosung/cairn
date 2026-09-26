@@ -15,7 +15,7 @@ const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
              [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
-             [--game NAME [--knobs FILE] [--overlay FILE]] [--notes DIR]
+             [--game NAME [--knobs FILE] [--overlay FILE]] [--notes DIR] [--patch DIR]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
          else can join it. --connect joins a running server, which places the player; --host
@@ -29,7 +29,7 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          `world` (on macOS ~/Library/Application Support/cairn/worlds/NAME.sqlite), and a
          window alone keeps nothing unless told
        cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
-                  --out FILE.png
+                  [--patch DIR] --out FILE.png
          render one frame without a window, once everything in it has loaded and the
          world has run S seconds (2.5 by default)
        cairn shot --display ID [--age S] [--scale K] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
@@ -37,7 +37,7 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          size (1 by default), and shoot it S seconds (2.5 by default) after it appears, from
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
-       cairn atlas ZONE [--map MAP] [--yd N] [--mark X,Y]... --out FILE.png
+       cairn atlas ZONE [--map MAP] [--yd N] [--mark X,Y]... [--patch DIR] --out FILE.png
          draw the AreaTable zone ZONE from above, north up, N yards a pixel (2 by default),
          on its own map unless MAP names another: the ground in its textures' colours, lit
          from the north-west and tinted by the water's depth, the land around the zone
@@ -46,7 +46,10 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's
-full-screen glow.
+full-screen glow. --patch DIR lays a directory over the install, above every archive: a
+file in it at the path the install names it by, such as
+World/Maps/Azeroth/Azeroth_32_48.adt in any case and with / or \\, is read instead of
+the archives' copy, and every other file comes from the archives.
 
 CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
   --eye X,Y,Z --look X,Y,Z                stand at the eye, look at the point
@@ -75,7 +78,7 @@ camera it was drawn from, what the spot shows, the shot that draws the view agai
 window that walks on from where it was taken. Notes go in the user's data directory (on
 macOS ~/Library/Application Support/cairn/notes), or in --notes DIR.";
 
-const FLAGS: [&str; 27] = [
+const FLAGS: [&str; 28] = [
     "age",
     "at",
     "az",
@@ -96,6 +99,7 @@ const FLAGS: [&str; 27] = [
     "notes",
     "out",
     "overlay",
+    "patch",
     "race",
     "scale",
     "sex",
@@ -129,6 +133,7 @@ pub struct Args {
     pub world_age: Duration,
     pub look: Look,
     pub notes: Option<PathBuf>,
+    pub patch: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,6 +282,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     if shot && notes.is_some() {
         return Err("--notes is for the window".into());
     }
+    let patch = given.remove("patch").map(PathBuf::from);
     let mode = match out {
         Some(path) => {
             shot_joins_nothing(&given, host)?;
@@ -297,6 +303,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         world_age,
         look,
         notes,
+        patch,
     })
 }
 
