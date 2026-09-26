@@ -23,17 +23,30 @@ fn wow_to_bevy_quat() -> Quat {
     ))
 }
 
+/// The heading an MDDF or MODF entry gives a model whose front faces north.
+pub const NORTH_HEADING_DEG: f32 = 180.0;
+
+/// An MDDF or MODF entry's heading for a model facing `facing_deg`, from north toward west.
+pub fn heading_of(facing_deg: f32) -> f32 {
+    (facing_deg + NORTH_HEADING_DEG).rem_euclid(360.0)
+}
+
+/// The inverse of [`heading_of`].
+pub fn facing_of(heading_deg: f32) -> f32 {
+    (heading_deg - NORTH_HEADING_DEG).rem_euclid(360.0)
+}
+
 /// The rotation of a model placed by an ADT's MDDF or MODF entry, from its angles in degrees, for
 /// meshes already in Bevy's axes: `ry` turns it about the up axis, `rx` and `rz` pitch and roll it.
 pub fn placement_rotation(rotation_deg: [f32; 3]) -> Quat {
-    use std::f32::consts::{FRAC_PI_2, PI};
+    use std::f32::consts::FRAC_PI_2;
     let (rx, ry, rz) = (
         rotation_deg[0].to_radians(),
         rotation_deg[1].to_radians(),
         rotation_deg[2].to_radians(),
     );
     let in_wow = Quat::from_rotation_x(FRAC_PI_2)
-        * Quat::from_rotation_y(ry - PI)
+        * Quat::from_rotation_y(ry - NORTH_HEADING_DEG.to_radians())
         * Quat::from_rotation_z(-rx)
         * Quat::from_rotation_x(rz - FRAC_PI_2);
     let to_bevy = wow_to_bevy_quat();
@@ -136,6 +149,24 @@ mod tests {
             "det = {}",
             m.determinant()
         );
+    }
+
+    #[test]
+    fn a_model_turned_to_a_facing_faces_it() {
+        let north_bits = NORTH_HEADING_DEG.to_radians().to_bits();
+        assert_eq!(
+            north_bits,
+            std::f32::consts::PI.to_bits(),
+            "π to the last bit"
+        );
+        for facing in [0.0_f32, 30.0, 90.0, 200.0, 359.5] {
+            let q = placement_rotation([0.0, heading_of(facing), 0.0]);
+            let front = Vec3::from(bevy_to_wow(q * wow_to_bevy([1.0, 0.0, 0.0])));
+            let r = facing.to_radians();
+            let want = Vec3::new(r.cos(), r.sin(), 0.0);
+            assert!(close(front, want), "facing {facing}: {front}");
+            assert!((facing_of(heading_of(facing)) - facing).abs() < 1e-4);
+        }
     }
 
     #[test]

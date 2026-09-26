@@ -1,3 +1,5 @@
+mod filed;
+
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
@@ -6,23 +8,26 @@ use terrain::{Doodad, WmoInstance};
 
 use crate::CurrentMap;
 use crate::adt::AdtTile;
-use crate::coords::{placement_rotation, wmo_doodad_local, wow_to_bevy};
-use crate::source::{MPQ_SOURCE, m2_url, wmo_url};
+use crate::coords::wmo_doodad_local;
+use crate::source::{MPQ_SOURCE, m2_url};
 use crate::stream::Streamer;
 use crate::wdt::WdtIndex;
 use crate::wmo::WmoModel;
+pub use filed::{Filed, PlacementEdits};
 
 /// The id the map-wide building of a map without terrain is placed under; no ADT uses it.
 pub const GLOBAL_WMO_ID: u32 = u32::MAX;
 
 /// What the map places where: every M2 doodad and WMO building of the tiles the stream holds,
-/// each once, by the unique id the ADTs share across the tiles it overlaps. A placement stays while
-/// any tile that names it is resident.
+/// each once, by the unique id the ADTs share across the tiles it overlaps, with the
+/// [`PlacementEdits`] made at run time over them. A placement stays while any tile that names it
+/// is resident; an edited one while its edit holds.
 #[derive(Resource, Default)]
 pub struct Placements {
     by_id: BTreeMap<u32, Placement>,
     tiles: BTreeMap<(u32, u32), Vec<u32>>,
     global_wmo: bool,
+    edited: BTreeMap<u32, Option<Placement>>,
 }
 
 /// A doodad a WMO places inside itself: the M2, where it stands in the world, every group that
@@ -78,6 +83,8 @@ pub struct Placement {
     pub model: PlacedModel,
     /// Model space to world, in Bevy's axes.
     pub transform: Transform,
+    /// As the map's files or an edit hold it; `None` for one put there by [`Placements::place`].
+    pub filed: Option<Filed>,
     refs: u32,
 }
 
@@ -96,19 +103,43 @@ pub enum PlacedModel {
 
 impl Placements {
     pub fn get(&self, id: u32) -> Option<&Placement> {
-        self.by_id.get(&id)
+        match self.edited.get(&id) {
+            Some(edited) => edited.as_ref(),
+            None => self.by_id.get(&id),
+        }
     }
 
+    /// In the order of their unique ids.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &Placement)> {
-        self.by_id.iter().map(|(&id, p)| (id, p))
+        let mut held = self
+            .by_id
+            .iter()
+            .filter(|(id, _)| !self.edited.contains_key(id))
+            .map(|(&id, p)| (id, p))
+            .peekable();
+        let mut edited = self
+            .edited
+            .iter()
+            .filter_map(|(&id, p)| Some((id, p.as_ref()?)))
+            .peekable();
+        std::iter::from_fn(move || match (held.peek(), edited.peek()) {
+            (Some(h), Some(e)) if h.0 < e.0 => held.next(),
+            (Some(_), None) => held.next(),
+            _ => edited.next(),
+        })
+    }
+
+    /// Whether an edit stands over what the tiles put under `id`.
+    pub fn is_edited(&self, id: u32) -> bool {
+        self.edited.contains_key(&id)
     }
 
     pub fn len(&self) -> usize {
-        self.by_id.len()
+        self.iter().count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
+        self.iter().next().is_none()
     }
 
     /// Places `model` at `transform` under `id` until [`Self::lift`] takes it away. An `id` a tile
@@ -117,6 +148,7 @@ impl Placements {
         self.add(id, || Placement {
             model,
             transform,
+            filed: None,
             refs: 0,
         });
     }
@@ -154,44 +186,30 @@ impl Placements {
 }
 
 fn doodad(d: &Doodad) -> Placement {
-    Placement {
-        model: PlacedModel::Doodad {
-            url: m2_url(&d.model),
-        },
-        transform: Transform {
-            translation: wow_to_bevy(d.position),
-            rotation: placement_rotation(d.rotation),
-            scale: Vec3::splat(d.scale),
-        },
-        refs: 0,
-    }
+    Filed::Doodad(d.clone()).placement()
 }
 
 fn building(w: &WmoInstance) -> Placement {
-    Placement {
-        model: PlacedModel::Building {
-            url: wmo_url(&w.model),
-            doodad_set: w.doodad_set,
-            name_set: w.name_set,
-        },
-        transform: Transform {
-            translation: wow_to_bevy(w.position),
-            rotation: placement_rotation(w.rotation),
-            scale: Vec3::ONE,
-        },
-        refs: 0,
-    }
+    Filed::Building(w.clone()).placement()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn track_placements(
     server: Res<'_, AssetServer>,
     map: Res<'_, CurrentMap>,
     streamer: Res<'_, Streamer>,
     adts: Res<'_, Assets<AdtTile>>,
     wdts: Res<'_, Assets<WdtIndex>>,
+    edits: Res<'_, PlacementEdits>,
     mut wdt: Local<'_, Option<Handle<WdtIndex>>>,
     mut placements: ResMut<'_, Placements>,
 ) {
+    if edits.is_changed() {
+        placements.edited = edits
+            .iter()
+            .map(|(id, filed)| (id, filed.map(Filed::placement)))
+            .collect();
+    }
     let dir = map.directory.to_ascii_lowercase();
     let wdt = wdt
         .get_or_insert_with(|| server.load(format!("{MPQ_SOURCE}://world/maps/{dir}/{dir}.wdt")));
@@ -235,6 +253,7 @@ pub(crate) fn track_placements(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coords::wow_to_bevy;
 
     fn tile(ids: &[u32]) -> Vec<Doodad> {
         ids.iter()
@@ -286,5 +305,28 @@ mod tests {
         assert!(p.is_empty());
         p.lift(4);
         assert!(p.is_empty(), "lifting what is gone does nothing");
+    }
+
+    #[test]
+    fn an_edit_stands_over_the_tiles_in_id_order_until_it_changes_again() {
+        let mut p = Placements::default();
+        for d in tile(&[3, 5, 8]) {
+            p.add(d.unique_id, || doodad(&d));
+        }
+        let mut edits = PlacementEdits::default();
+        let moved = Filed::Doodad(tile(&[5]).remove(0)).stood([4.0, 2.0, 3.0], [0.0; 3], 1.0);
+        edits.place(moved.clone());
+        edits.place(moved.clone().with_id(6));
+        edits.remove(8);
+        p.edited = edits
+            .iter()
+            .map(|(id, filed)| (id, filed.map(Filed::placement)))
+            .collect();
+        let ids: Vec<u32> = p.iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, [3, 5, 6], "the moved, the added, and not the removed");
+        assert_eq!(p.get(5).and_then(|q| q.filed.as_ref()), Some(&moved));
+        assert_eq!(p.get(5).map(|q| q.transform), Some(moved.transform()));
+        assert!(p.get(8).is_none());
+        assert_eq!(p.len(), 3);
     }
 }

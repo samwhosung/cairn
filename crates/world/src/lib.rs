@@ -71,7 +71,8 @@ pub use m2::M2Model;
 pub use map::{Borrowed, CurrentMap};
 pub use model::{BillboardInfo, ModelSubmesh};
 pub use placements::{
-    GLOBAL_WMO_ID, PlacedModel, Placement, Placements, PropPlacement, prop_placements,
+    Filed, GLOBAL_WMO_ID, PlacedModel, Placement, PlacementEdits, Placements, PropPlacement,
+    prop_placements,
 };
 pub use portal::WholeBuildings;
 pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_url, wmo_url};
@@ -142,6 +143,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<stream::Streamer>()
         .init_resource::<clutter::Clutter>()
         .init_resource::<Placements>()
+        .init_resource::<PlacementEdits>()
         .init_resource::<models::Furnished>()
         .init_resource::<room::CameraRoom>()
         .init_resource::<room::RoomCrossfade>()

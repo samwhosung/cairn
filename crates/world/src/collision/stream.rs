@@ -9,6 +9,7 @@ use terrain::{Doodad, WmoInstance};
 
 use super::assets::{M2Hull, TileCollision, WmoHull};
 use super::colliders::{PendingCollider, build_collider_task, placement_collider_data};
+use super::edits::Edited;
 use super::liquid::{PlacedRooms, SwimSurface, waterline_collider};
 use super::weld::{Trimesh, spawn_batch, weld};
 use super::{GroundDecalSurface, camera_layers, liquid_layers, walk_layers};
@@ -46,8 +47,13 @@ impl CollisionResidency {
     }
 }
 
-type Change = u64;
-type TileId = Change;
+pub(super) type Change = u64;
+pub(super) type TileId = Change;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum WeldGroup {
+    Own,
+    PassedOnAt(Change),
+}
 
 enum TileState {
     Unspawned(Handle<TileCollision>),
@@ -55,10 +61,11 @@ enum TileState {
     Failed,
 }
 
-struct Tile {
+pub(super) struct Tile {
     coords: (u32, u32),
     state: TileState,
     entities: Vec<Entity>,
+    pub(super) welds: BTreeMap<WeldGroup, Vec<Entity>>,
     placements: BTreeSet<u32>,
     let_go: Option<Change>,
 }
@@ -69,7 +76,7 @@ impl Tile {
     }
 }
 
-enum Hull<A: Asset> {
+pub(super) enum Hull<A: Asset> {
     Unasked(String),
     Asked(Handle<A>),
 }
@@ -89,11 +96,11 @@ impl<A: Asset> Hull<A> {
     }
 }
 
-enum PlacementModel {
+pub(super) enum PlacementModel {
     M2 {
         hull: Hull<M2Hull>,
         welded: bool,
-        passed_on_at: Option<Change>,
+        group: WeldGroup,
     },
     Wmo {
         hull: Hull<WmoHull>,
@@ -101,13 +108,26 @@ enum PlacementModel {
     },
 }
 
-struct Placement {
-    model: Option<PlacementModel>,
-    transform: Transform,
+pub(super) struct Placement {
+    pub(super) model: Option<PlacementModel>,
+    pub(super) transform: Transform,
     refs: u32,
-    owner: TileId,
-    entities: Vec<Entity>,
-    unwelded_props: Vec<(Handle<M2Hull>, Transform)>,
+    pub(super) owner: Option<TileId>,
+    pub(super) entities: Vec<Entity>,
+    pub(super) unwelded_props: Vec<(Handle<M2Hull>, Transform)>,
+}
+
+impl Placement {
+    pub(super) fn unowned(model: PlacementModel, transform: Transform) -> Self {
+        Self {
+            model: Some(model),
+            transform,
+            refs: 0,
+            owner: None,
+            entities: Vec::new(),
+            unwelded_props: Vec::new(),
+        }
+    }
 }
 
 enum Step {
@@ -119,8 +139,9 @@ enum Step {
 pub(crate) struct CollisionStreamer {
     wdt: Option<Handle<WdtIndex>>,
     indexed: bool,
-    tiles_by_ask: BTreeMap<TileId, Tile>,
-    placements: BTreeMap<u32, Placement>,
+    pub(super) tiles_by_ask: BTreeMap<TileId, Tile>,
+    pub(super) placements: BTreeMap<u32, Placement>,
+    pub(super) edits: BTreeMap<u32, Edited>,
     wanted: Vec<(u32, u32)>,
     last_change: Change,
 }
@@ -175,6 +196,7 @@ pub(super) fn stream_collision(
                     "{MPQ_SOURCE}://world/maps/{dir}/{dir}_{tx}_{ty}.adt"
                 ))),
                 entities: Vec::new(),
+                welds: BTreeMap::new(),
                 placements: BTreeSet::new(),
                 let_go: None,
             };
@@ -257,6 +279,7 @@ fn release(
         return;
     };
     despawn_all(commands, tile.entities);
+    despawn_all(commands, tile.welds.into_values().flatten().collect());
     for uid in tile.placements {
         let gone = streamer.placements.get_mut(&uid).is_some_and(|p| {
             p.refs -= 1;
@@ -267,7 +290,7 @@ fn release(
         } else if streamer
             .placements
             .get(&uid)
-            .is_some_and(|p| p.owner == asked)
+            .is_some_and(|p| p.owner == Some(asked))
         {
             pass_on(streamer, uid, at);
         }
@@ -283,19 +306,14 @@ fn pass_on(streamer: &mut CollisionStreamer, uid: u32, at: Change) {
     let (Some(heir), Some(p)) = (heir, streamer.placements.get_mut(&uid)) else {
         return;
     };
-    p.owner = heir;
-    if let Some(PlacementModel::M2 {
-        welded,
-        passed_on_at,
-        ..
-    }) = &mut p.model
-    {
+    p.owner = Some(heir);
+    if let Some(PlacementModel::M2 { welded, group, .. }) = &mut p.model {
         *welded = false;
-        *passed_on_at = Some(at);
+        *group = WeldGroup::PassedOnAt(at);
     }
 }
 
-fn despawn_all(commands: &mut Commands<'_, '_>, entities: Vec<Entity>) {
+pub(super) fn despawn_all(commands: &mut Commands<'_, '_>, entities: Vec<Entity>) {
     for e in entities {
         commands.entity(e).despawn();
     }
@@ -406,7 +424,7 @@ fn register_doodad(streamer: &mut CollisionStreamer, d: &Doodad, tile: TileId) {
             model: Some(PlacementModel::M2 {
                 hull: Hull::Unasked(m2_url(&d.model)),
                 welded: false,
-                passed_on_at: None,
+                group: WeldGroup::Own,
             }),
             transform: Transform {
                 translation: wow_to_bevy(d.position),
@@ -414,7 +432,7 @@ fn register_doodad(streamer: &mut CollisionStreamer, d: &Doodad, tile: TileId) {
                 scale: Vec3::splat(d.scale),
             },
             refs: 1,
-            owner: tile,
+            owner: Some(tile),
             entities: Vec::new(),
             unwelded_props: Vec::new(),
         },
@@ -438,7 +456,7 @@ fn register_wmo(streamer: &mut CollisionStreamer, w: &WmoInstance, tile: TileId)
                 scale: Vec3::ONE,
             },
             refs: 1,
-            owner: tile,
+            owner: Some(tile),
             entities: Vec::new(),
             unwelded_props: Vec::new(),
         },
@@ -452,34 +470,80 @@ pub(super) fn spawn_placement_colliders(
     wmos: Res<'_, Assets<WmoHull>>,
     mut streamer: ResMut<'_, CollisionStreamer>,
 ) {
-    for p in streamer.placements.values_mut() {
-        match &mut p.model {
-            Some(PlacementModel::M2 { hull, .. }) => hull.ask(&server),
-            Some(PlacementModel::Wmo { hull, .. }) => hull.ask(&server),
-            None => {}
-        }
-        if let Some(PlacementModel::Wmo {
-            hull: Hull::Asked(hull),
-            doodad_set,
-        }) = &p.model
-        {
-            if let Some(wmo) = wmos.get(hull) {
-                p.entities
-                    .extend(spawn_wmo(&mut commands, wmo, &p.transform));
-                p.entities
-                    .extend(spawn_wmo_liquids(&mut commands, hull, wmo, &p.transform));
-                p.unwelded_props = wmo_props(&server, wmo, *doodad_set, p.transform);
-                p.model = None;
-            } else if server.load_state(hull).is_failed() {
-                p.model = None;
-            }
-        }
-        weld_props(&mut commands, &server, &m2s, p);
+    let (m2s, wmos) = (&*m2s, &*wmos);
+    let CollisionStreamer {
+        placements, edits, ..
+    } = &mut *streamer;
+    for (_, p) in unedited_tile_placements_mut(placements, edits) {
+        spawn_ready(&mut commands, &server, (m2s, wmos), p);
     }
-    weld_owned_doodads(&mut commands, &server, &m2s, &mut streamer);
+    for p in edits.values_mut().filter_map(Edited::placement) {
+        spawn_ready(&mut commands, &server, (m2s, wmos), p);
+        if let Some(PlacementModel::M2 {
+            hull: Hull::Asked(hull),
+            ..
+        }) = &p.model
+            && resolved(&server, m2s, hull)
+        {
+            p.entities.extend(
+                hull_data(m2s, hull, &p.transform).map(|data| spawn_batch(&mut commands, data)),
+            );
+            p.model = None;
+        }
+    }
+    weld_owned_doodads(&mut commands, &server, m2s, &mut streamer);
 }
 
-fn resolved(server: &AssetServer, m2s: &Assets<M2Hull>, hull: &Handle<M2Hull>) -> bool {
+fn spawn_ready(
+    commands: &mut Commands<'_, '_>,
+    server: &AssetServer,
+    (m2s, wmos): (&Assets<M2Hull>, &Assets<WmoHull>),
+    p: &mut Placement,
+) {
+    match &mut p.model {
+        Some(PlacementModel::M2 { hull, .. }) => hull.ask(server),
+        Some(PlacementModel::Wmo { hull, .. }) => hull.ask(server),
+        None => {}
+    }
+    if let Some(PlacementModel::Wmo {
+        hull: Hull::Asked(hull),
+        doodad_set,
+    }) = &p.model
+    {
+        if let Some(wmo) = wmos.get(hull) {
+            p.entities.extend(spawn_wmo(commands, wmo, &p.transform));
+            p.entities
+                .extend(spawn_wmo_liquids(commands, hull, wmo, &p.transform));
+            p.unwelded_props = wmo_props(server, wmo, *doodad_set, p.transform);
+            p.model = None;
+        } else if server.load_state(hull).is_failed() {
+            p.model = None;
+        }
+    }
+    weld_props(commands, server, m2s, p);
+}
+
+fn unedited_tile_placements<'a>(
+    placements: &'a BTreeMap<u32, Placement>,
+    edits: &'a BTreeMap<u32, Edited>,
+) -> impl Iterator<Item = (u32, &'a Placement)> {
+    placements
+        .iter()
+        .filter(|(uid, _)| !edits.contains_key(uid))
+        .map(|(&uid, p)| (uid, p))
+}
+
+fn unedited_tile_placements_mut<'a>(
+    placements: &'a mut BTreeMap<u32, Placement>,
+    edits: &'a BTreeMap<u32, Edited>,
+) -> impl Iterator<Item = (u32, &'a mut Placement)> {
+    placements
+        .iter_mut()
+        .filter(|(uid, _)| !edits.contains_key(uid))
+        .map(|(&uid, p)| (uid, p))
+}
+
+pub(super) fn resolved(server: &AssetServer, m2s: &Assets<M2Hull>, hull: &Handle<M2Hull>) -> bool {
     m2s.contains(hull) || server.load_state(hull).is_failed()
 }
 
@@ -518,20 +582,24 @@ fn weld_owned_doodads(
     let CollisionStreamer {
         tiles_by_ask,
         placements,
+        edits,
         ..
     } = streamer;
-    let mut groups: BTreeMap<(TileId, Option<Change>), Vec<u32>> = BTreeMap::new();
-    for (&uid, p) in placements.iter() {
-        if let Some(PlacementModel::M2 {
-            welded: false,
-            passed_on_at,
-            ..
-        }) = p.model
+    let mut groups: BTreeMap<(TileId, WeldGroup), Vec<u32>> = BTreeMap::new();
+    for (uid, p) in unedited_tile_placements(placements, edits) {
+        if let (
+            Some(owner),
+            Some(PlacementModel::M2 {
+                welded: false,
+                group,
+                ..
+            }),
+        ) = (p.owner, &p.model)
         {
-            groups.entry((p.owner, passed_on_at)).or_default().push(uid);
+            groups.entry((owner, *group)).or_default().push(uid);
         }
     }
-    for ((owner, _), uids) in groups {
+    for ((owner, group), uids) in groups {
         let Some(tile) = tiles_by_ask.get_mut(&owner).filter(|t| t.let_go.is_none()) else {
             continue;
         };
@@ -554,7 +622,9 @@ fn weld_owned_doodads(
             .iter()
             .filter_map(doodad)
             .filter_map(|(hull, at)| hull_data(m2s, hull?, at));
-        tile.entities
+        tile.welds
+            .entry(group)
+            .or_default()
             .extend(weld(hulls).into_iter().map(|b| spawn_batch(commands, b)));
         for uid in &uids {
             if let Some(Placement {
@@ -637,9 +707,9 @@ pub(super) fn publish_residency(
         .values()
         .filter(|t| t.let_go.is_some())
         .count();
-    let unwelded: usize = streamer
-        .placements
-        .values()
+    let unwelded: usize = unedited_tile_placements(&streamer.placements, &streamer.edits)
+        .map(|(_, p)| p)
+        .chain(streamer.edits.values().filter_map(Edited::standing))
         .map(|p| {
             let waiting = |hull: Option<&Handle<M2Hull>>| {
                 1 + usize::from(hull.is_none_or(|hull| !resolved(&server, &m2s, hull)))

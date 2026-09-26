@@ -56,6 +56,7 @@ impl ModelHandle {
 
 struct Furnishing {
     model: ModelHandle,
+    placed: PlacedModel,
     transform: Transform,
     spawned: bool,
     entities: Vec<Entity>,
@@ -65,6 +66,10 @@ struct Furnishing {
 }
 
 impl Furnishing {
+    fn stands_as(&self, p: &Placement) -> bool {
+        self.placed == p.model && self.transform == p.transform
+    }
+
     fn new(unique_id: u32, p: &Placement, server: &AssetServer) -> Self {
         let (model, url) = match &p.model {
             PlacedModel::Doodad { url } => (ModelHandle::M2(server.load(url)), url),
@@ -84,6 +89,7 @@ impl Furnishing {
         };
         Self {
             model,
+            placed: p.model.clone(),
             transform: p.transform,
             spawned: false,
             entities: Vec::new(),
@@ -99,6 +105,7 @@ pub(crate) struct Furnished {
     by_id: BTreeMap<u32, Furnishing>,
     forms: HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
     skinned: HashMap<UntypedAssetId, Weak<[Handle<Mesh>]>>,
+    kept_loaded: Vec<Furnishing>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,16 +133,18 @@ pub(crate) fn furnish(
         by_id,
         forms,
         skinned,
+        kept_loaded,
     } = &mut *furnished;
-    by_id.retain(|id, f| {
-        let keep = placements.get(*id).is_some();
-        if !keep {
-            for &e in &f.entities {
-                commands.entity(e).try_despawn();
-            }
-        }
-        keep
+    let changed = by_id.extract_if(.., |id, f| match placements.get(*id) {
+        None => true,
+        Some(p) => placements.is_edited(*id) && !f.stands_as(p),
     });
+    for (_, f) in changed {
+        for &e in &f.entities {
+            commands.entity(e).try_despawn();
+        }
+        kept_loaded.push(f);
+    }
     forms.retain(|_, weak| weak.strong_count() > 0);
     skinned.retain(|_, weak| weak.strong_count() > 0);
     for (id, p) in placements.iter() {
@@ -167,6 +176,9 @@ pub(crate) fn furnish(
         .filter(|f| !f.spawned)
         .all(|f| arrived_with_props(f, &server, &wmos, &streamer, &adts));
     residency.models = ready && by_id.values().all(|f| f.spawned);
+    if residency.models {
+        kept_loaded.clear();
+    }
     if !ready || residency.models {
         return;
     }
@@ -188,6 +200,7 @@ pub(crate) fn furnish(
         spawner.furnishing(f, (&m2s, &wmos), (&streamer, &adts), &mut probes);
     }
     residency.models = true;
+    kept_loaded.clear();
 }
 
 fn failed(server: &AssetServer, id: UntypedAssetId) -> bool {

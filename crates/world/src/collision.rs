@@ -7,6 +7,7 @@
 
 mod assets;
 mod colliders;
+mod edits;
 mod liquid;
 mod one_sided;
 mod stream;
@@ -98,12 +99,14 @@ impl Plugin for CollisionPlugin {
             .register_asset_loader(assets::WmoHullLoader)
             .init_resource::<stream::CollisionStreamer>()
             .init_resource::<CollisionResidency>()
+            .init_resource::<crate::PlacementEdits>()
             .init_resource::<liquid::SwimIndex>()
             .add_systems(
                 Update,
                 (
                     colliders::finish_colliders,
                     stream::stream_collision.run_if(resource_exists::<crate::CurrentMap>),
+                    edits::follow_edits,
                     stream::spawn_placement_colliders,
                     liquid::maintain_water_index,
                     stream::publish_residency,
