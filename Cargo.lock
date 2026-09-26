@@ -2018,6 +2018,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "document"
+version = "0.0.0"
+dependencies = [
+ "adt",
+ "dbc",
+ "libm",
+ "m2",
+ "mpq",
+ "terrain",
+ "wdl",
+ "wdt",
+ "wmo",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

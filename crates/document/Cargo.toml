@@ -1,0 +1,24 @@
+[package]
+name = "document"
+description = "A zone of its own as a document: typed commands, a journal, undo by author, and the tiles cairn draws"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dbc = { path = "../dbc" }
+libm = "0.2"
+m2 = { path = "../m2" }
+mpq = { path = "../mpq" }
+wmo = { path = "../wmo" }
+
+[dev-dependencies]
+adt = { path = "../adt" }
+terrain = { path = "../terrain" }
+wdl = { path = "../wdl" }
+wdt = { path = "../wdt" }
+
+[lints]
+workspace = true

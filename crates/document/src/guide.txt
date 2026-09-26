@@ -1,0 +1,74 @@
+cairn zone — build a zone of its own from the command line
+
+A zone is a directory. `cairn zone new` or `replay` makes one; every other verb changes it or asks
+about it. Each change is a line of the zone's journal, with its author and time, and each author
+undoes and redoes their own steps. Each verb that changes the zone writes the files cairn draws
+to ZONE/build as it ends, so `cairn shot --zone ZONE/build`, `cairn view --zone ZONE/build` and
+`cairn atlas --zone ZONE/build` show it. The verbs do what you say, where you say it, and nothing
+else; a scatter picks its spots, models, facings and scales from its own words, the same each
+time.
+
+Who: --as NAME on any verb, else $CAIRN_AUTHOR, else your login name. A name is a letter, then
+letters, digits, _ or -.
+
+Where: yards in the zone's own frame, x east and y south of its north-west corner; z is a world
+height. A tile is 533.33 yd square, a chunk 33.33 yd. A facing is a compass bearing of a model's
+front (0 north, 90 east).
+
+Make
+  cairn zone new ZONE --tiles 2x2 --height 40 --texture PATH --borrow Elwynn Forest
+                 [--effect N] [--name NAME] [--origin X,Y]
+      --borrow: the install's zone whose light, sky, water colour and music it takes
+  cairn zone set ZONE [--start X,Y[,FACING]] [--borrow ZONE] [--name NAME]
+
+Ground. A brush is --at X,Y --radius R, or --line X,Y X,Y ... --width W; --falloff 0 is a hard
+edge, 1 eases from the middle (0.5 if not given).
+  cairn zone raise ZONE 6 BRUSH           cairn zone lower ZONE 6 BRUSH
+  cairn zone flatten ZONE 42 BRUSH [--strength 0..1]    or, without a height, along a --line
+                                          to the heights its points carry (X,Y,Z), else the
+                                          ground's under them
+  cairn zone smooth ZONE BRUSH [--passes 4] [--strength 0..1]
+  cairn zone roughen ZONE 2 --size 12 BRUSH [--seed N]
+
+Paint. A chunk holds at most four textures: a stroke that would bring a fifth leaves that chunk
+alone and says which; --make-room drops the chunk's least-used other texture instead.
+  cairn zone paint ZONE PATH BRUSH [--strength 0..1] [--make-room]
+  cairn zone texture ZONE PATH --effect N     its ground effect: the grass it grows and the
+                                              sound of steps on it
+
+Things. Each gets an id, its author's name and a count (sam.12); on the command line a bare
+number is one of your own. A thing stands on the ground (--dz above it, following the ground) or
+at a height (--z); --set N is a building's doodad set.
+  cairn zone place ZONE PATH X,Y [--facing D] [--scale S] [--dz D | --z H] [--set N]
+  cairn zone move ZONE ID [X,Y] [--facing D] [--turn D] [--scale S] [--dz D | --z H] [--set N]
+  cairn zone remove ZONE ID ...
+  cairn zone scatter ZONE --models A B ... AREA --count N --apart D [--scale 0.8..1.2]
+                     [--facing D] [--seed N]
+      AREA is a brush, --rect X,Y X,Y or --poly X,Y X,Y X,Y ...; the same scatter twice lands in
+      the same places (--seed varies it); it spreads over whatever already stands there
+  cairn zone water ZONE 41.5 AREA         cairn zone water ZONE --remove ID ...
+
+Steps
+  cairn zone undo ZONE [N]     take back your last N steps (1 if not given); refused where
+                               someone else has changed what the step changed since
+  cairn zone redo ZONE [N]     put back your last N steps taken back
+  cairn zone run ZONE [FILE]   the verbs above, and undo, redo, here, things and build, one a
+                               line without ZONE, from FILE or standard input; each line is its
+                               own step, or joins your step before it when it starts with `+`
+                               (a drag's many moves, taken back by one undo), and is answered
+                               with any lines it prints, then `ok ...` or `error: ...`. From a
+                               file, the first error stops the run. --journal-at-end keeps the
+                               journal in memory until the run ends, for testing that a crash
+                               then loses what the run answered for
+  cairn zone batch ZONE [FILE] the lines as one step: all of them apply, or none
+  cairn zone replay JOURNAL ZONE   a new zone from a journal's lines
+  cairn zone build ZONE        write the zone's files and ZONE/build again
+
+Ask
+  cairn zone here ZONE X,Y [--radius R]    the ground's height, slope, paint and water; what
+                                           stands near
+  cairn zone things ZONE [--at X,Y [--radius R]] [--model WORDS]
+
+The zone's files are yours to read: zone.txt, things.txt (id x y z facing scale set model),
+water.txt, palette.txt, and journal.txt, every change in order. heights.bin, paint.bin and
+history.bin are the ground, the paint and what undo and redo need.
