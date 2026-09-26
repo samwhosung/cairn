@@ -262,7 +262,6 @@ impl Look {
 pub enum Mode {
     Window(Joining),
     Shot(PathBuf),
-    /// Commands from standard input, one a line, each answered on a line of standard output.
     View,
 }
 
@@ -566,7 +565,6 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
     }))
 }
 
-/// A camera from its flags alone.
 pub(crate) fn parse_aim(words: &[&str]) -> Result<Aim, String> {
     let mut given = BTreeMap::new();
     let mut words = words.iter();

@@ -7,25 +7,21 @@ use crate::view::Aim;
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
-    /// A blank line or a comment.
     Nothing,
     Look(Aim),
-    /// Yards forward along the view, to its left and straight up.
     Move {
-        forward: f32,
-        left: f32,
-        up: f32,
+        forward_yd: f32,
+        left_yd: f32,
+        up_yd: f32,
     },
-    /// Degrees to the left and up, standing where it stands.
     Turn {
-        left: f32,
-        up: f32,
+        left_deg: f32,
+        up_deg: f32,
     },
-    /// Degrees round the point it looks at, to its own left and up, and yards closer to it.
     Orbit {
-        left: f32,
-        up: f32,
-        closer: f32,
+        left_deg: f32,
+        up_deg: f32,
+        closer_yd: f32,
     },
     Shot(Ask),
     Where,
@@ -43,39 +39,46 @@ pub struct Ask {
 }
 
 impl Ask {
-    /// Whether it leaves anything out.
-    pub fn cuts(&self) -> bool {
+    pub fn leaves_any_out(&self) -> bool {
         self.cut_to.is_some() || self.cut_near.is_some() || !self.leave_out.is_empty()
     }
 }
 
-type Ways<'a> = &'a [(&'a str, usize, f32)];
+struct Way {
+    word: &'static str,
+    slot: usize,
+    sign: f32,
+}
 
-const MOVES: Ways<'static> = &[
-    ("forward", 0, 1.0),
-    ("back", 0, -1.0),
-    ("left", 1, 1.0),
-    ("right", 1, -1.0),
-    ("up", 2, 1.0),
-    ("down", 2, -1.0),
+const fn way(word: &'static str, slot: usize, sign: f32) -> Way {
+    Way { word, slot, sign }
+}
+
+const MOVES: [Way; 6] = [
+    way("forward", 0, 1.0),
+    way("back", 0, -1.0),
+    way("left", 1, 1.0),
+    way("right", 1, -1.0),
+    way("up", 2, 1.0),
+    way("down", 2, -1.0),
 ];
-const TURNS: Ways<'static> = &[
-    ("left", 0, 1.0),
-    ("right", 0, -1.0),
-    ("up", 1, 1.0),
-    ("down", 1, -1.0),
+const TURNS: [Way; 4] = [
+    way("left", 0, 1.0),
+    way("right", 0, -1.0),
+    way("up", 1, 1.0),
+    way("down", 1, -1.0),
 ];
-const ORBITS: Ways<'static> = &[
-    ("left", 0, 1.0),
-    ("right", 0, -1.0),
-    ("up", 1, 1.0),
-    ("down", 1, -1.0),
-    ("in", 2, 1.0),
-    ("out", 2, -1.0),
+const ORBITS: [Way; 6] = [
+    way("left", 0, 1.0),
+    way("right", 0, -1.0),
+    way("up", 1, 1.0),
+    way("down", 1, -1.0),
+    way("in", 2, 1.0),
+    way("out", 2, -1.0),
 ];
 
 pub fn parse(line: &str) -> Result<Command, String> {
-    let words = split(line)?;
+    let words = shell_words(line)?;
     let Some((verb, rest)) = words.split_first() else {
         return Ok(Command::Nothing);
     };
@@ -84,16 +87,24 @@ pub fn parse(line: &str) -> Result<Command, String> {
         (verb, _) if verb.starts_with('#') => Ok(Command::Nothing),
         ("look", flags) => parse_aim(flags).map(Command::Look),
         ("move", said) => {
-            let [forward, left, up] = amounts(said, MOVES)?;
-            Ok(Command::Move { forward, left, up })
+            let [forward_yd, left_yd, up_yd] = amounts_by_way(said, &MOVES)?;
+            Ok(Command::Move {
+                forward_yd,
+                left_yd,
+                up_yd,
+            })
         }
         ("turn", said) => {
-            let [left, up] = amounts(said, TURNS)?;
-            Ok(Command::Turn { left, up })
+            let [left_deg, up_deg] = amounts_by_way(said, &TURNS)?;
+            Ok(Command::Turn { left_deg, up_deg })
         }
         ("orbit", said) => {
-            let [left, up, closer] = amounts(said, ORBITS)?;
-            Ok(Command::Orbit { left, up, closer })
+            let [left_deg, up_deg, closer_yd] = amounts_by_way(said, &ORBITS)?;
+            Ok(Command::Orbit {
+                left_deg,
+                up_deg,
+                closer_yd,
+            })
         }
         ("shot", said) => shot(said).map(Command::Shot),
         ("where", []) => Ok(Command::Where),
@@ -105,14 +116,8 @@ pub fn parse(line: &str) -> Result<Command, String> {
     }
 }
 
-/// Sums what each way is given into its slot, as `left 30 up 5`.
-fn amounts<const N: usize>(said: &[&str], ways: Ways<'_>) -> Result<[f32; N], String> {
-    let names = || {
-        ways.iter()
-            .map(|(name, ..)| *name)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+fn amounts_by_way<const N: usize>(said: &[&str], ways: &[Way]) -> Result<[f32; N], String> {
+    let names = || ways.iter().map(|w| w.word).collect::<Vec<_>>().join(", ");
     if said.is_empty() || !said.len().is_multiple_of(2) {
         return Err(format!(
             "want a way and an amount, one or more: {}",
@@ -123,17 +128,17 @@ fn amounts<const N: usize>(said: &[&str], ways: Ways<'_>) -> Result<[f32; N], St
     let mut seen = Vec::new();
     for pair in said.chunks(2) {
         let (way, amount) = (pair[0], pair[1]);
-        let &(name, slot, sign) = ways
+        let Way { word, slot, sign } = ways
             .iter()
-            .find(|(name, ..)| *name == way)
+            .find(|w| w.word == way)
             .ok_or_else(|| format!("no way {way}: {}", names()))?;
-        if seen.contains(&slot) {
+        if seen.contains(slot) {
             return Err(format!(
-                "{name} and its opposite are given together, or twice"
+                "{word} and its opposite are given together, or twice"
             ));
         }
-        seen.push(slot);
-        out[slot] = sign * parse_number(name, amount)?;
+        seen.push(*slot);
+        out[*slot] = sign * parse_number(word, amount)?;
     }
     Ok(out)
 }
@@ -202,8 +207,7 @@ fn shot(said: &[&str]) -> Result<Ask, String> {
     Ok(ask)
 }
 
-/// Words split at white space, a quoted word whole.
-fn split(line: &str) -> Result<Vec<String>, String> {
+fn shell_words(line: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut word: Option<String> = None;
     let mut quote = None;

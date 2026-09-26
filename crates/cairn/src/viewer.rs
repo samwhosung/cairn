@@ -32,9 +32,6 @@ use coverage::Coverage;
 use cut::Cut;
 
 const GIVE_UP_AFTER: Duration = Duration::from_secs(120);
-/// Frames a moved camera waits before it trusts that nothing more is on its way: the world's
-/// systems see a camera moved at the start of a frame only from that frame on.
-const ARRIVAL_FRAMES: u32 = 2;
 
 pub struct ViewerPlugin {
     pub aim: Aim,
@@ -73,34 +70,26 @@ struct Viewer {
     sight: Target,
     age_steps: u32,
     aged_at: Option<Aim>,
-    opened: Instant,
     step: Step,
 }
 
-/// A camera's target image and its size.
 struct Target {
     image: Handle<Image>,
     size: UVec2,
 }
 
-/// The camera drawing which placement each pixel shows.
 #[derive(Component)]
-struct SightEye;
+struct SightFrameCamera;
 
 enum Step {
     Idle,
-    /// The clock held until everything the camera sees has arrived.
     Arriving {
         shot: Option<Shooting>,
-        frames: u32,
     },
-    /// The world's clock runs `left` frames more.
     Aging {
         shot: Option<Shooting>,
-        left: u32,
+        frames_left: u32,
     },
-    /// Frames drawn until [`IDENTICAL_CAPTURES`] in a row come back the same: the shot's, then its
-    /// sight frame's when it asks for the list.
     Capturing(Box<Capture>),
 }
 
@@ -142,11 +131,7 @@ impl Plugin for ViewerPlugin {
                 sight,
                 age_steps: self.age.div_duration_f32(FRAME_STEP).round() as u32,
                 aged_at: None,
-                opened: Instant::now(),
-                step: Step::Arriving {
-                    shot: None,
-                    frames: 0,
-                },
+                step: Step::Arriving { shot: None },
             })
             .insert_resource(world::CloudClock::Held)
             .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME_STEP))
@@ -159,10 +144,13 @@ impl Plugin for ViewerPlugin {
                         RenderTarget::Image(shot_image.clone().into()),
                     ));
                     let transform = aim.pose().transform();
-                    commands.spawn((sight_camera(transform, sight_image.clone()), SightEye));
+                    commands.spawn((
+                        sight_camera(transform, sight_image.clone()),
+                        SightFrameCamera,
+                    ));
                 },
             )
-            .add_systems(First, take_commands)
+            .add_systems(First, wait_for_commands)
             .add_systems(Update, (finish, capture).chain())
             .add_systems(Last, arrive_and_age);
     }
@@ -177,8 +165,7 @@ impl Target {
         }
     }
 
-    /// Made again at `size` when it is another: the camera's new target then.
-    fn sized(&mut self, images: &mut Assets<Image>, size: UVec2) -> Option<RenderTarget> {
+    fn resize(&mut self, images: &mut Assets<Image>, size: UVec2) -> Option<RenderTarget> {
         if size == self.size {
             return None;
         }
@@ -195,15 +182,22 @@ impl Answers {
     }
 }
 
+type WorldCameras<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Transform, &'static mut GlobalTransform),
+    With<WorldCamera>,
+>;
+
 #[allow(clippy::too_many_arguments)]
-fn take_commands(
+fn wait_for_commands(
     mut commands: Commands<'_, '_>,
     mut viewer: ResMut<'_, Viewer>,
     lines: Option<Res<'_, Lines>>,
     answers: Option<Res<'_, Answers>>,
     mut images: ResMut<'_, Assets<Image>>,
     mut left_out: ResMut<'_, LeftOut>,
-    mut camera: Query<'_, '_, (Entity, &mut Transform), With<WorldCamera>>,
+    mut camera: WorldCameras<'_, '_>,
     mut exit: MessageWriter<'_, AppExit>,
 ) {
     let (Some(lines), Some(answers)) = (lines, answers) else {
@@ -212,7 +206,7 @@ fn take_commands(
     if !matches!(viewer.step, Step::Idle) {
         return;
     }
-    let Ok((entity, mut transform)) = camera.single_mut() else {
+    let Ok((entity, mut transform, mut global)) = camera.single_mut() else {
         return;
     };
     let Ok(lines) = lines.0.lock() else {
@@ -253,9 +247,17 @@ fn take_commands(
                 continue;
             }
             Ok(Command::Look(aim)) => aim,
-            Ok(Command::Move { forward, left, up }) => viewer.aim.moved(forward, left, up),
-            Ok(Command::Turn { left, up }) => viewer.aim.turned(left, up),
-            Ok(Command::Orbit { left, up, closer }) => match viewer.aim.orbited(left, up, closer) {
+            Ok(Command::Move {
+                forward_yd,
+                left_yd,
+                up_yd,
+            }) => viewer.aim.moved(forward_yd, left_yd, up_yd),
+            Ok(Command::Turn { left_deg, up_deg }) => viewer.aim.turned(left_deg, up_deg),
+            Ok(Command::Orbit {
+                left_deg,
+                up_deg,
+                closer_yd,
+            }) => match viewer.aim.orbited(left_deg, up_deg, closer_yd) {
                 Ok(aim) => aim,
                 Err(e) => {
                     answers.say(&format!("error: {e}"));
@@ -264,7 +266,7 @@ fn take_commands(
             },
             Ok(Command::Shot(ask)) => {
                 let size = ask.size.unwrap_or(viewer.size);
-                if let Some(target) = viewer.shot.sized(&mut images, size) {
+                if let Some(target) = viewer.shot.resize(&mut images, size) {
                     commands.entity(entity).insert(target);
                 }
                 if !left_out.0.is_empty() {
@@ -277,15 +279,13 @@ fn take_commands(
                     aged: false,
                     cut: None,
                 };
-                viewer.step = Step::Arriving {
-                    shot: Some(shot),
-                    frames: 0,
-                };
+                viewer.step = Step::Arriving { shot: Some(shot) };
                 return;
             }
         };
         viewer.aim = aim;
         *transform = aim.pose().transform();
+        *global = GlobalTransform::from(*transform);
         answers.say(&format!("ok {}", aim.flags()));
     }
 }
@@ -322,39 +322,30 @@ fn arrive_and_age(
             ));
             Step::Idle
         }
-        Step::Arriving { shot, frames } if !settled || frames + 1 < ARRIVAL_FRAMES => {
-            Step::Arriving {
-                shot,
-                frames: frames + 1,
-            }
-        }
+        Step::Arriving { shot } if !settled => Step::Arriving { shot },
         Step::Arriving {
             shot: Some(mut shot),
-            frames,
-        } if shot.cut.is_none() && shot.ask.cuts() => {
+        } if shot.cut.is_none() && shot.ask.leaves_any_out() => {
             let eye = viewer.aim.pose().eye;
             let cut = cut::cut(&sight, eye, &shot.ask);
             left_out.0.clone_from(&cut.left_out);
             shot.cut = Some(cut);
-            Step::Arriving {
-                shot: Some(shot),
-                frames,
-            }
+            Step::Arriving { shot: Some(shot) }
         }
-        Step::Arriving { shot, .. } if unaged => {
+        Step::Arriving { shot } if unaged => {
             clock.unpause();
             Step::Aging {
                 shot,
-                left: viewer.age_steps,
+                frames_left: viewer.age_steps,
             }
         }
         Step::Arriving { shot, .. } => {
             viewer.aged_at = Some(viewer.aim);
             aged(viewer, shot, &say)
         }
-        Step::Aging { shot, left } if left > 1 => Step::Aging {
+        Step::Aging { shot, frames_left } if frames_left > 1 => Step::Aging {
             shot,
-            left: left - 1,
+            frames_left: frames_left - 1,
         },
         Step::Aging { mut shot, .. } => {
             clock.pause();
@@ -378,8 +369,7 @@ fn aged(viewer: &Viewer, shot: Option<Shooting>, say: &dyn Fn(&str)) -> Step {
             waiting: false,
         }));
     }
-    let secs = viewer.opened.elapsed().as_secs_f32();
-    say(&format!("ready {} in {secs:.3} s", viewer.aim.flags()));
+    say(&format!("ready {}", viewer.aim.flags()));
     Step::Idle
 }
 
@@ -438,7 +428,7 @@ fn compare(captured: On<'_, '_, ScreenshotCaptured>, mut viewer: ResMut<'_, View
     }
 }
 
-type SightEyes<'w, 's> = Query<
+type SightFrameCameras<'w, 's> = Query<
     'w,
     's,
     (
@@ -446,20 +436,21 @@ type SightEyes<'w, 's> = Query<
         &'static mut Transform,
         &'static mut RenderTarget,
     ),
-    With<SightEye>,
+    With<SightFrameCamera>,
 >;
 
-/// A settled shot written, and its sight frame asked for or counted.
 fn finish(
     mut viewer: ResMut<'_, Viewer>,
     answers: Option<Res<'_, Answers>>,
     mut images: ResMut<'_, Assets<Image>>,
-    mut eyes: SightEyes<'_, '_>,
+    mut cameras: SightFrameCameras<'_, '_>,
     mut wanted: ResMut<'_, SightWanted>,
     index: Res<'_, SightIndex>,
 ) {
-    let viewer = &mut *viewer;
-    let Step::Capturing(capture) = &mut viewer.step else {
+    let Viewer {
+        aim, sight, step, ..
+    } = &mut *viewer;
+    let Step::Capturing(capture) = step else {
         return;
     };
     if capture.unchanged < IDENTICAL_CAPTURES {
@@ -469,60 +460,89 @@ fn finish(
         return;
     };
     let answer = match capture.frame {
-        Frame::Shot => match write_png(&image, &capture.shot.ask.out) {
-            Err(e) => format!("error: {e}"),
-            Ok(()) if capture.shot.ask.seen => {
-                let Ok((mut camera, mut transform, mut target)) = eyes.single_mut() else {
-                    if let Some(answers) = &answers {
-                        answers.say("error: the viewer has no camera for the sight frame");
-                    }
-                    viewer.step = Step::Idle;
-                    return;
-                };
-                if let Some(sized) = viewer.sight.sized(&mut images, capture.shot.size) {
-                    *target = sized;
-                }
-                *transform = viewer.aim.pose().transform();
-                camera.is_active = true;
-                wanted.0 = true;
-                capture.frame = Frame::Sight;
-                capture.unchanged = 0;
-                return;
-            }
-            Ok(()) => shot_answer(&capture.shot, None),
-        },
-        Frame::Sight => {
-            if let Ok((mut camera, ..)) = eyes.single_mut() {
-                camera.is_active = false;
-            }
-            wanted.0 = false;
-            let rgba = image.data.as_deref().unwrap_or_default();
-            let coverage = Coverage::count(rgba, image.width(), &index);
-            let list = capture.shot.ask.out.with_extension("txt");
-            if let Err(e) = write_png(&image, &capture.shot.ask.out.with_extension("ids.png")) {
-                if let Some(answers) = &answers {
-                    answers.say(&format!("error: {e}"));
-                }
-                viewer.step = Step::Idle;
-                return;
-            }
-            let left_out: Vec<u32> = capture
-                .shot
-                .cut
-                .iter()
-                .flat_map(|c| c.left_out.iter().copied())
-                .collect();
-            let text = coverage.text(&viewer.aim.flags(), capture.shot.size, &left_out);
-            match std::fs::write(&list, text) {
-                Ok(()) => shot_answer(&capture.shot, Some((&list, &coverage))),
-                Err(e) => format!("error: writing {}: {e}", list.display()),
+        Frame::Shot => {
+            let sight_frame = (sight, &mut *images, &mut cameras, &mut *wanted);
+            match finish_shot(capture, &image, *aim, sight_frame) {
+                Finished::Answer(answer) => answer,
+                Finished::SightFrameNext => return,
             }
         }
+        Frame::Sight => finish_sight(capture, &image, *aim, &index, &mut cameras, &mut wanted),
     };
     if let Some(answers) = &answers {
         answers.say(&answer);
     }
-    viewer.step = Step::Idle;
+    *step = Step::Idle;
+}
+
+type SightFrame<'a, 'w, 's> = (
+    &'a mut Target,
+    &'a mut Assets<Image>,
+    &'a mut SightFrameCameras<'w, 's>,
+    &'a mut SightWanted,
+);
+
+enum Finished {
+    Answer(String),
+    SightFrameNext,
+}
+
+fn finish_shot(
+    capture: &mut Capture,
+    image: &Image,
+    aim: Aim,
+    (sight, images, cameras, wanted): SightFrame<'_, '_, '_>,
+) -> Finished {
+    if let Err(e) = write_png(image, &capture.shot.ask.out) {
+        return Finished::Answer(format!("error: {e}"));
+    }
+    if !capture.shot.ask.seen {
+        return Finished::Answer(shot_answer(&capture.shot, None));
+    }
+    let Ok((mut camera, mut transform, mut target)) = cameras.single_mut() else {
+        return Finished::Answer("error: the viewer has no camera for the sight frame".into());
+    };
+    if let Some(resized) = sight.resize(images, capture.shot.size) {
+        *target = resized;
+    }
+    *transform = aim.pose().transform();
+    camera.is_active = true;
+    wanted.0 = true;
+    capture.frame = Frame::Sight;
+    capture.unchanged = 0;
+    Finished::SightFrameNext
+}
+
+fn finish_sight(
+    capture: &Capture,
+    image: &Image,
+    aim: Aim,
+    index: &SightIndex,
+    cameras: &mut SightFrameCameras<'_, '_>,
+    wanted: &mut SightWanted,
+) -> String {
+    if let Ok((mut camera, ..)) = cameras.single_mut() {
+        camera.is_active = false;
+    }
+    wanted.0 = false;
+    let rgba = image.data.as_deref().unwrap_or_default();
+    let coverage = Coverage::count(rgba, image.width(), index);
+    let out = &capture.shot.ask.out;
+    if let Err(e) = write_png(image, &out.with_extension("ids.png")) {
+        return format!("error: {e}");
+    }
+    let left_out: Vec<u32> = capture
+        .shot
+        .cut
+        .iter()
+        .flat_map(|c| c.left_out.iter().copied())
+        .collect();
+    let list = out.with_extension("txt");
+    let text = coverage.listing(&aim.flags(), capture.shot.size, &left_out);
+    match std::fs::write(&list, text) {
+        Ok(()) => shot_answer(&capture.shot, Some((&list, &coverage))),
+        Err(e) => format!("error: writing {}: {e}", list.display()),
+    }
 }
 
 fn shot_answer(shot: &Shooting, seen: Option<(&std::path::Path, &Coverage)>) -> String {
@@ -545,12 +565,12 @@ fn shot_answer(shot: &Shooting, seen: Option<(&std::path::Path, &Coverage)>) -> 
                 let _ = write!(answer, " {id}");
             }
         }
-        if cut.ground_hides {
+        if cut.ground_hides_cut_to {
             answer += ", the ground hides the point cut to";
         }
     }
     if let Some((list, seen)) = seen {
-        let _ = write!(answer, "; {}: {}", shell_path(list), seen.summary());
+        let _ = write!(answer, "; {}: {}", shell_path(list), seen.summary_line());
     }
     answer
 }

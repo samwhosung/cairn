@@ -4,9 +4,7 @@ use world::coords::wow_to_bevy;
 pub const HUMAN_START: Vec3 = Vec3::new(-8949.95, -132.49, 83.53);
 const START_CAMERA_ELEVATION_DEG: f32 = 12.0;
 const START_CAMERA_DISTANCE_YD: f32 = 16.0;
-/// A camera turned or swung past this looks no nearer to straight up or down, where it would have
-/// no heading.
-const STEEPEST_DEG: f32 = 89.9;
+const STEEPEST_WITH_A_HEADING_DEG: f32 = 89.9;
 
 /// `eye` and `target` are in WoW's world coordinates; `heading` is radians from north toward
 /// west, `pitch` radians, up positive.
@@ -67,9 +65,10 @@ impl Pose {
 /// A camera as its flags give it, so the flags it prints give the same pose to the last bit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Aim {
-    /// `--eye` and `--look`.
-    Look { eye: Vec3, at: Vec3 },
-    /// `--at`, `--az`, `--el` and `--dist`.
+    Look {
+        eye: Vec3,
+        at: Vec3,
+    },
     Orbit {
         at: Vec3,
         az_deg: f32,
@@ -119,7 +118,7 @@ impl Aim {
     /// Turned where it stands, the point it looks at as far away as before.
     pub fn turned(self, left_deg: f32, up_deg: f32) -> Self {
         let pose = self.pose();
-        let steepest = STEEPEST_DEG.to_radians();
+        let steepest = STEEPEST_WITH_A_HEADING_DEG.to_radians();
         let turned = Pose {
             heading: pose.heading + left_deg.to_radians(),
             pitch: (pose.pitch + up_deg.to_radians()).clamp(-steepest, steepest),
@@ -156,7 +155,8 @@ impl Aim {
         Ok(Self::Orbit {
             at,
             az_deg: (az_deg - left_deg).rem_euclid(360.0),
-            el_deg: (el_deg + up_deg).clamp(-STEEPEST_DEG, STEEPEST_DEG),
+            el_deg: (el_deg + up_deg)
+                .clamp(-STEEPEST_WITH_A_HEADING_DEG, STEEPEST_WITH_A_HEADING_DEG),
             dist,
         })
     }

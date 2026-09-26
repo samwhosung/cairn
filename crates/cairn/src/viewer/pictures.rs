@@ -1,6 +1,3 @@
-//! The viewer's pictures. They need a GPU as well as the install, so they run only when asked for,
-//! writing into the directory `CAIRN_PICTURES` names.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,9 +13,9 @@ use world::{PlacedModel, Placements};
 use super::{Answers, Lines};
 use crate::args::{self, Mode};
 
-/// Where the window's pictures stand to face a Goldshire lamppost, and which way, in degrees.
-const BY_A_GOLDSHIRE_LAMPPOST: ([f32; 2], f32) = ([-9433.0, 44.0], 215.0);
-const START: &str = "--at -9433,44,57.5 --az 215 --el 12 --dist 16";
+const LAMPPOST_XY: [f32; 2] = [-9433.0, 44.0];
+const FACING_THE_LAMPPOST_DEG: f32 = 215.0;
+const START_Z: f32 = 57.5;
 const SIZE: &str = "640x360";
 const WITHIN: Duration = Duration::from_secs(300);
 
@@ -50,8 +47,6 @@ impl Viewer {
         Self { app, send, answers }
     }
 
-    /// The command's answer. The viewer waits for a command whenever it has answered one, so the
-    /// next is always sent before the next frame.
     fn ask(&mut self, line: &str) -> String {
         self.send.send(line.to_owned()).expect("the viewer listens");
         let deadline = Instant::now() + WITHIN;
@@ -126,8 +121,7 @@ fn pixels_differing(a: &Path, b: &Path) -> usize {
     a.iter().zip(b).filter(|(p, q)| p[..3] != q[..3]).count()
 }
 
-/// Each placement a list names, and the pixels it covers.
-fn listed(list: &Path) -> BTreeMap<u32, usize> {
+fn pixels_by_placement(list: &Path) -> BTreeMap<u32, usize> {
     let text = std::fs::read_to_string(list).expect("the list");
     text.lines()
         .skip_while(|l| !l.starts_with("id "))
@@ -141,8 +135,14 @@ fn listed(list: &Path) -> BTreeMap<u32, usize> {
         .collect()
 }
 
+fn start() -> String {
+    let [x, y] = LAMPPOST_XY;
+    let az = FACING_THE_LAMPPOST_DEG;
+    format!("--at {x},{y},{START_Z} --az {az} --el 12 --dist 16")
+}
+
 fn lamppost(placements: &Placements) -> (u32, Vec3) {
-    let ([x, y], _) = BY_A_GOLDSHIRE_LAMPPOST;
+    let [x, y] = LAMPPOST_XY;
     placements
         .iter()
         .filter_map(|(id, placed)| {
@@ -167,14 +167,15 @@ fn the_viewer_shoots_as_the_shot_does_names_what_it_shows_and_cuts_away_what_sta
         return;
     };
     let at = |name: &str| dir.join(format!("viewer-{name}.png"));
-    let mut viewer = Viewer::open(&format!("{START} --no-glow --size {SIZE}"));
+    let start = start();
+    let mut viewer = Viewer::open(&format!("{start} --no-glow --size {SIZE}"));
     let first = viewer.ask(&format!(
         "shot {} --size {SIZE}",
         at("1-as-a-shot").display()
     ));
     assert!(first.starts_with("ok "), "{first}");
     shot_alone(
-        &format!("{START} --no-glow --size {SIZE}"),
+        &format!("{start} --no-glow --size {SIZE}"),
         &at("1-by-cairn-shot"),
     );
     assert_eq!(
@@ -185,8 +186,7 @@ fn the_viewer_shoots_as_the_shot_does_names_what_it_shows_and_cuts_away_what_sta
 
     let (lamp, foot) = lamppost(viewer.placements());
     let toward = {
-        let (_, facing) = BY_A_GOLDSHIRE_LAMPPOST;
-        let r = facing.to_radians();
+        let r = FACING_THE_LAMPPOST_DEG.to_radians();
         Vec3::new(ops::cos(r), ops::sin(r), 0.0)
     };
     let pole = foot + Vec3::Z * 2.2;
@@ -202,14 +202,14 @@ fn the_viewer_shoots_as_the_shot_does_names_what_it_shows_and_cuts_away_what_sta
         answer
     };
     shoot(&mut viewer, "2-through-a-lamppost", "--seen");
-    let seen = listed(&at("2-through-a-lamppost").with_extension("txt"));
+    let seen = pixels_by_placement(&at("2-through-a-lamppost").with_extension("txt"));
     let covered = *seen.get(&lamp).expect("the lamppost is listed");
     shoot(
         &mut viewer,
         "3-the-lamppost-left-out",
         &format!("--leave-out {lamp} --seen"),
     );
-    let without = listed(&at("3-the-lamppost-left-out").with_extension("txt"));
+    let without = pixels_by_placement(&at("3-the-lamppost-left-out").with_extension("txt"));
     assert!(!without.contains_key(&lamp), "left out, it leaves the list");
     let changed = pixels_differing(&at("2-through-a-lamppost"), &at("3-the-lamppost-left-out"));
     assert!(
@@ -235,12 +235,19 @@ fn the_viewer_shoots_as_the_shot_does_names_what_it_shows_and_cuts_away_what_sta
         0,
         "the same camera again is the same picture"
     );
-    assert_eq!(listed(&at("5-again").with_extension("txt")), seen);
-    let entities = viewer.app.world().entities().count_spawned();
+    assert_eq!(
+        pixels_by_placement(&at("5-again").with_extension("txt")),
+        seen
+    );
+    let meshes = |viewer: &mut Viewer| {
+        let world = viewer.app.world_mut();
+        world.query::<&Mesh3d>().iter(world).count()
+    };
+    let before = meshes(&mut viewer);
     shoot(&mut viewer, "6-and-again", "--seen");
     assert_eq!(
-        viewer.app.world().entities().count_spawned(),
-        entities,
+        meshes(&mut viewer),
+        before,
         "a world held still grows nothing"
     );
 }

@@ -21,28 +21,28 @@ fn a_camera_is_given_as_the_shot_takes_it() {
 }
 
 #[test]
-fn moves_turns_and_swings_sum_their_ways() {
+fn moves_turns_and_swings_take_each_way_once() {
     assert_eq!(
         parse("move forward 10 right 2.5 down 1"),
         Ok(Command::Move {
-            forward: 10.0,
-            left: -2.5,
-            up: -1.0
+            forward_yd: 10.0,
+            left_yd: -2.5,
+            up_yd: -1.0
         })
     );
     assert_eq!(
         parse("turn right 30"),
         Ok(Command::Turn {
-            left: -30.0,
-            up: 0.0
+            left_deg: -30.0,
+            up_deg: 0.0
         })
     );
     assert_eq!(
         parse("orbit left 45 up 10 out 5"),
         Ok(Command::Orbit {
-            left: 45.0,
-            up: 10.0,
-            closer: -5.0
+            left_deg: 45.0,
+            up_deg: 10.0,
+            closer_yd: -5.0
         })
     );
 }

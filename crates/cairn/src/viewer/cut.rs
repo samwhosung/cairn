@@ -7,21 +7,38 @@ use world::sight::{Seen, Sight};
 
 use super::command::Ask;
 
-/// Yards round the point a shot is cut to that its sight lines clear.
-const CUT_RADIUS: f32 = 2.0;
-/// Rings of sight lines, each a share of [`CUT_RADIUS`] out and a number of lines round it.
-const RINGS: [(f32, u32); 3] = [(0.0, 1), (0.5, 8), (1.0, 16)];
+const CUT_RADIUS_YD: f32 = 2.0;
+
+struct Ring {
+    share_of_radius: f32,
+    lines: u32,
+}
+
+const RINGS: [Ring; 3] = [
+    Ring {
+        share_of_radius: 0.0,
+        lines: 1,
+    },
+    Ring {
+        share_of_radius: 0.5,
+        lines: 8,
+    },
+    Ring {
+        share_of_radius: 1.0,
+        lines: 16,
+    },
+];
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Cut {
     pub left_out: BTreeSet<u32>,
-    /// The ground stands between the eye and the point.
-    pub ground_hides: bool,
+    pub ground_hides_cut_to: bool,
 }
 
-/// The placements to leave out: those the sight lines from the eye to the disc round `to` meet
-/// short of it, and those whose boxes come within `near` yards of the eye; never one whose box
-/// holds `to`. Positions are WoW's.
+/// The placements a shot leaves out: those the sight lines from the eye to the disc round its
+/// `cut_to` point meet short of it and those whose boxes come within its `cut_near` yards of the
+/// eye, but for one whose box holds the point; and every one its `leave_out` names. The eye is
+/// in WoW's axes.
 pub fn cut(sight: &Sight<'_, '_>, eye_wow: Vec3, ask: &Ask) -> Cut {
     let mut out = cut_between(sight, eye_wow, ask.cut_to, ask.cut_near);
     out.left_out.extend(&ask.leave_out);
@@ -42,18 +59,18 @@ fn cut_between(sight: &Sight<'_, '_>, eye_wow: Vec3, to: Option<Vec3>, near: Opt
         return out;
     };
     let (across, up) = axis.any_orthonormal_pair();
-    for (ring, (share, lines)) in RINGS.into_iter().enumerate() {
-        for k in 0..lines {
-            let angle = TAU * k as f32 / lines as f32;
+    for (i, ring) in RINGS.iter().enumerate() {
+        for k in 0..ring.lines {
+            let angle = TAU * k as f32 / ring.lines as f32;
             let off = across * ops::cos(angle) + up * ops::sin(angle);
-            let point = to + off * (CUT_RADIUS * share);
+            let point = to + off * (CUT_RADIUS_YD * ring.share_of_radius);
             let Ok(dir) = Dir3::new(point - eye) else {
                 continue;
             };
             let reach = eye.distance(point);
             let nearer = sight.cast(eye, dir, reach).nearer(reach);
-            if ring == 0 {
-                out.ground_hides = nearer.terrain;
+            if i == 0 {
+                out.ground_hides_cut_to = nearer.terrain;
             }
             out.left_out.extend(placed(&nearer.models));
         }

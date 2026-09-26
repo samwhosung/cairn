@@ -5,7 +5,6 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use world::sight::frame::{Shown, SightIndex};
 
-/// How much of a sight frame each thing covers, pixel by pixel.
 #[derive(Debug, Default, PartialEq)]
 pub struct Coverage {
     pub pixels: u32,
@@ -16,7 +15,6 @@ pub struct Coverage {
     pub placements: BTreeMap<u32, Covered>,
 }
 
-/// How much of a frame a placement covers, and where.
 #[derive(Debug, PartialEq)]
 pub struct Covered {
     pub pixels: u32,
@@ -68,8 +66,7 @@ impl Coverage {
         )
     }
 
-    /// The list written beside the shot.
-    pub fn text(&self, camera: &str, size: UVec2, left_out: &[u32]) -> String {
+    pub fn listing(&self, camera: &str, size: UVec2, left_out: &[u32]) -> String {
         let mut text = String::from(
             "# the placements a camera saw, each by the unique id the map's files place it under: the\n\
              # share of the frame's pixels it covers, how many, the box they lie in, x,y from the\n\
@@ -96,7 +93,7 @@ impl Coverage {
             let _ = writeln!(text, "left-out {}", ids.join(" "));
         }
         let _ = writeln!(text, "id share pixels box colour kind model");
-        for (id, c) in self.by_share() {
+        for (id, c) in self.largest_first() {
             let kind = if c.building { "building" } else { "doodad" };
             let _ = writeln!(
                 text,
@@ -114,23 +111,20 @@ impl Coverage {
         text
     }
 
-    /// The placements, the one covering most first.
-    fn by_share(&self) -> Vec<(u32, &Covered)> {
+    fn largest_first(&self) -> Vec<(u32, &Covered)> {
         let mut by: Vec<(u32, &Covered)> = self.placements.iter().map(|(&id, c)| (id, c)).collect();
         by.sort_by(|a, b| b.1.pixels.cmp(&a.1.pixels).then(a.0.cmp(&b.0)));
         by
     }
 
-    /// One line's worth: how many placements, the ground's and the sky's shares, and the one
-    /// covering most.
-    pub fn summary(&self) -> String {
+    pub fn summary_line(&self) -> String {
         let mut line = format!(
             "{} placements, ground {}, sky {}",
             self.placements.len(),
             self.share(self.ground),
             self.share(self.sky)
         );
-        if let Some((id, c)) = self.by_share().first() {
+        if let Some((id, c)) = self.largest_first().first() {
             let _ = write!(line, ", most {id} {}", self.share(c.pixels));
         }
         line
@@ -147,8 +141,7 @@ mod tests {
 
     use super::*;
 
-    /// A sight frame's bytes for an index, as the shader writes them.
-    fn rgba(index: u32) -> [u8; 4] {
+    fn sight_rgba(index: u32) -> [u8; 4] {
         let byte = |code: u32| (code * 4 + 2) as u8;
         [
             byte(index & 63),
@@ -173,7 +166,7 @@ mod tests {
         let index = SightIndex::of(vec![tree, farm]);
         let frame: Vec<u8> = [0, 1, 2, 3, 3, 1, 3, 9000]
             .into_iter()
-            .flat_map(rgba)
+            .flat_map(sight_rgba)
             .collect();
         let coverage = Coverage::count(&frame, 4, &index);
         assert_eq!(
@@ -191,7 +184,7 @@ mod tests {
             (3, UVec2::new(0, 0), UVec2::new(3, 1))
         );
         assert_eq!(coverage.placements[&3].pixels, 1);
-        let text = coverage.text("--eye 1,2,3 --look 4,5,6", UVec2::new(4, 2), &[5]);
+        let text = coverage.listing("--eye 1,2,3 --look 4,5,6", UVec2::new(4, 2), &[5]);
         let rows: Vec<&str> = text.lines().skip_while(|l| !l.starts_with("id ")).collect();
         assert_eq!(
             rows,
