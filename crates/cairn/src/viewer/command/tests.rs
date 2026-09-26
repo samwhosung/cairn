@@ -117,3 +117,15 @@ fn mistakes_are_named() {
         assert!(parse(line).is_err(), "{line}");
     }
 }
+
+#[test]
+fn a_move_that_names_a_placement_is_the_hands_and_one_that_names_a_way_the_cameras() {
+    assert!(matches!(
+        parse("move 7 --by 0,-10,0"),
+        Ok(Command::Hands(HandsAsk::Move(_)))
+    ));
+    assert!(matches!(parse("move forward 7"), Ok(Command::Move { .. })));
+    for line in ["pick 1 2", "select 1 2", "pointer 3 4", "ghost", "remove 5"] {
+        assert!(matches!(parse(line), Ok(Command::Hands(_))), "{line}");
+    }
+}

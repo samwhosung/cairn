@@ -13,6 +13,8 @@ use world::{PlacedModel, Placements};
 use super::{Answers, Lines};
 use crate::args::{self, Mode};
 
+mod hands;
+
 const LAMPPOST_XY: [f32; 2] = [-9433.0, 44.0];
 const FACING_THE_LAMPPOST_DEG: f32 = 215.0;
 const START_Z: f32 = 57.5;
