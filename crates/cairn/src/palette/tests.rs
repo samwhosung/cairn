@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use fits::{Spot, Stand, Tables};
 
-use super::catalog::{Catalog, GROUND, Match, words};
-use super::lists::{self, Lists};
+use super::catalog::{Catalog, GROUND, Match, Painted, Share, words};
+use super::lists::{self, Line, Lists};
 use super::pictures::decode;
-use super::rank::ground_order;
+use super::rank::{GroundOrder, ground_order};
 use crate::catalog::what_fits::Found;
 
 mod view;
@@ -92,8 +92,6 @@ const GROUNDS: [GroundRow; 3] = [
     ),
 ];
 
-/// A catalog of four models and three ground textures as `cairn catalog` writes one, with plain
-/// pictures of its own.
 pub(super) fn a_catalog(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("cairn-palette-{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -150,7 +148,6 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).expect("the file");
 }
 
-/// A square picture `side` across, framed, of a colour its number picks.
 fn square(path: &Path, side: u32, n: usize) {
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
     let n = n as u8;
@@ -177,23 +174,21 @@ fn a_catalog_reads_as_its_rows_say() {
     assert_eq!((c.items.len(), c.models), (7, 4));
     let barrel = &c.items[0];
     assert_eq!((barrel.kind, barrel.placed), (PROP, 1234));
-    assert_eq!(
-        barrel.zones,
-        vec![
-            ("Elwynn Forest".to_owned(), 139.0),
-            ("Westfall".to_owned(), 20.0)
-        ]
-    );
+    assert_eq!(barrel.painted, None);
     let grass = &c.items[4];
     assert_eq!((grass.kind, grass.placed), (GROUND, 2005));
+    let share = |name: &str, share| Share {
+        name: name.to_owned(),
+        share,
+    };
     assert_eq!(
-        grass.zones,
-        vec![
-            ("Elwynn Forest".to_owned(), 0.23),
-            ("Westfall".to_owned(), 0.0005)
-        ]
+        grass.painted,
+        Some(Painted {
+            kind: "grass".to_owned(),
+            in_zones: vec![share("Elwynn Forest", 0.23), share("Westfall", 0.0005)],
+            beside: vec![share("ElwynnDirtBase", 0.4)],
+        })
     );
-    assert_eq!(grass.beside, vec![("ElwynnDirtBase".to_owned(), 0.4)]);
     assert_eq!(
         c.find("world/generic/passivedoodads/barrel/barrel01.m2"),
         Some(0)
@@ -287,9 +282,9 @@ fn the_ground_under_the_spot_comes_first_then_what_it_is_painted_with_then_the_z
         },
         header: String::new(),
         sheet_place: String::new(),
-        under: Some(DIRT.to_ascii_uppercase()),
+        texture: Some(DIRT.to_ascii_uppercase()),
     };
-    let (order, why) = ground_order(&c, &found);
+    let GroundOrder { order, why } = ground_order(&c, &found);
     let names: Vec<&str> = order.iter().map(|&i| c.items[i].name()).collect();
     assert_eq!(
         names,
@@ -306,10 +301,10 @@ fn the_ground_under_the_spot_comes_first_then_what_it_is_painted_with_then_the_z
     );
     let nowhere = Found {
         spot: Spot::default(),
-        under: None,
+        texture: None,
         ..found
     };
-    let (plain, why) = ground_order(&c, &nowhere);
+    let GroundOrder { order: plain, why } = ground_order(&c, &nowhere);
     assert_eq!(
         plain,
         c.plain(Some(GROUND)),
@@ -323,14 +318,15 @@ fn the_ground_under_the_spot_comes_first_then_what_it_is_painted_with_then_the_z
 fn a_list_is_a_path_a_line_with_what_to_say_after_a_tab() {
     let text =
         "# the picks for the farm\n\nWORLD\\X\\BARREL01.MDX\tby the well\n  world/y/crate.m2  \n";
+    let line = |path: &str, said: &str| Line {
+        path: path.to_owned(),
+        said: said.to_owned(),
+    };
     assert_eq!(
         lists::parse(text),
         vec![
-            (
-                "WORLD\\X\\BARREL01.MDX".to_owned(),
-                "by the well".to_owned()
-            ),
-            ("world/y/crate.m2".to_owned(), String::new()),
+            line("WORLD\\X\\BARREL01.MDX", "by the well"),
+            line("world/y/crate.m2", ""),
         ]
     );
 }
@@ -354,7 +350,7 @@ fn a_list_written_into_the_folder_shows_and_goes_and_nothing_else_there_does() {
     };
     until(&mut lists, &|l| l.all.contains_key("farm"));
     assert_eq!(lists.all.keys().collect::<Vec<_>>(), ["farm"]);
-    assert_eq!(lists.all["farm"].lines[0].1, "by the well");
+    assert_eq!(lists.all["farm"].lines[0].said, "by the well");
     assert!(
         lists.late["farm"] < Duration::from_secs(1),
         "{:?}",
@@ -415,7 +411,7 @@ fn the_install_s_fonts_damaged_are_refused_or_drawn_never_a_panic() {
         }
         let mut refused = 0;
         for copy in copies {
-            if super::panel::font(&copy).is_err() {
+            if super::panel::egui_can_read(&copy).is_err() {
                 refused += 1;
                 continue;
             }
@@ -428,7 +424,6 @@ fn the_install_s_fonts_damaged_are_refused_or_drawn_never_a_panic() {
     }
 }
 
-/// Lays text out in `font` and tessellates it, as the panel does.
 fn draw_text_with(font: Vec<u8>) {
     use bevy_egui::egui;
     let mut defs = egui::FontDefinitions::empty();
@@ -454,7 +449,7 @@ fn ctrl_shift_p_opens_and_closes_the_palette_and_p_alone_does_nothing() {
     use bevy::prelude::*;
     let plugin = super::PalettePlugin {
         catalog: PathBuf::from("nowhere"),
-        lists: None,
+        lists_dir: None,
         map: crate::args::Map::Install {
             name: "Azeroth".into(),
             patch: None,
@@ -474,17 +469,20 @@ fn ctrl_shift_p_opens_and_closes_the_palette_and_p_alone_does_nothing() {
         app.update();
         app.world().resource::<super::Palette>().open
     };
-    assert!(!press(&[KeyCode::KeyP]), "P alone");
+    assert!(!press(&[super::TOGGLE]), "the key alone");
     assert!(press(&[
         KeyCode::ControlLeft,
         KeyCode::ShiftRight,
-        KeyCode::KeyP
+        super::TOGGLE
     ]));
     assert!(press(&[KeyCode::ShiftLeft]), "held open");
     assert!(!press(&[
         KeyCode::ControlRight,
         KeyCode::ShiftLeft,
-        KeyCode::KeyP
+        super::TOGGLE
     ]));
-    assert!(!press(&[KeyCode::ControlLeft, KeyCode::KeyP]), "Ctrl+P");
+    assert!(
+        !press(&[KeyCode::ControlLeft, super::TOGGLE]),
+        "Ctrl and the key"
+    );
 }

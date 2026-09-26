@@ -1,5 +1,3 @@
-//! The palette drawn over the viewer's frame, on the GPU, from the catalog the tests make.
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -13,8 +11,7 @@ use crate::viewer::{Answers, Lines};
 
 const GOLDSHIRE_LAMPPOST: &str = "--at -9433,44,57.5 --az 215 --el 12 --dist 16";
 const SIZE: UVec2 = UVec2::new(960, 540);
-/// The panel's default width, in pixels of a frame one pixel to the point.
-const PANEL: u32 = 440;
+const PANEL: u32 = super::super::WIDTH as u32;
 const WITHIN: Duration = Duration::from_secs(300);
 
 struct View {
@@ -71,7 +68,6 @@ impl Drop for View {
     }
 }
 
-/// How many pixels two shots differ in left of column `x`, and from it on.
 fn differing(a: &Path, b: &Path, x: u32) -> (usize, usize) {
     let (a, b) = (read(a), read(b));
     assert_eq!(a.dimensions(), b.dimensions());

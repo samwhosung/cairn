@@ -7,13 +7,9 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
 use bevy_egui::{EguiTextureHandle, EguiUserTextures, egui};
 
-/// The bytes the pictures may hold on the GPU; beyond it, those shown least lately go.
-const BUDGET: usize = 32 << 20;
-/// Pictures decoded at once.
-const AT_ONCE: usize = 8;
+const GPU_BUDGET_BYTES: usize = 32 << 20;
+const DECODING_AT_ONCE: usize = 8;
 
-/// The catalog's pictures the grid shows, each read and shrunk off the frame to the side it is drawn
-/// at, and held on the GPU alone.
 #[derive(Resource, Default)]
 pub struct Pictures {
     side: u32,
@@ -37,7 +33,6 @@ pub(super) struct Decoded {
     pub(super) side: u32,
 }
 
-/// What a picture is, once asked for.
 pub enum Shown {
     Picture(egui::TextureId),
     Coming,
@@ -50,7 +45,6 @@ impl Pictures {
         self.wanted_side = side;
     }
 
-    /// Forgets what the last pass of the grid asked for.
     pub fn begin_pass(&mut self) {
         self.wanted.clear();
     }
@@ -81,92 +75,109 @@ impl Pictures {
                 .all(|(i, _)| self.held.contains_key(i) || self.failed.contains(i))
     }
 
-    pub fn held(&self) -> (usize, usize) {
-        (self.held.len(), self.held.values().map(|h| h.bytes).sum())
+    pub fn held_count(&self) -> usize {
+        self.held.len()
+    }
+
+    pub fn held_bytes(&self) -> usize {
+        self.held.values().map(|h| h.bytes).sum()
     }
 
     pub fn side(&self) -> u32 {
         self.side
     }
+
+    fn switch_side(&mut self, images: &mut Assets<Image>, textures: &mut EguiUserTextures) {
+        if self.wanted_side == self.side {
+            return;
+        }
+        self.side = self.wanted_side;
+        self.decoding.clear();
+        self.failed.clear();
+        for (_, held) in std::mem::take(&mut self.held) {
+            let_go(&held, images, textures);
+        }
+    }
+
+    fn take_decoded(&mut self, images: &mut Assets<Image>, textures: &mut EguiUserTextures) {
+        let done: Vec<(usize, Result<Decoded, String>)> = self
+            .decoding
+            .iter_mut()
+            .filter_map(|(&item, task)| block_on(poll_once(task)).map(|done| (item, done)))
+            .collect();
+        for (item, decoded) in done {
+            self.decoding.remove(&item);
+            match decoded {
+                Ok(decoded) => {
+                    let image = images.add(texture(decoded.rgba, decoded.side));
+                    let id = textures.add_image(EguiTextureHandle::Strong(image.clone()));
+                    let bytes = (decoded.side * decoded.side * 4) as usize;
+                    let shown = self.frame;
+                    let held = Held {
+                        image,
+                        id,
+                        bytes,
+                        shown,
+                    };
+                    self.held.insert(item, held);
+                }
+                Err(e) => {
+                    warn!("the palette's picture: {e}");
+                    self.failed.insert(item);
+                }
+            }
+        }
+    }
+
+    fn start_decoding(&mut self) {
+        let side = self.side;
+        let pool = AsyncComputeTaskPool::get();
+        for (item, path) in &self.wanted {
+            let known = self.held.contains_key(item) || self.failed.contains(item);
+            if known || self.decoding.contains_key(item) {
+                continue;
+            }
+            if self.decoding.len() >= DECODING_AT_ONCE {
+                break;
+            }
+            let path = path.clone();
+            let task = pool.spawn(async move { decode(&path, side) });
+            self.decoding.insert(*item, task);
+        }
+    }
+
+    fn evict(&mut self, images: &mut Assets<Image>, textures: &mut EguiUserTextures) {
+        let mut by_age: Vec<(u64, usize)> = self.held.iter().map(|(&i, h)| (h.shown, i)).collect();
+        by_age.sort_unstable();
+        let mut bytes = self.held_bytes();
+        for (shown, item) in by_age {
+            if bytes <= GPU_BUDGET_BYTES || shown >= self.frame {
+                break;
+            }
+            if let Some(held) = self.held.remove(&item) {
+                let_go(&held, images, textures);
+                bytes -= held.bytes;
+            }
+        }
+    }
 }
 
-/// Starts reading what the grid asked for, takes what has been read onto the GPU, and lets go of
-/// what was shown least lately beyond the budget.
 pub fn load(
     mut pictures: ResMut<'_, Pictures>,
     mut images: ResMut<'_, Assets<Image>>,
     mut textures: ResMut<'_, EguiUserTextures>,
 ) {
-    let pictures = &mut *pictures;
-    if pictures.wanted_side != pictures.side {
-        pictures.side = pictures.wanted_side;
-        pictures.decoding.clear();
-        pictures.failed.clear();
-        for (_, held) in std::mem::take(&mut pictures.held) {
-            textures.remove_image(&held.image);
-            images.remove(&held.image);
-        }
-    }
-    let finished: Vec<usize> = pictures
-        .decoding
-        .iter_mut()
-        .filter_map(|(&item, task)| block_on(poll_once(task)).map(|done| (item, done)))
-        .map(|(item, done)| {
-            match done {
-                Ok(decoded) => {
-                    let image = images.add(texture(decoded.rgba, decoded.side));
-                    let id = textures.add_image(EguiTextureHandle::Strong(image.clone()));
-                    let bytes = (decoded.side * decoded.side * 4) as usize;
-                    let shown = pictures.frame;
-                    pictures.held.insert(
-                        item,
-                        Held {
-                            image,
-                            id,
-                            bytes,
-                            shown,
-                        },
-                    );
-                }
-                Err(e) => {
-                    warn!("the palette's picture: {e}");
-                    pictures.failed.insert(item);
-                }
-            }
-            item
-        })
-        .collect();
-    for item in finished {
-        pictures.decoding.remove(&item);
-    }
-    let side = pictures.side;
-    let pool = AsyncComputeTaskPool::get();
-    for (item, path) in &pictures.wanted {
-        let known = pictures.held.contains_key(item) || pictures.failed.contains(item);
-        if known || pictures.decoding.contains_key(item) {
-            continue;
-        }
-        if pictures.decoding.len() >= AT_ONCE {
-            break;
-        }
-        let path = path.clone();
-        let task = pool.spawn(async move { decode(&path, side) });
-        pictures.decoding.insert(*item, task);
-    }
-    let mut by_age: Vec<(u64, usize)> = pictures.held.iter().map(|(&i, h)| (h.shown, i)).collect();
-    by_age.sort_unstable();
-    let mut bytes: usize = pictures.held.values().map(|h| h.bytes).sum();
-    for (shown, item) in by_age {
-        if bytes <= BUDGET || shown >= pictures.frame {
-            break;
-        }
-        if let Some(held) = pictures.held.remove(&item) {
-            textures.remove_image(&held.image);
-            images.remove(&held.image);
-            bytes -= held.bytes;
-        }
-    }
+    let (images, textures) = (&mut *images, &mut *textures);
+    pictures.switch_side(images, textures);
+    pictures.take_decoded(images, textures);
+    pictures.start_decoding();
+    pictures.evict(images, textures);
     pictures.frame += 1;
+}
+
+fn let_go(held: &Held, images: &mut Assets<Image>, textures: &mut EguiUserTextures) {
+    textures.remove_image(&held.image);
+    images.remove(&held.image);
 }
 
 fn texture(rgba: Vec<u8>, side: u32) -> Image {

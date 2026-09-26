@@ -6,18 +6,12 @@ use fits::{MODEL_KINDS, Tables};
 
 use crate::catalog::what_fits;
 
-/// The kinds a tab can show: the catalog's model kinds, then ground textures.
-pub const KINDS: [&str; 7] = [
-    "tree", "shrub", "rock", "fence", "prop", "building", "ground",
-];
-pub const GROUND: usize = 6;
-/// What the catalog's `under 0.1%` is taken to be.
+pub const GROUND: usize = MODEL_KINDS.len();
 const UNDER_A_TENTH_OF_A_PERCENT: f64 = 0.0005;
 
-/// A model or ground texture of the catalog, with what its row says of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
-    /// Where it stands in [`KINDS`].
+    /// Where it stands in [`MODEL_KINDS`], or [`GROUND`].
     pub kind: usize,
     /// As the install names it.
     pub path: String,
@@ -28,22 +22,32 @@ pub struct Item {
     pub size: String,
     /// How often the maps place a model, or how many chunks paint a ground texture.
     pub placed: u64,
-    /// The zones that place a model, or that paint a ground texture with its share of their ground.
-    pub zones: Vec<(String, f64)>,
-    /// The ground textures painted in the same chunks as this one, with the share of its own.
-    pub beside: Vec<(String, f64)>,
-    /// What a ground texture's name says it is, as the catalog puts it: grass, road, rock...
-    pub ground: String,
+    pub painted: Option<Painted>,
     words: Words,
 }
 
-/// What a search is matched against, lowercase.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Painted {
+    /// What the texture's name says it is, as the catalog puts it: grass, road, rock... A search
+    /// finds it by this word too.
+    pub kind: String,
+    /// The share of each zone's ground it paints.
+    pub in_zones: Vec<Share>,
+    /// The ground textures painted in the same chunks as it, with the share of its own ground there.
+    pub beside: Vec<Share>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Share {
+    pub name: String,
+    /// A fraction.
+    pub share: f64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Words {
     name: String,
-    /// Its whole path, and its kind as a word.
-    said: String,
-    /// The words of the names of the zones that place it.
+    path_and_kinds: String,
     zones: Vec<String>,
 }
 
@@ -58,7 +62,6 @@ pub enum Match {
     Zone,
 }
 
-/// The catalog as the palette shows it: every model, then every ground texture.
 pub struct Catalog {
     pub dir: PathBuf,
     pub items: Vec<Item>,
@@ -66,7 +69,6 @@ pub struct Catalog {
     pub models: usize,
     pub tables: Tables,
     by_key: BTreeMap<String, usize>,
-    /// The item of each of the tables' models.
     item_of_model: Vec<Option<usize>>,
 }
 
@@ -84,7 +86,7 @@ impl Catalog {
         let by_key: BTreeMap<String, usize> = items
             .iter()
             .enumerate()
-            .map(|(i, item)| (lookup(item.kind, &item.key), i))
+            .map(|(i, item)| (kind_scoped_key(item.kind, &item.key), i))
             .collect();
         let item_of_model = tables
             .models
@@ -107,7 +109,7 @@ impl Catalog {
         let key = survey::key(path.trim());
         self.by_key
             .get(&key)
-            .or_else(|| self.by_key.get(&lookup(GROUND, &key)))
+            .or_else(|| self.by_key.get(&kind_scoped_key(GROUND, &key)))
             .copied()
     }
 
@@ -115,7 +117,6 @@ impl Catalog {
         self.item_of_model.get(model).copied().flatten()
     }
 
-    /// The tables' model of a model item.
     pub fn model_of_item(&self, item: usize) -> Option<usize> {
         (item < self.models)
             .then(|| self.tables.model(&self.items[item].path))
@@ -145,48 +146,51 @@ impl Item {
         what_fits::stem(&self.path)
     }
 
-    /// Whether a search finds it, and how: each word inside its name or path, its kind, or a whole
-    /// word of the name of a zone that places it.
     pub fn found(&self, words: &[String]) -> Option<Match> {
         let w = &self.words;
         if words.iter().all(|word| w.name.contains(word.as_str())) {
             return Some(Match::Name);
         }
-        if words.iter().all(|word| w.said.contains(word.as_str())) {
+        if words
+            .iter()
+            .all(|word| w.path_and_kinds.contains(word.as_str()))
+        {
             return Some(Match::Path);
         }
         let zone = |word: &str| w.zones.iter().any(|z| z == word);
         words
             .iter()
-            .all(|word| w.said.contains(word.as_str()) || zone(word))
+            .all(|word| w.path_and_kinds.contains(word.as_str()) || zone(word))
             .then_some(Match::Zone)
     }
 
-    fn with_words(mut self) -> Self {
-        let kind = KINDS[self.kind];
-        let said = format!(
-            "{} {kind} {kind}s {}",
-            self.path.to_ascii_lowercase(),
-            self.ground
+    fn with_words(mut self, zones: &[String]) -> Self {
+        let kind = kind_name(self.kind);
+        let painted = self.painted.as_ref().map_or("", |p| p.kind.as_str());
+        let path_and_kinds = format!(
+            "{} {kind} {kind}s {painted}",
+            self.path.to_ascii_lowercase()
         );
-        let zones = self
-            .zones
+        let zones = zones
             .iter()
-            .flat_map(|(zone, _)| zone.split([' ', '\'', '-']))
+            .flat_map(|zone| zone.split([' ', '\'', '-']))
             .filter(|word| !word.is_empty())
             .map(str::to_ascii_lowercase)
             .collect();
         self.words = Words {
             name: self.name().to_ascii_lowercase(),
-            said: said.replace('\\', "/"),
+            path_and_kinds: path_and_kinds.replace('\\', "/"),
             zones,
         };
         self
     }
 }
 
-/// A model and a ground texture may share a key.
-fn lookup(kind: usize, key: &str) -> String {
+pub fn kind_name(kind: usize) -> &'static str {
+    MODEL_KINDS.get(kind).copied().unwrap_or("ground")
+}
+
+fn kind_scoped_key(kind: usize, key: &str) -> String {
     if kind == GROUND {
         format!("ground:{key}")
     } else {
@@ -194,7 +198,6 @@ fn lookup(kind: usize, key: &str) -> String {
     }
 }
 
-/// The words of a search, lowercase.
 pub fn words(search: &str) -> Vec<String> {
     search
         .split_whitespace()
@@ -211,51 +214,51 @@ fn rows(dir: &Path, name: &str, item: fn(&[&str]) -> Option<Item>) -> Result<Vec
         .map(|(i, line)| {
             let fields: Vec<&str> = line.split('\t').collect();
             item(&fields)
-                .map(Item::with_words)
                 .ok_or_else(|| format!("{}:{}: not a row of the catalog", path.display(), i + 2))
         })
         .collect()
 }
 
-/// `kind path size placed scales zones picture`
 fn model(f: &[&str]) -> Option<Item> {
     let &[kind, path, size, placed, _scales, zones, picture] = f else {
         return None;
     };
-    Some(Item {
+    let item = Item {
         kind: MODEL_KINDS.iter().position(|k| *k == kind)?,
         path: path.to_owned(),
         key: survey::key(path),
         picture: picture.to_owned(),
         size: size.to_owned(),
         placed: count(placed)?,
-        zones: listed(zones, count_of),
-        beside: Vec::new(),
-        ground: String::new(),
+        painted: None,
         words: Words::default(),
-    })
+    };
+    Some(item.with_words(&zones_placing(zones)))
 }
 
-/// `kind path chunks zones beside swatch`
 fn ground(f: &[&str]) -> Option<Item> {
     let &[kind, path, chunks, zones, beside, swatch] = f else {
         return None;
     };
-    Some(Item {
+    let in_zones = shares(zones);
+    let names: Vec<String> = in_zones.iter().map(|s| s.name.clone()).collect();
+    let item = Item {
         kind: GROUND,
         path: path.to_owned(),
         key: survey::key(path),
         picture: swatch.to_owned(),
         size: String::new(),
         placed: count(chunks)?,
-        zones: listed(zones, share_of),
-        beside: listed(beside, share_of),
-        ground: kind.to_owned(),
+        painted: Some(Painted {
+            kind: kind.to_owned(),
+            in_zones,
+            beside: shares(beside),
+        }),
         words: Words::default(),
-    })
+    };
+    Some(item.with_words(&names))
 }
 
-/// The first number in `text`, its thousands separated by commas.
 fn count(text: &str) -> Option<u64> {
     let digits: String = text
         .chars()
@@ -266,30 +269,34 @@ fn count(text: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// A list of `name amount` separated by `, `, a name running up to its amount.
-fn listed(text: &str, amount: fn(&str) -> Option<(usize, f64)>) -> Vec<(String, f64)> {
+fn zones_placing(text: &str) -> Vec<String> {
     text.split(", ")
         .filter_map(|entry| {
-            let (at, value) = amount(entry)?;
-            Some((entry[..at].trim_end().to_owned(), value))
+            let digits = word_starts(entry)
+                .find(|&i| entry[i..].starts_with(|c: char| c.is_ascii_digit()))?;
+            Some(entry[..digits].trim_end().to_owned())
         })
         .collect()
 }
 
-/// A zone's placements: where the first word that opens with a digit starts, and the number.
-fn count_of(entry: &str) -> Option<(usize, f64)> {
-    let at = word_starts(entry).find(|&i| entry[i..].starts_with(|c: char| c.is_ascii_digit()))?;
-    Some((at, count(&entry[at..])? as f64))
+fn shares(text: &str) -> Vec<Share> {
+    text.split(", ").filter_map(share).collect()
 }
 
-/// A share of ground: `12%`, `6.6%` or `under 0.1%`, as a fraction.
-fn share_of(entry: &str) -> Option<(usize, f64)> {
-    if let Some(i) = entry.rfind(" under ") {
-        return Some((i, UNDER_A_TENTH_OF_A_PERCENT));
-    }
-    let i = entry.rfind(' ')?;
-    let percent = entry[i + 1..].strip_suffix('%')?.parse::<f64>().ok()?;
-    Some((i, percent / 100.0))
+fn share(entry: &str) -> Option<Share> {
+    let (name, share) = if let Some((name, _)) = entry.rsplit_once(" under ") {
+        (name, UNDER_A_TENTH_OF_A_PERCENT)
+    } else {
+        let (name, percent) = entry.rsplit_once(' ')?;
+        (
+            name,
+            percent.strip_suffix('%')?.parse::<f64>().ok()? / 100.0,
+        )
+    };
+    Some(Share {
+        name: name.trim_end().to_owned(),
+        share,
+    })
 }
 
 fn word_starts(text: &str) -> impl Iterator<Item = usize> + '_ {

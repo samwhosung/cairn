@@ -211,7 +211,7 @@ impl Painter {
                 },
                 PalettePlugin {
                     catalog: PathBuf::from(&out).join("catalog"),
-                    lists: None,
+                    lists_dir: None,
                     map: opened.clone(),
                 },
             ));

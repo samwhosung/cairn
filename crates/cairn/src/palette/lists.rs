@@ -4,21 +4,24 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, SystemTime};
 
-/// How often the folder is looked at.
-pub const EVERY: Duration = Duration::from_millis(200);
+const LOOK_EVERY: Duration = Duration::from_millis(200);
 const EXTENSION: &str = "txt";
 
-/// A list someone named and wrote into the folder, as its file says: a thing a line, an install
-/// path, and after a tab what to say of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Named {
     pub name: String,
-    pub lines: Vec<(String, String)>,
-    /// When its file last changed.
+    pub lines: Vec<Line>,
     pub changed: SystemTime,
 }
 
-/// The lists in a folder, as they last were, kept up to date by a thread that looks at it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    /// An install path.
+    pub path: String,
+    /// What to say of it, or nothing.
+    pub said: String,
+}
+
 pub struct Lists {
     pub all: BTreeMap<String, Named>,
     /// For each list, how long after its file changed it was taken in.
@@ -29,6 +32,12 @@ pub struct Lists {
 enum News {
     Changed(Named),
     Gone(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    changed: SystemTime,
+    len: u64,
 }
 
 impl Lists {
@@ -71,9 +80,8 @@ impl Lists {
     }
 }
 
-/// Every [`EVERY`], the folder's lists that are new, changed or gone, until no one listens.
 fn look(dir: &Path, send: &Sender<News>) {
-    let mut seen: BTreeMap<String, (SystemTime, u64)> = BTreeMap::new();
+    let mut seen: BTreeMap<String, Stamp> = BTreeMap::new();
     loop {
         let now = files(dir);
         for (name, (path, stamp)) in &now {
@@ -87,7 +95,7 @@ fn look(dir: &Path, send: &Sender<News>) {
             let list = Named {
                 name: name.clone(),
                 lines: parse(&text),
-                changed: stamp.0,
+                changed: stamp.changed,
             };
             if send.send(News::Changed(list)).is_err() {
                 return;
@@ -104,14 +112,11 @@ fn look(dir: &Path, send: &Sender<News>) {
                 return;
             }
         }
-        std::thread::sleep(EVERY);
+        std::thread::sleep(LOOK_EVERY);
     }
 }
 
-type Stamped = BTreeMap<String, (PathBuf, (SystemTime, u64))>;
-
-/// The folder's list files by name, each with when it last changed and its length.
-fn files(dir: &Path) -> Stamped {
+fn files(dir: &Path) -> BTreeMap<String, (PathBuf, Stamp)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return BTreeMap::new();
     };
@@ -125,19 +130,26 @@ fn files(dir: &Path) -> Stamped {
                 return None;
             }
             let meta = entry.metadata().ok()?;
-            Some((name, (path, (meta.modified().ok()?, meta.len()))))
+            let stamp = Stamp {
+                changed: meta.modified().ok()?,
+                len: meta.len(),
+            };
+            Some((name, (path, stamp)))
         })
         .collect()
 }
 
 /// A line a thing, `#` opening a comment: an install path, then after a tab what to say of it.
-pub fn parse(text: &str) -> Vec<(String, String)> {
+pub fn parse(text: &str) -> Vec<Line> {
     text.lines()
         .map(str::trim_end)
         .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
-        .map(|line| match line.split_once('\t') {
-            Some((path, said)) => (path.trim().to_owned(), said.trim().to_owned()),
-            None => (line.trim().to_owned(), String::new()),
+        .map(|line| {
+            let (path, said) = line.split_once('\t').unwrap_or((line, ""));
+            Line {
+                path: path.trim().to_owned(),
+                said: said.trim().to_owned(),
+            }
         })
         .collect()
 }

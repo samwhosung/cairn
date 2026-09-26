@@ -7,10 +7,8 @@ use world::{CurrentMap, Install};
 use super::{Borrows, header};
 use crate::zone::Zone;
 
-/// The tiles kept for spots on the install, at most those around the spot's own.
 const KEPT_TILES_AROUND: u32 = 1;
 
-/// What stands around the spots a list is asked for, and what counts toward the lists.
 pub(crate) enum Surroundings {
     Install(OnTheInstall),
     OwnZone(OfItsOwn),
@@ -33,13 +31,11 @@ pub(crate) struct OfItsOwn {
     palette: Option<usize>,
 }
 
-/// A spot, and what the list's header says of it.
 pub(crate) struct Found {
     pub(crate) spot: Spot,
     pub(crate) header: String,
     pub(crate) sheet_place: String,
-    /// The ground texture that shows most under the spot, as the maps name it.
-    pub(crate) under: Option<String>,
+    pub(crate) texture: Option<String>,
 }
 
 impl Surroundings {
@@ -55,7 +51,6 @@ impl Surroundings {
         }))
     }
 
-    /// Counts what the zone's files place, once.
     pub(crate) fn of_a_zone_of_its_own(
         tables: &Tables,
         install: &Install,
@@ -95,7 +90,6 @@ impl Surroundings {
         }
     }
 
-    /// The spot at world `at` and what stands around it.
     pub(crate) fn find(&mut self, tables: &Tables, at: [f32; 2]) -> Result<Found, String> {
         match self {
             Self::Install(i) => i.find(tables, at),
@@ -151,7 +145,7 @@ impl OnTheInstall {
             header: header(tables, &place, &here, &spot, unknown),
             spot,
             sheet_place,
-            under: here.texture,
+            texture: here.texture,
         })
     }
 }
@@ -179,7 +173,7 @@ impl OfItsOwn {
             header: header(tables, &place, &here, &spot, self.unknown),
             spot,
             sheet_place,
-            under: here.texture,
+            texture: here.texture,
         })
     }
 }

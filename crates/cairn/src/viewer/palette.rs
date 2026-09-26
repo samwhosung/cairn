@@ -6,16 +6,16 @@ use bevy::prelude::*;
 use world::WorldCamera;
 
 use super::{Answers, Step, Viewer};
+use crate::catalog::what_fits::{Row, listing};
 use crate::palette::{
-    Armed, GROUND, KINDS, Order, Palette, Pick, Pictures, SIDES, Settled, Tab, WIDTHS, panel_part,
-    why,
+    Armed, GROUND, Order, Palette, Pick, Pictures, SIDES, Settled, Tab, WIDTHS, kind_name,
+    panel_part, why,
 };
 
 const GIVE_UP_AFTER: Duration = Duration::from_secs(120);
 const FIRST_PAGE: usize = 20;
 const AWAITED: Duration = Duration::from_secs(10);
 
-/// A `palette` command: it changes what the panel shows, and is answered once the panel shows it.
 #[derive(Debug, PartialEq)]
 pub enum Ask {
     Say,
@@ -37,8 +37,13 @@ pub struct Asking {
     ask: Ask,
     asked: Instant,
     applied: bool,
-    frames: Vec<(Duration, Duration)>,
+    frames: Vec<Frame>,
     last: Option<Instant>,
+}
+
+struct Frame {
+    took: Duration,
+    pass_took: Duration,
 }
 
 impl Asking {
@@ -53,7 +58,6 @@ impl Asking {
     }
 }
 
-/// A place in the grid, counted from 1.
 fn place(n: &str, what: &str) -> Result<usize, String> {
     n.parse::<usize>()
         .ok()
@@ -119,7 +123,6 @@ pub fn parse(said: &[&str]) -> Result<Ask, String> {
 type WorldCameras<'w, 's> =
     Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<WorldCamera>>;
 
-/// Carries out the palette's command, then answers it once the panel shows what was asked.
 pub(super) fn answer(
     mut viewer: ResMut<'_, Viewer>,
     mut palette: ResMut<'_, Palette>,
@@ -163,7 +166,10 @@ pub(super) fn answer(
         Ask::Frames(n) => {
             let now = Instant::now();
             if let Some(last) = asking.last.replace(now) {
-                asking.frames.push((now - last, palette.pass));
+                asking.frames.push(Frame {
+                    took: now - last,
+                    pass_took: palette.pass_took,
+                });
             }
             (asking.frames.len() >= *n as usize).then(|| Ok(frames(&asking.frames)))
         }
@@ -221,18 +227,17 @@ fn apply(ask: &Ask, palette: &mut Palette) -> Result<(), String> {
         }
         Ask::Size(side) => palette.side = side.clamp(*SIDES.start(), *SIDES.end()),
         Ask::Width(width) => palette.width = width.clamp(*WIDTHS.start(), *WIDTHS.end()),
-        Ask::Follow(follows) => palette.follows = *follows,
+        Ask::Follow(follows) => palette.follows_the_camera = *follows,
         Ask::Scroll(n) => palette.scroll_to = Some(n - 1),
         Ask::Say | Ask::Pick(_) | Ask::List { .. } | Ask::Await { .. } | Ask::Frames(_) => {}
     }
     Ok(())
 }
 
-/// A tab as the command names it: its kind, `all`, `recent`, or a list's name.
 fn tab_word(tab: &Tab) -> String {
     match tab {
-        Tab::Every => "all".to_owned(),
-        Tab::Kind(k) => KINDS[*k].to_owned(),
+        Tab::AllModels => "all".to_owned(),
+        Tab::Kind(k) => kind_name(*k).to_owned(),
         Tab::Recent => "recent".to_owned(),
         Tab::List(name) => name.clone(),
     }
@@ -247,31 +252,27 @@ fn pick(palette: &mut Palette, armed: &mut Armed, n: usize) -> Result<String, St
     Ok(String::new())
 }
 
-/// Writes the first `top` things shown as `cairn catalog fits` lists them, the spot first.
 fn list(palette: &mut Palette, out: &std::path::Path, top: usize) -> Result<String, String> {
     let Some(catalog) = palette.catalog().cloned() else {
         return Err("the palette has no catalog".into());
     };
     let shown = palette.shown();
-    let mut text = palette
+    let header = palette
         .ranked
         .as_ref()
-        .map_or_else(String::new, |r| r.found.header.clone() + "\n");
-    text.push_str("rank\tkind\tpath\twhy\tpicture\n");
-    for (i, &item) in shown.iter().take(top).enumerate() {
+        .map_or("", |r| r.found.header.as_str());
+    let rows = shown.iter().take(top).map(|&item| {
         let it = &catalog.items[item];
-        let said = why(&catalog, item, palette)
-            .or_else(|| palette.said_of(item).map(str::to_owned))
-            .unwrap_or_default();
-        let _ = writeln!(
-            text,
-            "{}\t{}\t{}\t{said}\t{}",
-            i + 1,
-            KINDS[it.kind],
-            it.path,
-            it.picture
-        );
-    }
+        Row {
+            kind: kind_name(it.kind),
+            path: &it.path,
+            why: why(&catalog, item, palette)
+                .or_else(|| palette.said_of(item).map(str::to_owned))
+                .unwrap_or_default(),
+            picture: it.picture.clone(),
+        }
+    });
+    let text = listing(header, rows);
     std::fs::write(out, text).map_err(|e| format!("{}: {e}", out.display()))?;
     Ok(format!(
         "wrote the first {} of {} to {}",
@@ -281,13 +282,12 @@ fn list(palette: &mut Palette, out: &std::path::Path, top: usize) -> Result<Stri
     ))
 }
 
-/// Each frame's time and the panel's pass in it.
-fn frames(took: &[(Duration, Duration)]) -> String {
+fn frames(took: &[Frame]) -> String {
     let ms = |d: Duration| d.as_secs_f64() * 1000.0;
     let n = took.len() as f64;
-    let each = took.iter().map(|t| ms(t.0)).sum::<f64>() / n;
-    let most = took.iter().map(|t| ms(t.0)).fold(0.0, f64::max);
-    let pass = took.iter().map(|t| ms(t.1)).sum::<f64>() / n;
+    let each = took.iter().map(|f| ms(f.took)).sum::<f64>() / n;
+    let most = took.iter().map(|f| ms(f.took)).fold(0.0, f64::max);
+    let pass = took.iter().map(|f| ms(f.pass_took)).sum::<f64>() / n;
     format!(
         "{} frames, {each:.2} ms each, the slowest {most:.2} ms, the panel's pass {pass:.3} ms each",
         took.len()
@@ -333,20 +333,20 @@ fn state(
         let place = &ranked.found.sheet_place;
         let _ = write!(
             said,
-            "; the spot {},{} in {place}, ranked {:.1} ms after the camera settled",
+            "; the spot {},{} in {place}, its lists made {:.1} ms after the ray was cast",
             ranked.at[0],
             ranked.at[1],
-            palette.took.unwrap_or_default().as_secs_f64() * 1000.0
+            ranked.took.as_secs_f64() * 1000.0
         );
     }
     if let Some(trouble) = &palette.trouble {
         let _ = write!(said, "; {trouble}");
     }
-    let (held, bytes) = pictures.held();
     let _ = write!(
         said,
-        "; {held} pictures held, {:.1} MB, {} px across",
-        bytes as f64 / (1u64 << 20) as f64,
+        "; {} pictures held, {:.1} MB, {} px across",
+        pictures.held_count(),
+        pictures.held_bytes() as f64 / (1u64 << 20) as f64,
         pictures.side()
     );
     match &armed.0 {
@@ -354,7 +354,7 @@ fn state(
             let _ = write!(said, "; armed the model {path}");
         }
         Some(Pick::Ground(path)) => {
-            let _ = write!(said, "; armed the {} {path}", KINDS[GROUND]);
+            let _ = write!(said, "; armed the {} {path}", kind_name(GROUND));
         }
         None => {}
     }

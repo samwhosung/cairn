@@ -13,29 +13,35 @@ use crate::args;
 use crate::catalog::what_fits::{Found, Surroundings};
 use crate::zone::Zone;
 
-/// The share of a zone's ground a texture must paint to count as the zone's.
-const PAINTS_THE_ZONE: f64 = 0.001;
+const LEAST_ZONE_SHARE: f64 = 0.001;
 
-/// Ranks the catalog for one spot at a time, off the frame.
 pub struct Ranker {
     pub catalog: Arc<Catalog>,
     around: Surroundings,
 }
 
-/// The lists for a spot.
 pub struct Ranked {
     /// World X,Y, yards.
     pub at: [f32; 2],
     pub found: Found,
-    /// Per tab of models, every kind first and then each of [`MODEL_KINDS`], the items best first.
-    pub models: Vec<Vec<usize>>,
+    pub models: ModelOrder,
     /// Why each of the tables' models stands where it does.
     pub fits: Vec<Fit>,
-    /// The ground textures best first, and why each of them stands where it does.
-    pub ground: Vec<usize>,
-    pub ground_why: BTreeMap<usize, String>,
+    pub ground: GroundOrder,
     /// From the ray to the lists.
     pub took: Duration,
+}
+
+/// The model items, best first.
+pub struct ModelOrder {
+    pub every_kind: Vec<usize>,
+    pub of_kind: [Vec<usize>; MODEL_KINDS.len()],
+}
+
+/// The ground items, best first, and why each stands where it does.
+pub struct GroundOrder {
+    pub order: Vec<usize>,
+    pub why: BTreeMap<usize, String>,
 }
 
 impl Ranker {
@@ -76,24 +82,24 @@ impl Ranker {
         let score = evidence.scores(&found.spot);
         let why = evidence.explain(&found.spot);
         let fits = (0..score.len()).map(|m| why.fit(m, score[m])).collect();
-        let models = std::iter::once(None)
-            .chain((0..MODEL_KINDS.len()).map(Some))
-            .map(|kind| {
-                evidence
-                    .ranked(&score, kind)
-                    .into_iter()
-                    .filter_map(|m| catalog.item_of_model(m))
-                    .collect()
-            })
-            .collect();
-        let (ground, ground_why) = ground_order(&catalog, &found);
+        let items = |kind: Option<usize>| -> Vec<usize> {
+            evidence
+                .ranked(&score, kind)
+                .into_iter()
+                .filter_map(|m| catalog.item_of_model(m))
+                .collect()
+        };
+        let models = ModelOrder {
+            every_kind: items(None),
+            of_kind: std::array::from_fn(|k| items(Some(k))),
+        };
+        let ground = ground_order(&catalog, &found);
         Ok(Ranked {
             at,
             found,
             models,
             fits,
             ground,
-            ground_why,
             took: asked.elapsed(),
         })
     }
@@ -101,10 +107,7 @@ impl Ranker {
 
 /// The ground textures for a spot: the one under it, then those painted in the same chunks as that
 /// one, most first, then the rest of the zone's, most first, then the others most painted first.
-pub(super) fn ground_order(
-    catalog: &Catalog,
-    found: &Found,
-) -> (Vec<usize>, BTreeMap<usize, String>) {
+pub(super) fn ground_order(catalog: &Catalog, found: &Found) -> GroundOrder {
     let grounds = catalog.models..catalog.items.len();
     let by_name: BTreeMap<String, usize> = grounds
         .clone()
@@ -115,7 +118,7 @@ pub(super) fn ground_order(
         .zone
         .map(|z| catalog.tables.zones[z].name.as_str());
     let under = found
-        .under
+        .texture
         .as_deref()
         .and_then(|t| catalog.find(t).filter(|&g| catalog.items[g].kind == GROUND));
     let mut why: BTreeMap<usize, String> = BTreeMap::new();
@@ -124,13 +127,14 @@ pub(super) fn ground_order(
         place.insert(u, (0, 0.0));
         why.insert(u, "under the spot".to_owned());
         let name = catalog.items[u].name().to_owned();
-        for (other, share) in &catalog.items[u].beside {
-            if let Some(&g) = by_name.get(&other.to_ascii_lowercase()) {
-                place.entry(g).or_insert((1, -share));
+        let beside = catalog.items[u].painted.iter().flat_map(|p| &p.beside);
+        for other in beside {
+            if let Some(&g) = by_name.get(&other.name.to_ascii_lowercase()) {
+                place.entry(g).or_insert((1, -other.share));
                 why.entry(g).or_insert_with(|| {
                     format!(
                         "{} of {name}'s ground lies in chunks that paint it too",
-                        percent(*share)
+                        percent(other.share)
                     )
                 });
             }
@@ -139,11 +143,12 @@ pub(super) fn ground_order(
     if let Some(zone) = zone {
         for g in grounds.clone() {
             let share = catalog.items[g]
-                .zones
+                .painted
                 .iter()
-                .find(|(z, _)| z == zone)
-                .map(|(_, s)| *s);
-            let Some(share) = share.filter(|&s| s >= PAINTS_THE_ZONE) else {
+                .flat_map(|p| &p.in_zones)
+                .find(|s| s.name == zone)
+                .map(|s| s.share);
+            let Some(share) = share.filter(|&s| s >= LEAST_ZONE_SHARE) else {
                 continue;
             };
             place.entry(g).or_insert((2, -share));
@@ -167,7 +172,7 @@ pub(super) fn ground_order(
         }
         .then_with(|| catalog.plainly(a, b))
     });
-    (order, why)
+    GroundOrder { order, why }
 }
 
 fn percent(share: f64) -> String {

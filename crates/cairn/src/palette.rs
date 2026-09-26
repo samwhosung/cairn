@@ -33,35 +33,31 @@ use world::sight::Sight;
 use world::{CurrentMap, FARCLIP, Install, Residency, WorldCamera};
 
 use crate::args;
-pub use catalog::{Catalog, GROUND, KINDS};
+pub use catalog::{Catalog, GROUND, kind_name};
 use lists::Lists;
 pub use panel::why;
 pub use pictures::Pictures;
 pub use rank::Ranked;
 use rank::Ranker;
 
-/// Ctrl+Shift and this key open and close the palette.
-pub const KEY: KeyCode = KeyCode::KeyP;
+pub const TOGGLE: KeyCode = KeyCode::KeyP;
 const SIDE: f32 = 96.0;
 pub const SIDES: std::ops::RangeInclusive<f32> = 48.0..=192.0;
-const WIDTH: f32 = 440.0;
+pub const WIDTH: f32 = 440.0;
 pub const WIDTHS: std::ops::RangeInclusive<f32> = 240.0..=1200.0;
 const RECENT: usize = 32;
 const MET_NOTHING: &str = "the camera looks at no ground, so the lists are the last spot's";
 const MET_NOTHING_YET: &str = "the camera looks at no ground, so the most placed come first";
-/// How far the camera moves, or turns, before the spot is looked for again.
-const MOVED_YD: f32 = 0.5;
-const TURNED_COS: f32 = 0.999_96;
+const LOOK_AGAIN_MOVED_YD: f32 = 0.5;
+const LOOK_AGAIN_TURNED_COS: f32 = 0.999_96;
 
 pub struct PalettePlugin {
     /// The catalog `cairn catalog` wrote.
     pub catalog: PathBuf,
-    /// The folder of named lists.
-    pub lists: Option<PathBuf>,
+    pub lists_dir: Option<PathBuf>,
     pub map: args::Map,
 }
 
-/// What the palette shows and how.
 #[derive(Resource)]
 pub struct Palette {
     pub open: bool,
@@ -72,8 +68,7 @@ pub struct Palette {
     pub side: f32,
     /// The panel's width, in points.
     pub width: f32,
-    /// Whether the lists follow the spot the camera looks at.
-    pub follows: bool,
+    pub follows_the_camera: bool,
     /// The items picked, the latest first.
     pub recent: Vec<usize>,
     dir: PathBuf,
@@ -82,30 +77,25 @@ pub struct Palette {
     loading: Loading,
     ranker: Slot,
     pub ranked: Option<Ranked>,
-    /// From the ray to the lists being taken in, for the lists shown.
-    pub took: Option<Duration>,
     looked: Option<Look>,
     pub lists: Option<Lists>,
     pub trouble: Option<String>,
     /// The place in the grid of the thing to bring to its top row.
     pub scroll_to: Option<usize>,
-    /// How long the panel's last pass took to lay out.
-    pub pass: Duration,
+    pub pass_took: Duration,
     fonts: Option<Result<bevy_egui::egui::FontDefinitions, String>>,
     fonts_set: bool,
     news: u64,
-    shown: Option<(Key, Arc<Vec<usize>>)>,
-    drawn: Option<Key>,
+    shown: Option<(ShownKey, Arc<Vec<usize>>)>,
+    drawn: Option<ShownKey>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tab {
-    /// Every kind of model.
-    Every,
-    /// One of [`KINDS`].
+    AllModels,
+    /// One of [`fits::MODEL_KINDS`], or [`GROUND`].
     Kind(usize),
     Recent,
-    /// A named list, by its name.
     List(String),
 }
 
@@ -148,11 +138,8 @@ enum Slot {
     Busy(Ranking),
 }
 
-/// The ranker at work on a spot, and what it makes of it.
 type Ranking = Task<(Box<Ranker>, Result<Option<Ranked>, String>)>;
 
-/// Where the camera stood and looked when the spot was last looked for, and whether the world
-/// around it had arrived.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Look {
     eye: Vec3,
@@ -160,18 +147,16 @@ struct Look {
     arrived: bool,
 }
 
-/// What the grid shows, as far as its order goes.
 #[derive(Clone, Debug, PartialEq)]
-struct Key {
+struct ShownKey {
     tab: Tab,
     order: Order,
     search: String,
     news: u64,
 }
 
-/// The camera the panel is drawn through: over the world, inside the panel alone.
 #[derive(Component)]
-struct PanelView;
+struct PanelCamera;
 
 impl Plugin for PalettePlugin {
     fn build(&self, app: &mut App) {
@@ -187,10 +172,10 @@ impl Plugin for PalettePlugin {
         .init_resource::<Pictures>()
         .init_resource::<Armed>()
         .init_resource::<Settled>()
-        .add_systems(Startup, (spawn_view, read_fonts))
+        .add_systems(Startup, (spawn_panel_camera, read_fonts))
         .add_systems(
             PreUpdate,
-            hold_the_pointer.after(EguiPreUpdateSet::ProcessInput),
+            keep_the_mouse_off_the_camera.after(EguiPreUpdateSet::ProcessInput),
         )
         .add_systems(Update, (toggle, take_in).chain())
         .add_systems(
@@ -199,7 +184,7 @@ impl Plugin for PalettePlugin {
                 look_at_the_spot
                     .after(TransformSystems::Propagate)
                     .after(VisibilitySystems::CheckVisibility),
-                place_view.before(CameraUpdateSystems),
+                place_the_panel_camera.before(CameraUpdateSystems),
                 (pictures::load, settle)
                     .chain()
                     .after(EguiPostUpdateSet::EndPass),
@@ -213,25 +198,24 @@ impl Palette {
     fn new(plugin: &PalettePlugin) -> Self {
         Self {
             open: false,
-            tab: Tab::Every,
+            tab: Tab::AllModels,
             search: String::new(),
             order: Order::Fits,
             side: SIDE,
             width: WIDTH,
-            follows: true,
+            follows_the_camera: true,
             recent: Vec::new(),
             dir: plugin.catalog.clone(),
-            lists_dir: plugin.lists.clone(),
+            lists_dir: plugin.lists_dir.clone(),
             map: plugin.map.clone(),
             loading: Loading::Unasked,
             ranker: Slot::Empty,
             ranked: None,
-            took: None,
             looked: None,
             lists: None,
             trouble: None,
             scroll_to: None,
-            pass: Duration::ZERO,
+            pass_took: Duration::ZERO,
             fonts: None,
             fonts_set: false,
             news: 0,
@@ -261,7 +245,7 @@ impl Palette {
 
     /// The items the grid shows, in its order.
     pub fn shown(&mut self) -> Arc<Vec<usize>> {
-        let key = self.key();
+        let key = self.shown_key();
         if let Some((k, items)) = &self.shown
             && *k == key
         {
@@ -272,8 +256,8 @@ impl Palette {
         items
     }
 
-    fn key(&self) -> Key {
-        Key {
+    fn shown_key(&self) -> ShownKey {
+        ShownKey {
             tab: self.tab.clone(),
             order: self.order,
             search: self.search.clone(),
@@ -286,13 +270,13 @@ impl Palette {
         match self.tab {
             Tab::Recent => &[],
             Tab::List(_) => &[Order::Listed, Order::Fits, Order::Plain],
-            Tab::Every | Tab::Kind(_) => &[Order::Fits, Order::Plain],
+            Tab::AllModels | Tab::Kind(_) => &[Order::Fits, Order::Plain],
         }
     }
 
     pub fn tabs(&self) -> Vec<Tab> {
-        let mut tabs = vec![Tab::Every];
-        tabs.extend((0..KINDS.len()).map(Tab::Kind));
+        let mut tabs = vec![Tab::AllModels];
+        tabs.extend((0..=GROUND).map(Tab::Kind));
         tabs.push(Tab::Recent);
         if let Some(lists) = &self.lists {
             tabs.extend(lists.all.keys().cloned().map(Tab::List));
@@ -300,7 +284,6 @@ impl Palette {
         tabs
     }
 
-    /// Shows `tab` in its own order.
     pub fn choose(&mut self, tab: Tab) {
         self.order = match tab {
             Tab::List(_) => Order::Listed,
@@ -333,16 +316,16 @@ impl Palette {
         let order: Vec<usize> = match &self.tab {
             Tab::Recent => self.recent.clone(),
             Tab::List(name) => self.listed(catalog, name, ranked),
-            Tab::Every => match ranked {
-                Some(r) => r.models[0].clone(),
+            Tab::AllModels => match ranked {
+                Some(r) => r.models.every_kind.clone(),
                 None => catalog.plain(None),
             },
             Tab::Kind(GROUND) => match ranked {
-                Some(r) => r.ground.clone(),
+                Some(r) => r.ground.order.clone(),
                 None => catalog.plain(Some(GROUND)),
             },
             Tab::Kind(k) => match ranked {
-                Some(r) => r.models[k + 1].clone(),
+                Some(r) => r.models.of_kind[*k].clone(),
                 None => catalog.plain(Some(*k)),
             },
         };
@@ -359,8 +342,8 @@ impl Palette {
             return Vec::new();
         };
         let mut items: Vec<usize> = Vec::new();
-        for (path, _) in &list.lines {
-            if let Some(i) = catalog.find(path)
+        for line in &list.lines {
+            if let Some(i) = catalog.find(&line.path)
                 && !items.contains(&i)
             {
                 items.push(i);
@@ -370,9 +353,10 @@ impl Palette {
             (Order::Plain, _) => items.sort_by(|&a, &b| catalog.plainly(a, b)),
             (Order::Fits, Some(r)) => {
                 let place = |i: usize| {
-                    r.models[0]
+                    r.models
+                        .every_kind
                         .iter()
-                        .chain(&r.ground)
+                        .chain(&r.ground.order)
                         .position(|&x| x == i)
                         .unwrap_or(usize::MAX)
                 };
@@ -391,8 +375,8 @@ impl Palette {
         let list = self.lists.as_ref()?.all.get(name)?;
         list.lines
             .iter()
-            .find(|(path, said)| !said.is_empty() && catalog.find(path) == Some(item))
-            .map(|(_, said)| said.as_str())
+            .find(|line| !line.said.is_empty() && catalog.find(&line.path) == Some(item))
+            .map(|line| line.said.as_str())
     }
 
     /// The lines of the named list shown that name nothing in the catalog.
@@ -405,20 +389,18 @@ impl Palette {
         };
         list.lines
             .iter()
-            .filter(|(path, _)| catalog.find(path).is_none())
-            .map(|(path, _)| path.as_str())
+            .filter(|line| catalog.find(&line.path).is_none())
+            .map(|line| line.path.as_str())
             .collect()
     }
 
-    /// Whether the palette shows all it was asked to: its catalog read, its spot's lists made for
-    /// where the camera stands, and its grid drawn with them.
     fn settled(&self, pictures: &Pictures, camera: Option<&GlobalTransform>) -> bool {
         if !self.open || self.failed().is_some() {
             return true;
         }
         let reading = matches!(self.loading, Loading::Unasked | Loading::Reading(_));
         let ranking = matches!(self.ranker, Slot::Busy(_));
-        let looked_here = !self.follows
+        let looked_here = !self.follows_the_camera
             || camera.is_some_and(|c| {
                 self.looked
                     .is_some_and(|l| l.arrived && l.eye == c.translation())
@@ -428,7 +410,7 @@ impl Palette {
             && looked_here
             && self.scroll_to.is_none()
             && self.fonts_set
-            && self.drawn.as_ref() == Some(&self.key())
+            && self.drawn.as_ref() == Some(&self.shown_key())
             && pictures.settled()
     }
 
@@ -452,12 +434,12 @@ impl Palette {
 impl Look {
     fn same(&self, other: &Look) -> bool {
         self.arrived == other.arrived
-            && self.eye.distance(other.eye) < MOVED_YD
-            && self.forward.dot(other.forward) > TURNED_COS
+            && self.eye.distance(other.eye) < LOOK_AGAIN_MOVED_YD
+            && self.forward.dot(other.forward) > LOOK_AGAIN_TURNED_COS
     }
 }
 
-fn spawn_view(mut commands: Commands<'_, '_>) {
+fn spawn_panel_camera(mut commands: Commands<'_, '_>) {
     commands.spawn((
         Camera2d,
         Camera {
@@ -474,7 +456,7 @@ fn spawn_view(mut commands: Commands<'_, '_>) {
         Tonemapping::None,
         DebandDither::Disabled,
         PrimaryEguiContext,
-        PanelView,
+        PanelCamera,
     ));
 }
 
@@ -493,7 +475,7 @@ fn toggle(
 ) {
     let chord = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
         && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    if chord && keys.just_pressed(KEY) {
+    if chord && keys.just_pressed(TOGGLE) {
         palette.open = !palette.open;
     }
     if palette.open
@@ -503,7 +485,6 @@ fn toggle(
     }
 }
 
-/// Takes in the catalog once read, each spot's lists once made, and the named lists that changed.
 fn take_in(mut palette: ResMut<'_, Palette>) {
     let palette = &mut *palette;
     if let Loading::Reading(task) = &mut palette.loading
@@ -527,7 +508,6 @@ fn take_in(mut palette: ResMut<'_, Palette>) {
         palette.ranker = Slot::Idle(ranker);
         match done {
             Ok(Some(ranked)) => {
-                palette.took = Some(ranked.took);
                 palette.ranked = Some(ranked);
                 palette.trouble = None;
                 palette.news += 1;
@@ -548,7 +528,6 @@ fn take_in(mut palette: ResMut<'_, Palette>) {
     }
 }
 
-/// Looks for the spot the camera looks at when it has moved, or the world has arrived around it.
 fn look_at_the_spot(
     mut palette: ResMut<'_, Palette>,
     sight: Sight<'_, '_>,
@@ -556,7 +535,7 @@ fn look_at_the_spot(
     residency: Res<'_, Residency>,
 ) {
     let palette = &mut *palette;
-    if !palette.open || !palette.follows || !matches!(palette.ranker, Slot::Idle(_)) {
+    if !palette.open || !palette.follows_the_camera || !matches!(palette.ranker, Slot::Idle(_)) {
         return;
     }
     let Ok(placed) = camera.single() else {
@@ -583,11 +562,11 @@ fn look_at_the_spot(
     palette.looked = Some(look);
 }
 
-type WorldView<'w, 's> = Query<
+type WorldCameraTarget<'w, 's> = Query<
     'w,
     's,
     (&'static Camera, &'static RenderTarget),
-    (With<WorldCamera>, Without<PanelView>),
+    (With<WorldCamera>, Without<PanelCamera>),
 >;
 
 fn settle(
@@ -602,14 +581,14 @@ fn settle(
     }
 }
 
-/// Draws the panel through its own camera, over the world camera's frame and inside the panel's
-/// part of it, from the frame after its part is known.
-fn place_view(
+/// `bevy_egui` lays a pass out for its camera's viewport as it stood in `PreUpdate`, so the panel
+/// first shows on the frame after its camera is first given its part of the frame.
+fn place_the_panel_camera(
     palette: Res<'_, Palette>,
-    world: WorldView<'_, '_>,
-    mut view: Query<'_, '_, (&mut Camera, &mut RenderTarget), With<PanelView>>,
+    world: WorldCameraTarget<'_, '_>,
+    mut panel: Query<'_, '_, (&mut Camera, &mut RenderTarget), With<PanelCamera>>,
 ) {
-    let (Ok((seen, target)), Ok((mut camera, mut own))) = (world.single(), view.single_mut())
+    let (Ok((seen, target)), Ok((mut camera, mut own))) = (world.single(), panel.single_mut())
     else {
         return;
     };
@@ -617,12 +596,11 @@ fn place_view(
         *own = target.clone();
     }
     let part = panel_part(seen, palette.width).filter(|_| palette.open);
-    let placed = same_part(camera.viewport.as_ref(), part.as_ref());
-    let active = part.is_some() && placed && palette.fonts_set;
+    let active = part.is_some() && camera.viewport.is_some() && palette.fonts_set;
     if camera.is_active != active {
         camera.is_active = active;
     }
-    if part.is_some() && !placed {
+    if part.is_some() && !same_part(camera.viewport.as_ref(), part.as_ref()) {
         camera.viewport = part;
     }
 }
@@ -644,8 +622,9 @@ pub fn panel_part(world: &Camera, width: f32) -> Option<Viewport> {
     })
 }
 
-/// While the pointer is over the panel, the wheel scrolls it and neither zooms nor turns the camera.
-fn hold_the_pointer(
+/// `bevy_egui` takes the mouse's buttons and messages from the world while the pointer is over the
+/// panel, but not the scroll and motion Bevy has already summed from them, which the camera reads.
+fn keep_the_mouse_off_the_camera(
     wants: Res<'_, EguiWantsInput>,
     mut scroll: ResMut<'_, AccumulatedMouseScroll>,
     mut motion: ResMut<'_, AccumulatedMouseMotion>,

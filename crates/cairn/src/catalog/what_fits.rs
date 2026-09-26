@@ -187,20 +187,16 @@ fn run(asked: &Asked) -> Result<String, String> {
     let evidence = around.evidence(&tables);
     let list = evidence.list(&found.spot, asked.kind, asked.top);
     let ranked_in = ranking.elapsed();
-    let mut out = found.header.clone();
-    out.push_str("\nrank\tkind\tpath\twhy\tpicture\n");
-    for (i, f) in list.iter().enumerate() {
+    let rows = list.iter().map(|f| {
         let m = &tables.models[f.model];
-        let _ = writeln!(
-            out,
-            "{}\t{}\t{}\t{}\t{}",
-            i + 1,
-            m.kind,
-            m.path,
-            why(&tables, &found.spot, f),
-            picture(&m.path)
-        );
-    }
+        Row {
+            kind: &m.kind,
+            path: &m.path,
+            why: why(&tables, &found.spot, f),
+            picture: picture(&m.path),
+        }
+    });
+    let mut out = listing(&found.header, rows);
     if let Some(sheet) = &asked.sheet {
         draw(asked, &tables, &found, &list, sheet)?;
         let _ = writeln!(out, "cairn: the sheet is {}", sheet.display());
@@ -256,6 +252,29 @@ fn header(
         );
     }
     said
+}
+
+pub(crate) struct Row<'a> {
+    pub(crate) kind: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) why: String,
+    pub(crate) picture: String,
+}
+
+pub(crate) fn listing<'a>(header: &str, rows: impl IntoIterator<Item = Row<'a>>) -> String {
+    let mut out = format!("{header}\nrank\tkind\tpath\twhy\tpicture\n");
+    for (i, row) in rows.into_iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}",
+            i + 1,
+            row.kind,
+            row.path,
+            row.why,
+            row.picture
+        );
+    }
+    out
 }
 
 pub(crate) fn why(tables: &Tables, spot: &Spot, f: &Fit) -> String {

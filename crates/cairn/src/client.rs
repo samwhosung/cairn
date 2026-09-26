@@ -20,7 +20,7 @@ pub fn assemble(
     let pose = aim.pose();
     let palette = palette::PalettePlugin {
         catalog: args.catalog.clone(),
-        lists: args.lists.clone(),
+        lists_dir: args.lists.clone(),
         map: args.map.clone(),
     };
     match args.mode {

@@ -8,11 +8,12 @@ use bevy_egui::egui::{
     self, Align, Align2, Color32, CursorIcon, FontId, Id, Layout, Rect, RichText, Sense, Stroke,
     StrokeKind, TextEdit, Vec2, pos2, vec2,
 };
+use bevy_egui::helpers::bevy_to_egui_physical_key;
 use world::Install;
 
-use super::catalog::{Catalog, GROUND, KINDS};
+use super::catalog::{Catalog, GROUND, kind_name};
 use super::pictures::{Pictures, Shown};
-use super::{Armed, Order, Palette, Pick, SIDES, Tab, WIDTHS};
+use super::{Armed, Order, Palette, Pick, SIDES, TOGGLE, Tab, WIDTHS};
 use crate::catalog::what_fits;
 
 pub const FILL: Color = Color::srgb_u8(24, 20, 16);
@@ -26,14 +27,14 @@ const TROUBLE: Color32 = Color32::from_rgb(230, 110, 90);
 const GAP: f32 = 6.0;
 const NAME: f32 = 16.0;
 const EDGE: f32 = 5.0;
-/// The most of the frame the panel may take.
 const MOST_OF_THE_FRAME: f32 = 0.7;
 const FONTS: [(&str, &str); 2] = [
     ("frizqt", "Fonts\\FRIZQT__.TTF"),
     ("arialn", "Fonts\\ARIALN.TTF"),
 ];
 
-/// The install's own interface fonts, each checked as egui will read it.
+/// The install's own interface fonts. egui panics on a font it can't parse, so each is first read
+/// as egui will read it.
 pub fn fonts(install: &Install) -> Result<egui::FontDefinitions, String> {
     let mut defs = egui::FontDefinitions::empty();
     for (name, path) in FONTS {
@@ -41,7 +42,7 @@ pub fn fonts(install: &Install) -> Result<egui::FontDefinitions, String> {
             .0
             .read(path)
             .map_err(|e| format!("the install's {path}: {e}"))?;
-        font(&bytes).map_err(|e| format!("the install's {path}: {e}"))?;
+        egui_can_read(&bytes).map_err(|e| format!("the install's {path}: {e}"))?;
         let data = egui::FontData::from_owned(bytes);
         defs.font_data.insert(name.to_owned(), Arc::new(data));
     }
@@ -52,8 +53,7 @@ pub fn fonts(install: &Install) -> Result<egui::FontDefinitions, String> {
     Ok(defs)
 }
 
-/// Whether `bytes` read as the font egui takes them for.
-pub fn font(bytes: &[u8]) -> Result<(), String> {
+pub fn egui_can_read(bytes: &[u8]) -> Result<(), String> {
     ab_glyph::FontRef::try_from_slice_and_index(bytes, 0)
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -89,7 +89,6 @@ fn style() -> egui::Style {
     style
 }
 
-/// The panel, once the fonts are in: its spot, tabs, search, order and the grid of pictures.
 pub fn draw(
     mut contexts: EguiContexts<'_, '_>,
     mut palette: ResMut<'_, Palette>,
@@ -109,11 +108,12 @@ pub fn draw(
         return Ok(());
     }
     if !palette.open {
-        palette.pass = Duration::ZERO;
+        palette.pass_took = Duration::ZERO;
         return Ok(());
     }
-    let closing =
-        ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::P));
+    let closing = bevy_to_egui_physical_key(&TOGGLE).is_some_and(|key| {
+        ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(key))
+    });
     if closing && ctx.wants_keyboard_input() {
         palette.open = false;
         return Ok(());
@@ -122,18 +122,18 @@ pub fn draw(
     pictures.at_side((palette.side * ctx.pixels_per_point()).round() as u32);
     let frame = egui::Frame::new().fill(PANEL).inner_margin(8.0);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
-        resize(ui, palette);
+        drag_the_left_edge(ui, palette);
         head(ui, palette, &armed);
         controls(ui, palette);
         grid(ui, palette, &mut pictures, &mut armed);
     });
-    palette.drawn = Some(palette.key());
-    palette.pass = began.elapsed();
+    let laid_out_for_its_width = (ctx.viewport_rect().width() - palette.width).abs() < 1.0;
+    palette.drawn = laid_out_for_its_width.then(|| palette.shown_key());
+    palette.pass_took = began.elapsed();
     Ok(())
 }
 
-/// The panel's left edge, dragged to widen or narrow it.
-fn resize(ui: &mut egui::Ui, palette: &mut Palette) {
+fn drag_the_left_edge(ui: &mut egui::Ui, palette: &mut Palette) {
     let whole = ui.ctx().viewport_rect();
     let edge = Rect::from_min_max(whole.min, pos2(whole.min.x + EDGE, whole.max.y));
     let dragged = ui.interact(edge, Id::new("palette edge"), Sense::drag());
@@ -150,14 +150,19 @@ fn resize(ui: &mut egui::Ui, palette: &mut Palette) {
 fn head(ui: &mut egui::Ui, palette: &mut Palette, armed: &Armed) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Palette").color(GOLD).heading());
+        let key = bevy_to_egui_physical_key(&TOGGLE).map_or("", |k| k.name());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new("Ctrl+Shift+P").color(DIM).small());
+            ui.label(
+                RichText::new(format!("Ctrl+Shift+{key}"))
+                    .color(DIM)
+                    .small(),
+            );
         });
     });
     let (said, colour) = spot_line(palette);
     ui.label(RichText::new(said).color(colour).small());
     ui.horizontal(|ui| {
-        ui.checkbox(&mut palette.follows, "follow the camera");
+        ui.checkbox(&mut palette.follows_the_camera, "follow the camera");
         if let Some(pick) = &armed.0 {
             let (Pick::Model(path) | Pick::Ground(path)) = pick;
             let name = what_fits::stem(path);
@@ -183,8 +188,8 @@ fn spot_line(palette: &Palette) -> (String, Color32) {
     let spot = &ranked.found.spot;
     let place = &ranked.found.sheet_place;
     let mut said = format!("{:.1}, {:.1} in {place}", ranked.at[0], ranked.at[1]);
-    if let Some(under) = &ranked.found.under {
-        let _ = write!(said, ", on {}", what_fits::stem(under));
+    if let Some(texture) = &ranked.found.texture {
+        let _ = write!(said, ", on {}", what_fits::stem(texture));
     }
     if let Some((_, band)) = spot.ground {
         let _ = write!(said, " at {} degrees", fits::band_name(band));
@@ -230,9 +235,9 @@ fn controls(ui: &mut egui::Ui, palette: &mut Palette) {
 
 pub fn tab_name(tab: &Tab) -> String {
     match tab {
-        Tab::Every => "all".to_owned(),
+        Tab::AllModels => "all".to_owned(),
         Tab::Kind(GROUND) => "ground".to_owned(),
-        Tab::Kind(k) => format!("{}s", KINDS[*k]),
+        Tab::Kind(k) => format!("{}s", kind_name(*k)),
         Tab::Recent => "recent".to_owned(),
         Tab::List(name) => name.clone(),
     }
@@ -335,18 +340,18 @@ fn cell(
     response.on_hover_ui(|ui| about(ui, catalog, item, palette));
 }
 
-/// What the tooltip says of a thing: its name, path and size, and why it stands where it does.
 fn about(ui: &mut egui::Ui, catalog: &Catalog, item: usize, palette: &Palette) {
     let it = &catalog.items[item];
     ui.label(RichText::new(it.name()).color(GOLD));
     ui.label(RichText::new(&it.path).color(DIM).small());
-    let placed = if it.kind == GROUND {
-        format!("{} ground, painted in {} chunks", it.ground, it.placed)
-    } else {
-        format!(
+    let placed = match &it.painted {
+        Some(painted) => format!("{} ground, painted in {} chunks", painted.kind, it.placed),
+        None => format!(
             "{}, {}, placed {} times",
-            KINDS[it.kind], it.size, it.placed
-        )
+            kind_name(it.kind),
+            it.size,
+            it.placed
+        ),
     };
     ui.label(placed);
     if let Some(why) = why(catalog, item, palette) {
@@ -364,7 +369,7 @@ pub fn why(catalog: &Catalog, item: usize, palette: &Palette) -> Option<String> 
         return None;
     }
     if catalog.items[item].kind == GROUND {
-        return ranked.ground_why.get(&item).cloned();
+        return ranked.ground.why.get(&item).cloned();
     }
     let model = catalog.model_of_item(item)?;
     let fit = ranked.fits.get(model)?;

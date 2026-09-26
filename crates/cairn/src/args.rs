@@ -243,10 +243,14 @@ pub struct Args {
     pub world_age: Duration,
     pub look: Look,
     pub notes: Option<PathBuf>,
-    /// The catalog the palette shows.
     pub catalog: PathBuf,
-    /// The folder of the palette's named lists.
     pub lists: Option<PathBuf>,
+}
+
+struct Folders {
+    notes: Option<PathBuf>,
+    catalog: PathBuf,
+    lists: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -400,7 +404,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, headless)?;
-    let (notes, catalog, lists) = folders(&mut given, headless, shot)?;
+    let folders = folders(&mut given, headless, shot)?;
     let mode = match out {
         Some(path) => {
             shot_joins_nothing(&given, host)?;
@@ -424,19 +428,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         display,
         world_age,
         look,
-        notes,
-        catalog,
-        lists,
+        notes: folders.notes,
+        catalog: folders.catalog,
+        lists: folders.lists,
     })
 }
 
-/// Where the window keeps its notes, and where the palette finds its catalog, by default where
-/// `cairn catalog` writes one, and its lists.
 fn folders(
     given: &mut BTreeMap<String, String>,
     headless: bool,
     shot: bool,
-) -> Result<(Option<PathBuf>, PathBuf, Option<PathBuf>), String> {
+) -> Result<Folders, String> {
     let notes = given.remove("notes").map(PathBuf::from);
     if headless && notes.is_some() {
         return Err("--notes is for the window".into());
@@ -446,7 +448,11 @@ fn folders(
         return Err("--catalog and --lists are for the window and the viewer".into());
     }
     let catalog = catalog.unwrap_or_else(|| crate::catalog::DEFAULT_DIR.to_owned());
-    Ok((notes, PathBuf::from(catalog), lists.map(PathBuf::from)))
+    Ok(Folders {
+        notes,
+        catalog: PathBuf::from(catalog),
+        lists: lists.map(PathBuf::from),
+    })
 }
 
 fn map(given: &mut BTreeMap<String, String>) -> Result<Map, String> {
