@@ -109,6 +109,27 @@ VIEWING, the viewer's commands; yards and degrees:
   turn left|right|up|down DEG ...                 where it stands
   orbit left|right|up|down DEG | in|out YD ...    round the point it looks at
   where                 the camera, as the flags that give it again to the last bit
+  pick X Y [--ground]   what pixel X,Y of the frame shows, from its top left: a placement by
+         its unique id and file, or the ground, and where; --ground passes through the models
+  select [ID ...]       show these placements selected, tinted and cornered, or none; says
+         each one's file, place, facing and scale, and the box its corners take on the frame
+  pointer X Y           put the pointer on pixel X,Y; a ghost that follows it stands on the
+         ground under it
+  ghost [FILE [X,Y[,Z]] [--facing DEG] [--scale S]]
+         draw FILE, a model (.m2) or building (.wmo) of the install, see-through with its
+         footprint around it, and a building without its doodads, at the place or else
+         following the pointer; without FILE, none
+  add ID FILE X,Y[,Z] [--facing DEG] [--scale S] [--set N]
+         place FILE under unique id ID
+  move ID [X,Y[,Z]] [--by DX,DY,DZ] [--facing DEG | --turn DEG] [--scale S]
+         stand a placement elsewhere, turn it or scale it
+  remove ID ...         take placements away
+         A place X,Y stands on the ground there. A placement changes only in the running viewer,
+         held as the map's files would hold it: its place to what they keep, a doodad's scale to
+         1/1024 and under 64, and a building never scaled; an answer gives its place and scale
+         to the last bit. It is drawn, and collides, as if the files placed it there; the answer
+         says how soon. A facing is in degrees from north toward west, and N is a building's
+         doodad set
   shot FILE.png [--size WxH] [--cut-to X,Y,Z] [--cut-near YD] [--leave-out ID,...] [--seen]
          shoot as `cairn shot` does, at the viewer's --size unless given, once everything
          the camera sees has arrived; when the camera has moved since the world last ran,

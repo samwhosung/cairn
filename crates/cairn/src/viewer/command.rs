@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use bevy::math::{UVec2, Vec3};
 
+use super::hands::{self, HandsAsk};
 use crate::args::{parse_aim, parse_number, parse_size, parse_triple};
 use crate::view::Aim;
 
@@ -24,6 +25,7 @@ pub enum Command {
         closer_yd: f32,
     },
     Shot(Ask),
+    Hands(HandsAsk),
     Where,
     Quit,
 }
@@ -86,6 +88,12 @@ pub fn parse(line: &str) -> Result<Command, String> {
     match (verb.as_str(), &rest[..]) {
         (verb, _) if verb.starts_with('#') => Ok(Command::Nothing),
         ("look", flags) => parse_aim(flags).map(Command::Look),
+        ("move", [id, ..]) if id.parse::<u32>().is_ok() => {
+            hands::parse("move", &rest).map(Command::Hands)
+        }
+        (verb @ ("pick" | "select" | "pointer" | "ghost" | "add" | "remove"), said) => {
+            hands::parse(verb, said).map(Command::Hands)
+        }
         ("move", said) => {
             let [forward_yd, left_yd, up_yd] = amounts_by_way(said, &MOVES)?;
             Ok(Command::Move {
@@ -111,7 +119,8 @@ pub fn parse(line: &str) -> Result<Command, String> {
         ("quit", []) => Ok(Command::Quit),
         (verb @ ("where" | "quit"), _) => Err(format!("{verb} takes nothing more")),
         (verb, _) => Err(format!(
-            "no command {verb}: look, move, turn, orbit, shot, where or quit"
+            "no command {verb}: look, move, turn, orbit, shot, pick, select, pointer, ghost, add, \
+             remove, where or quit"
         )),
     }
 }

@@ -47,6 +47,8 @@ pub fn assemble(
                     dir: args.notes,
                     map: args.map,
                 },
+                world::hands::HandsPlugin,
+                world::hands::SightPickingPlugin,
             ));
             let feet = pose.target.to_array();
             net::join(app, &joining, &look, map.id, feet, pose.heading)?;

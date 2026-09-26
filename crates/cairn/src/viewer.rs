@@ -4,9 +4,11 @@
 mod command;
 mod coverage;
 mod cut;
+mod hands;
 #[cfg(test)]
 mod pictures;
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::BufRead;
 use std::sync::Mutex;
@@ -91,6 +93,7 @@ enum Step {
         frames_left: u32,
     },
     Capturing(Box<Capture>),
+    Handling(Box<hands::Handling>),
 }
 
 struct Capture {
@@ -122,6 +125,12 @@ impl Plugin for ViewerPlugin {
         let pipelines = watch_pipelines(app);
         let aim = self.aim;
         let (shot_image, sight_image) = (shot.image.clone(), sight.image.clone());
+        app.add_plugins((world::hands::HandsPlugin, world::hands::SightPickingPlugin))
+            .add_systems(Startup, |mut commands: Commands<'_, '_>| {
+                commands.spawn(hands::VIEWER_POINTER);
+                commands.spawn(hands::PICK_POINTER);
+            })
+            .add_systems(Last, hands::handle);
         app.add_plugins(SightFramePlugin)
             .insert_resource(pipelines)
             .insert_resource(Viewer {
@@ -152,7 +161,7 @@ impl Plugin for ViewerPlugin {
             )
             .add_systems(First, wait_for_commands)
             .add_systems(Update, (finish, capture).chain())
-            .add_systems(Last, arrive_and_age);
+            .add_systems(Last, (arrive_and_age, leave_out_the_running_cut).chain());
     }
 }
 
@@ -196,7 +205,6 @@ fn wait_for_commands(
     lines: Option<Res<'_, Lines>>,
     answers: Option<Res<'_, Answers>>,
     mut images: ResMut<'_, Assets<Image>>,
-    mut left_out: ResMut<'_, LeftOut>,
     mut camera: WorldCameras<'_, '_>,
     mut exit: MessageWriter<'_, AppExit>,
 ) {
@@ -264,13 +272,14 @@ fn wait_for_commands(
                     continue;
                 }
             },
+            Ok(Command::Hands(ask)) => {
+                viewer.step = Step::Handling(Box::new(hands::Handling::new(ask)));
+                return;
+            }
             Ok(Command::Shot(ask)) => {
                 let size = ask.size.unwrap_or(viewer.size);
                 if let Some(target) = viewer.shot.resize(&mut images, size) {
                     commands.entity(entity).insert(target);
-                }
-                if !left_out.0.is_empty() {
-                    left_out.0.clear();
                 }
                 let shot = Shooting {
                     ask,
@@ -299,7 +308,6 @@ fn arrive_and_age(
     answers: Option<Res<'_, Answers>>,
     mut clock: ResMut<'_, Time<Virtual>>,
     sight: Sight<'_, '_>,
-    mut left_out: ResMut<'_, LeftOut>,
 ) {
     let settled =
         residency.settled() && collision.settled() && pipelines.built.load(Ordering::Relaxed);
@@ -327,9 +335,7 @@ fn arrive_and_age(
             shot: Some(mut shot),
         } if shot.cut.is_none() && shot.ask.leaves_any_out() => {
             let eye = viewer.aim.pose().eye;
-            let cut = cut::cut(&sight, eye, &shot.ask);
-            left_out.0.clone_from(&cut.left_out);
-            shot.cut = Some(cut);
+            shot.cut = Some(cut::cut(&sight, eye, &shot.ask));
             Step::Arriving { shot: Some(shot) }
         }
         Step::Arriving { shot } if unaged => {
@@ -473,6 +479,22 @@ fn finish(
         answers.say(&answer);
     }
     *step = Step::Idle;
+}
+
+fn leave_out_the_running_cut(viewer: Res<'_, Viewer>, mut left_out: ResMut<'_, LeftOut>) {
+    let cut = match &viewer.step {
+        Step::Arriving { shot: Some(shot) }
+        | Step::Aging {
+            shot: Some(shot), ..
+        } => shot.cut.as_ref(),
+        Step::Capturing(capture) => capture.shot.cut.as_ref(),
+        _ => None,
+    };
+    let nothing = BTreeSet::new();
+    let wanted = cut.map_or(&nothing, |c| &c.left_out);
+    if left_out.0 != *wanted {
+        left_out.0.clone_from(wanted);
+    }
 }
 
 type SightFrame<'a, 'w, 's> = (
