@@ -8,13 +8,13 @@ use world::TimeOfDay;
 
 use crate::fixture::Fixture;
 use crate::shot::DEFAULT_WORLD_AGE;
-use crate::view::{HUMAN_START, Pose};
+use crate::view::Pose;
 
 const DEFAULT_DISPLAY_AGE: f32 = 2.5;
 
 pub const USAGE: &str = "\
-usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly] [--mute] [LOOK]
-             [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
+usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no-glow] [--fly]
+             [--mute] [LOOK] [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
              [--game NAME [--knobs FILE] [--overlay FILE]] [--notes DIR] [--patch DIR]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
@@ -28,8 +28,8 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          host keeps it by default in the user's data directory, named after its game or
          `world` (on macOS ~/Library/Application Support/cairn/worlds/NAME.sqlite), and a
          window alone keeps nothing unless told
-       cairn shot [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--age S]
-                  [--patch DIR] --out FILE.png
+       cairn shot [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no-glow]
+                  [--age S] [--patch DIR] --out FILE.png
          render one frame without a window, once everything in it has loaded and the
          world has run S seconds (2.5 by default)
        cairn shot --display ID [--age S] [--scale K] [--at X,Y,Z --az DEG --el DEG --dist YD] ...
@@ -38,11 +38,13 @@ usage: cairn [CAMERA] [--map MAP] [--time HH:MM] [--size WxH] [--no-glow] [--fly
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
        cairn atlas ZONE [--map MAP] [--yd N] [--mark X,Y]... [--patch DIR] --out FILE.png
+       cairn atlas --zone DIR [--yd N] [--mark X,Y]... --out FILE.png
          draw the AreaTable zone ZONE from above, north up, N yards a pixel (2 by default),
          on its own map unless MAP names another: the ground in its textures' colours, lit
          from the north-west and tinted by the water's depth, the land around the zone
          greyed, doodads as dots (trees dark green, shrubs light green, rocks grey, fences
-         brown, props orange), buildings as red squares, and a ring at each point marked
+         brown, props orange), buildings as red squares, and a ring at each point marked;
+         with --zone, the whole of a zone of its own
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's
@@ -50,6 +52,19 @@ full-screen glow. --patch DIR lays a directory over the install, above every arc
 file in it at the path the install names it by, such as
 World/Maps/Azeroth/Azeroth_32_48.adt in any case and with / or \\, is read instead of
 the archives' copy, and every other file comes from the archives.
+
+--zone DIR opens a zone of its own: a map the install doesn't have, laid over the install as
+--patch lays a directory, in the install's layout (World/Maps/NAME/NAME.wdt, the tiles it
+names, and NAME.wdl for a horizon), with a file of cairn's own beside them, DIR/zone.txt:
+
+    name = Stillmere          # NAME: letters, digits and _, from a letter
+    start = -250, -260, 12.5  # where the player stands, X,Y,Z
+    facing = 90               # degrees from north toward west, 0 unless given
+    borrows = Elwynn Forest   # the install's zone it looks and sounds like
+
+It is lit everywhere by the one light of the install's that most of the borrowed zone's dry
+ground lies under, and all its ground lies in that zone for the music and ambience. Without a
+camera, the window and the shot start at its start.
 
 CAMERA, in WoW world coordinates (x north, y west, z up; yards and degrees):
   --eye X,Y,Z --look X,Y,Z                stand at the eye, look at the point
@@ -78,7 +93,7 @@ camera it was drawn from, what the spot shows, the shot that draws the view agai
 window that walks on from where it was taken. Notes go in the user's data directory (on
 macOS ~/Library/Application Support/cairn/notes), or in --notes DIR.";
 
-const FLAGS: [&str; 28] = [
+const FLAGS: [&str; 29] = [
     "age",
     "at",
     "az",
@@ -107,6 +122,7 @@ const FLAGS: [&str; 28] = [
     "skin",
     "time",
     "world",
+    "zone",
 ];
 /// The playable races by their `ChrRaces` id, 1 first.
 const RACES: [&str; 8] = [
@@ -121,9 +137,9 @@ const DEFAULT_PORT: u16 = 7777;
 
 #[derive(Debug, PartialEq)]
 pub struct Args {
-    pub pose: Pose,
+    pub pose: Option<Pose>,
     pub size: UVec2,
-    pub map: String,
+    pub map: Map,
     pub time: TimeOfDay,
     pub mode: Mode,
     pub start_flying: bool,
@@ -133,7 +149,15 @@ pub struct Args {
     pub world_age: Duration,
     pub look: Look,
     pub notes: Option<PathBuf>,
-    pub patch: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Map {
+    Install {
+        name: String,
+        patch: Option<PathBuf>,
+    },
+    Zone(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -243,9 +267,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let size = given
         .remove("size")
         .map_or(Ok(DEFAULT_SIZE), |size| parse_size(&size))?;
-    let map = given
-        .remove("map")
-        .unwrap_or_else(|| DEFAULT_MAP.to_owned());
+    let map = map(&mut given)?;
     let time = given
         .remove("time")
         .map_or(Ok(NOON), |time| parse_time(&time))?;
@@ -282,7 +304,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     if shot && notes.is_some() {
         return Err("--notes is for the window".into());
     }
-    let patch = given.remove("patch").map(PathBuf::from);
     let mode = match out {
         Some(path) => {
             shot_joins_nothing(&given, host)?;
@@ -303,8 +324,22 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         world_age,
         look,
         notes,
-        patch,
     })
+}
+
+fn map(given: &mut BTreeMap<String, String>) -> Result<Map, String> {
+    let patch = given.remove("patch").map(PathBuf::from);
+    match (given.remove("map"), given.remove("zone")) {
+        (Some(_), Some(_)) => Err("--zone opens a map of its own: give --map or --zone".into()),
+        (None, Some(_)) if patch.is_some() => {
+            Err("--zone lays its directory over the install as --patch does: give one".into())
+        }
+        (None, Some(dir)) => Ok(Map::Zone(PathBuf::from(dir))),
+        (name, None) => Ok(Map::Install {
+            name: name.unwrap_or_else(|| DEFAULT_MAP.to_owned()),
+            patch,
+        }),
+    }
 }
 
 fn shot_joins_nothing(given: &BTreeMap<String, String>, host: Option<u16>) -> Result<(), String> {
@@ -490,17 +525,17 @@ fn display(given: &mut BTreeMap<String, String>, shot: bool) -> Result<Option<Fi
     }))
 }
 
-fn pose(given: &BTreeMap<String, String>) -> Result<Pose, String> {
+fn pose(given: &BTreeMap<String, String>) -> Result<Option<Pose>, String> {
     let triple = |flag: &str| parse_triple(flag, &given[flag]);
     let number = |flag: &str| parse_number(flag, &given[flag]);
     match given.keys().map(String::as_str).collect::<Vec<_>>()[..] {
-        [] => Ok(Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0)),
+        [] => Ok(None),
         ["eye", "look"] => {
             let (eye, look) = (triple("eye")?, triple("look")?);
             if eye == look {
                 return Err("--eye and --look are the same point".into());
             }
-            Ok(Pose::look(eye, look))
+            Ok(Some(Pose::look(eye, look)))
         }
         ["at", "az", "dist", "el"] => {
             let (dist, el) = (number("dist")?, number("el")?);
@@ -510,7 +545,7 @@ fn pose(given: &BTreeMap<String, String>) -> Result<Pose, String> {
             if el.abs() > 90.0 {
                 return Err("--el must lie within -90..90".into());
             }
-            Ok(Pose::orbit(triple("at")?, number("az")?, el, dist))
+            Ok(Some(Pose::orbit(triple("at")?, number("az")?, el, dist)))
         }
         _ => Err("give the camera as --eye and --look, or as --at, --az, --el and --dist".into()),
     }

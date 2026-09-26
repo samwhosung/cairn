@@ -1,7 +1,15 @@
 use super::*;
+use crate::view::HUMAN_START;
 
 fn parsed(line: &str) -> Result<Args, String> {
     parse(line.split_whitespace().map(str::to_owned))
+}
+
+fn install(name: &str) -> Map {
+    Map::Install {
+        name: name.into(),
+        patch: None,
+    }
 }
 
 #[test]
@@ -15,18 +23,22 @@ fn a_bare_command_walks_northshire() {
     };
     assert_eq!(args.mode, Mode::Window(alone));
     assert!(!args.start_flying);
-    assert_eq!(args.pose.target, HUMAN_START);
+    assert_eq!(args.pose, None, "the map's own start");
+    assert_eq!(Pose::human_start().target, HUMAN_START);
     assert_eq!(args.size, DEFAULT_SIZE);
-    assert_eq!(args.pose, Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0));
-    assert_eq!((args.map.as_str(), args.time.minute), ("Azeroth", 720));
+    assert_eq!(
+        Pose::human_start(),
+        Pose::orbit(HUMAN_START, 0.0, 12.0, 16.0)
+    );
+    assert_eq!((args.map, args.time.minute), (install("Azeroth"), 720));
 }
 
 #[test]
 fn the_map_and_the_hour_are_taken_as_given() {
     let args = parsed("shot --map 1 --time 06:30 --out a.png").expect("parses");
-    assert_eq!((args.map.as_str(), args.time.minute), ("1", 390));
+    assert_eq!((args.map, args.time.minute), (install("1"), 390));
     let args = parsed("--time 23:59 --map Kalimdor").expect("parses");
-    assert_eq!((args.map.as_str(), args.time.minute), ("Kalimdor", 1439));
+    assert_eq!((args.map, args.time.minute), (install("Kalimdor"), 1439));
 }
 
 #[test]
@@ -35,12 +47,12 @@ fn a_shot_takes_either_camera_form() {
         .expect("parses");
     assert_eq!(
         orbit.pose,
-        Pose::orbit(Vec3::new(1.0, 2.0, 3.0), 90.0, 30.0, 10.0)
+        Some(Pose::orbit(Vec3::new(1.0, 2.0, 3.0), 90.0, 30.0, 10.0))
     );
     assert_eq!(orbit.size, UVec2::new(64, 32));
     assert_eq!(orbit.mode, Mode::Shot(PathBuf::from("a/b.png")));
     let look = parsed("shot --out x.PNG --look 1,0,0 --eye 0,0,0").expect("parses");
-    assert_eq!(look.pose, Pose::look(Vec3::ZERO, Vec3::X));
+    assert_eq!(look.pose, Some(Pose::look(Vec3::ZERO, Vec3::X)));
 }
 
 #[test]
@@ -175,12 +187,38 @@ fn the_window_leaves_its_notes_where_it_is_told() {
 
 #[test]
 fn the_window_and_the_shot_alike_read_through_a_patch_directory() {
-    assert_eq!(parsed("").expect("parses").patch, None);
+    assert_eq!(parsed("").expect("parses").map, install("Azeroth"));
     for line in ["--patch a/b --fly", "shot --patch a/b --out a.png"] {
-        let patch = parsed(line).expect("parses").patch;
-        assert_eq!(patch, Some(PathBuf::from("a/b")), "{line}");
+        let patched = Map::Install {
+            name: "Azeroth".into(),
+            patch: Some(PathBuf::from("a/b")),
+        };
+        assert_eq!(parsed(line).expect("parses").map, patched, "{line}");
     }
     assert!(parsed("--patch a --patch b").is_err());
+}
+
+#[test]
+fn the_window_and_the_shot_alike_open_a_zone_of_its_own_in_place_of_a_map() {
+    for line in ["--zone a/b --fly", "shot --zone a/b --out a.png"] {
+        let args = parsed(line).expect("parses");
+        assert_eq!(args.map, Map::Zone(PathBuf::from("a/b")), "{line}");
+        assert_eq!(args.pose, None, "{line}: the zone's own start");
+    }
+    let args = parsed("--zone a --at 1,2,3 --az 0 --el 10 --dist 5").expect("parses");
+    assert_eq!(
+        args.pose,
+        Some(Pose::orbit(Vec3::new(1.0, 2.0, 3.0), 0.0, 10.0, 5.0))
+    );
+    for wrong in [
+        "--zone a --zone b",
+        "--zone a --map 1",
+        "--map Azeroth --zone a",
+        "shot --zone a --patch b --out a.png",
+        "--zone",
+    ] {
+        assert!(parsed(wrong).is_err(), "{wrong}");
+    }
 }
 
 #[test]

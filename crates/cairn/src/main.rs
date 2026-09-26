@@ -14,12 +14,16 @@ mod note;
 mod player;
 mod shot;
 mod view;
+mod zone;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use world::unit::CharacterTables;
 use world::{CurrentMap, Install};
+
+use crate::view::Pose;
+use crate::zone::Zone;
 
 /// A debug build aborts on an allocation inside the sound output's realtime scopes.
 #[cfg(debug_assertions)]
@@ -51,19 +55,16 @@ fn main() -> AppExit {
     if matches!(args.mode, args::Mode::Window(_)) && args.notes.is_none() {
         args.notes = server::data_dir().map(|dir| dir.join("notes"));
     }
-    args.patch = args
-        .patch
-        .map(|patch| std::path::absolute(&patch).unwrap_or(patch));
-    let install = match install(args.patch.as_deref()) {
-        Ok(install) => install,
-        Err(exit) => return exit,
+    args.map = match args.map {
+        args::Map::Install { name, patch } => args::Map::Install {
+            name,
+            patch: patch.map(absolute),
+        },
+        args::Map::Zone(dir) => args::Map::Zone(absolute(dir)),
     };
-    let map = match CurrentMap::find(&install.0, &args.map) {
-        Ok(map) => map,
-        Err(e) => {
-            eprintln!("cairn: {e}");
-            return AppExit::from_code(2);
-        }
+    let (install, map, start) = match open(&args.map) {
+        Ok(opened) => opened,
+        Err(exit) => return exit,
     };
     let mut app = App::new();
     if matches!(args.mode, args::Mode::Window(_)) {
@@ -80,11 +81,36 @@ fn main() -> AppExit {
         }
         app.insert_resource(tables);
     }
-    if let Err(e) = client::assemble(&mut app, args, &install, map, std::convert::identity) {
+    let assembled = client::assemble(&mut app, args, &install, map, start, std::convert::identity);
+    if let Err(e) = assembled {
         eprintln!("cairn: {e}");
         return AppExit::from_code(2);
     }
     app.run()
+}
+
+fn absolute(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+fn open(map: &args::Map) -> Result<(Install, CurrentMap, Pose), AppExit> {
+    let refused = |e: String| {
+        eprintln!("cairn: {e}");
+        AppExit::from_code(2)
+    };
+    match map {
+        args::Map::Install { name, patch } => {
+            let install = install(patch.as_deref())?;
+            let map = CurrentMap::find(&install.0, name).map_err(refused)?;
+            Ok((install, map, Pose::human_start()))
+        }
+        args::Map::Zone(dir) => {
+            let zone = Zone::read(dir).map_err(refused)?;
+            let install = install(Some(dir))?;
+            let map = zone.open(&install).map_err(refused)?;
+            Ok((install, map, zone.start()))
+        }
+    }
 }
 
 fn install(patch: Option<&Path>) -> Result<Install, AppExit> {

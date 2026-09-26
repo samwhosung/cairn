@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use world::coords::wow_to_bevy;
 
 pub const HUMAN_START: Vec3 = Vec3::new(-8949.95, -132.49, 83.53);
+const START_CAMERA_ELEVATION_DEG: f32 = 12.0;
+const START_CAMERA_DISTANCE_YD: f32 = 16.0;
 
 /// `eye` and `target` are in WoW's world coordinates; `heading` is radians from north toward
 /// west, `pitch` radians, up positive.
@@ -40,6 +42,19 @@ impl Pose {
             pitch: -el,
             target: at,
         }
+    }
+
+    pub fn start(feet: Vec3, facing_deg: f32) -> Self {
+        Self::orbit(
+            feet,
+            facing_deg,
+            START_CAMERA_ELEVATION_DEG,
+            START_CAMERA_DISTANCE_YD,
+        )
+    }
+
+    pub fn human_start() -> Self {
+        Self::start(HUMAN_START, 0.0)
     }
 
     pub fn transform(self) -> Transform {

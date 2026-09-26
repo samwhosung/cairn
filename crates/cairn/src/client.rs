@@ -4,6 +4,7 @@ use world::unit::{BodySkin, CharacterLook};
 use world::{CurrentMap, Install};
 
 use crate::args::{self, Args, Mode};
+use crate::view::Pose;
 use crate::{fixture, net, note, player, shot};
 
 pub fn assemble(
@@ -11,9 +12,11 @@ pub fn assemble(
     args: Args,
     install: &Install,
     map: CurrentMap,
+    start: Pose,
     default_plugins: impl FnOnce(PluginGroupBuilder) -> PluginGroupBuilder,
 ) -> Result<(), net::CannotHost> {
     world::register_source(app, install);
+    let pose = args.pose.unwrap_or(start);
     match args.mode {
         Mode::Window(joining) => {
             let look = character_look(args.look);
@@ -30,7 +33,7 @@ pub fn assemble(
                 })),
                 world::collision::CollisionPlugin,
                 player::PlayerPlugin {
-                    pose: args.pose,
+                    pose,
                     mode: if args.start_flying {
                         player::Mode::Fly
                     } else {
@@ -41,17 +44,17 @@ pub fn assemble(
                 sound_plugin(args.mute),
                 note::NotePlugin {
                     dir: args.notes,
-                    patch: args.patch,
+                    map: args.map,
                 },
             ));
-            let start = args.pose.target.to_array();
-            net::join(app, &joining, &look, map.id, start, args.pose.heading)?;
+            let feet = pose.target.to_array();
+            net::join(app, &joining, &look, map.id, feet, pose.heading)?;
         }
         Mode::Shot(out) => {
             app.add_plugins((
                 default_plugins(shot::headless_plugins()),
                 shot::ShotPlugin {
-                    pose: args.pose,
+                    pose,
                     size: args.size,
                     out,
                     aged_by: match args.display {

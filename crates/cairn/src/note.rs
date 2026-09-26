@@ -13,6 +13,7 @@ use world::coords::bevy_to_wow;
 use world::sight::{Cast, Seen, Sight, Sighting};
 use world::{CurrentMap, FARCLIP, FullScreenGlow, GLOBAL_WMO_ID, NEARCLIP, TimeOfDay, WorldCamera};
 
+use crate::args;
 use crate::player::{Mode, Player};
 use crate::shot::write_png;
 
@@ -24,14 +25,14 @@ const MAGENTA: Color = Color::srgb(1.0, 0.0, 1.0);
 
 pub struct NotePlugin {
     pub dir: Option<PathBuf>,
-    pub patch: Option<PathBuf>,
+    pub map: args::Map,
 }
 
 impl Plugin for NotePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Notes {
             dir: self.dir.clone(),
-            patch: self.patch.clone(),
+            map: self.map.clone(),
             written: Vec::new(),
         })
         .init_resource::<Pointer>()
@@ -56,7 +57,7 @@ pub enum Pointer {
 #[derive(Resource)]
 pub struct Notes {
     dir: Option<PathBuf>,
-    patch: Option<PathBuf>,
+    map: args::Map,
     pub written: Vec<PathBuf>,
 }
 
@@ -111,12 +112,11 @@ fn take_note(
         warn!("no note: there is no data directory for notes; give --notes DIR");
         return;
     };
-    let (Ok((_, _, target)), Some(mut pending)) = (scene.camera.single(), gather(&scene, *pointer))
-    else {
+    let gathered = gather(&scene, *pointer, &notes.map);
+    let (Ok((_, _, target)), Some(pending)) = (scene.camera.single(), gathered) else {
         warn!("no note: the camera has no frame yet");
         return;
     };
-    pending.facts.patch.clone_from(&notes.patch);
     let mut note = Some(Note {
         root,
         name: UtcTime::at(pending.facts.taken).dir_name(),
@@ -173,7 +173,7 @@ impl PendingNote {
     }
 }
 
-fn gather(scene: &Scene<'_, '_>, pointer: Pointer) -> Option<PendingNote> {
+fn gather(scene: &Scene<'_, '_>, pointer: Pointer, opened: &args::Map) -> Option<PendingNote> {
     let (camera, placed, _) = scene.camera.single().ok()?;
     let frame_px = camera.physical_target_size()?;
     let window_points = camera.logical_target_size()?.round().as_uvec2();
@@ -203,7 +203,7 @@ fn gather(scene: &Scene<'_, '_>, pointer: Pointer) -> Option<PendingNote> {
         feet_wow: bevy_to_wow(feet),
         heading: scene.player.face_yaw,
         spot,
-        patch: None,
+        opened: opened.clone(),
     };
     Some(PendingNote {
         facts,
@@ -242,7 +242,7 @@ struct Facts {
     feet_wow: [f32; 3],
     heading: f32,
     spot: UVec2,
-    patch: Option<PathBuf>,
+    opened: args::Map,
 }
 
 impl Facts {
@@ -254,14 +254,14 @@ impl Facts {
             flag_xyz(self.eye_wow),
             flag_xyz(look_wow)
         );
-        let patch = self
-            .patch
-            .as_deref()
-            .map_or_else(String::new, |dir| format!(" --patch {}", shell_word(dir)));
-        let view = format!(
-            "--map {}{patch} --time {hour:02}:{minute:02}{glow} {camera}",
-            self.map
-        );
+        let map = match &self.opened {
+            args::Map::Install { patch: None, .. } => format!("--map {}", self.map),
+            args::Map::Install {
+                patch: Some(dir), ..
+            } => format!("--map {} --patch {}", self.map, shell_word(dir)),
+            args::Map::Zone(dir) => format!("--zone {}", shell_word(dir)),
+        };
+        let view = format!("{map} --time {hour:02}:{minute:02}{glow} {camera}");
         let heading = self.heading.to_degrees().rem_euclid(360.0);
         let (spot, frame, window) = (self.spot, self.frame_px, self.window_points);
         let mut lines = vec![

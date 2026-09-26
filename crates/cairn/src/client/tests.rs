@@ -20,6 +20,7 @@ use crate::args;
 use crate::net::{self, Net, OtherPlayer};
 use crate::player::PlayerBody;
 use crate::player::state::Player;
+use crate::view::Pose;
 
 const FIRST_FRAMES: usize = 3;
 
@@ -44,7 +45,8 @@ fn assembled(argv: &str) -> Result<App, String> {
         borrowed: None,
     };
     let mut app = App::new();
-    assemble(&mut app, args, &install, map, without_a_window).map_err(|e| e.to_string())?;
+    let start = Pose::human_start();
+    assemble(&mut app, args, &install, map, start, without_a_window).map_err(|e| e.to_string())?;
     Ok(app)
 }
 
@@ -140,7 +142,7 @@ fn plays_through_its_server(app: &mut App) -> Result<server::Summary, String> {
     if !frames_until(app, welcomed) {
         return Err("no welcome".into());
     }
-    let pose = args::parse(Vec::new()).expect("a bare command").pose;
+    let pose = Pose::human_start();
     let player = app.world().resource::<Player>();
     let placed = (player.pos, player.face_yaw);
     if placed != (wow_to_bevy(pose.target.to_array()), pose.heading) {

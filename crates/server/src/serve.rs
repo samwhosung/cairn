@@ -24,7 +24,7 @@ pub struct Config {
     pub tick_threads: usize,
     pub io_threads: usize,
     pub tick_ms: u16,
-    /// The `Map.dbc` id players are welcomed onto.
+    /// The map players are welcomed onto: a `Map.dbc` id, or a zone of its own's.
     pub map: u32,
     /// Where players join, in turn; with none, everyone joins at the map's origin.
     pub spawns: Vec<Spawn>,

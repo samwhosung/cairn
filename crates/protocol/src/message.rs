@@ -103,7 +103,7 @@ impl ClientMessage {
 pub struct Welcome {
     pub version: u16,
     pub id: u32,
-    /// A `Map.dbc` id.
+    /// A `Map.dbc` id, or a zone of its own's.
     pub map: u32,
     /// The tick the first batch will carry.
     pub tick: u32,

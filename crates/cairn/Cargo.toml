@@ -8,14 +8,19 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+adt = { path = "../adt" }
 assert_no_alloc = "1.1"
 atlas = { path = "../atlas" }
 avian3d.workspace = true
 bevy.workspace = true
 catalog = { path = "../catalog" }
+dbc = { path = "../dbc" }
+light = { path = "../light" }
 protocol = { path = "../protocol" }
 server = { path = "../server" }
 sound = { path = "../sound" }
+terrain = { path = "../terrain" }
+wdt = { path = "../wdt" }
 world = { path = "../world" }
 
 [dev-dependencies]

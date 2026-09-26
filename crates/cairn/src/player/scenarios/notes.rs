@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use world::coords::{bevy_to_wow, wow_to_bevy};
 use world::unit::CharacterLook;
-use world::{CurrentMap, FOV_Y, Install, PlacedModel, Placements, WorldCamera};
+use world::{FOV_Y, PlacedModel, Placements, WorldCamera};
 
 use super::INN_WALL;
 use super::painter::{Painter, SIZE, STEP};
@@ -215,11 +215,9 @@ fn shoot_and_project(see_it: &str, out: &Path, wow: [f32; 3]) -> Vec2 {
     let argv = see_it.split_whitespace().map(str::to_owned);
     let mut args = args::parse(argv).expect("the note's flags parse");
     args.mode = Mode::Shot(out.to_path_buf());
-    let data = std::env::var_os("WOW_DATA").expect("the install");
-    let install = Install::open(Path::new(&data)).expect("the install opens");
-    let map = CurrentMap::find(&install.0, &args.map).expect("the map");
+    let (install, map, start) = crate::open(&args.map).expect("the map opens");
     let mut app = App::new();
-    crate::client::assemble(&mut app, args, &install, map, std::convert::identity)
+    crate::client::assemble(&mut app, args, &install, map, start, std::convert::identity)
         .expect("the shot assembles");
     app.finish();
     app.cleanup();
@@ -347,9 +345,10 @@ fn a_note_names_the_lamppost_pointed_at_and_its_camera_draws_it_on_the_same_pixe
     let feet = Vec3::from(bevy_to_wow(p.app.world().resource::<Player>().pos));
     let walk = note.line("walk there: cairn ").split_whitespace();
     let stands = args::parse(walk.map(str::to_owned)).expect("the window takes them");
+    let stands = stands.pose.expect("a camera");
     let (above, aside) = (
-        stands.pose.target.z - feet.z,
-        stands.pose.target.truncate() - feet.truncate(),
+        stands.target.z - feet.z,
+        stands.target.truncate() - feet.truncate(),
     );
     eprintln!(
         "the window would stand the body {:.3} yd aside and {above:.3} above its feet",

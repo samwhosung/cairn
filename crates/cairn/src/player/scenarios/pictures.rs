@@ -2,13 +2,23 @@
 //! as well as the install, so they run only when asked for, writing into the directory
 //! `CAIRN_PICTURES` names.
 
+use std::path::Path;
+
+use bevy::ecs::system::RunSystemOnce;
 use bevy::input::ButtonState;
 use bevy::prelude::*;
+use world::collision::WorldCollision;
+use world::coords::bevy_to_wow;
+use world::interior::CurrentArea;
 use world::unit::{CharacterLook, UnitShow};
+use world::{Install, SceneLight};
 
 use super::painter::{Painter, frame_costs, rig_census};
 use super::walker::Through;
 use crate::player::PlayerBody;
+use crate::player::flags::FALLING;
+use crate::player::state::Player;
+use crate::zone::tests::{DUSKWOOD_AREA, ELWYNN_FOREST_AREA, TestZone};
 
 const ATTACK_UNARMED: u16 = 16;
 const COMBAT_WOUND: u16 = 9;
@@ -18,6 +28,7 @@ pub(super) const GOLDSHIRE: [f32; 2] = [-9439.1, 51.2];
 pub(super) const EAST: f32 = 270.0;
 const HILLTOP_SOUTH_OF_GOLDSHIRE: [f32; 2] = [-9200.0, -420.0];
 const SUN_BEARING: f32 = 45.0;
+const A_YARD_OVER_THE_GRASS_BELOW_THE_ABBEY: [f32; 3] = [-8945.0, -140.0, 84.6];
 pub(super) struct Stand {
     pub(super) xy: [f32; 2],
     pub(super) heading: f32,
@@ -275,7 +286,7 @@ fn a_tauren_and_a_gnome_stand_where_the_human_does() {
 #[test]
 #[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
 fn the_walker_starts_where_a_bare_window_looks() {
-    let pose = crate::args::parse(Vec::new()).expect("a bare command").pose;
+    let pose = crate::view::Pose::human_start();
     let (feet, heading) = (pose.target.to_array(), pose.heading.to_degrees());
     let look = CharacterLook::naked(1, 0);
     let through = Some(Through::ItsOwn { record: None });
@@ -290,6 +301,92 @@ fn the_walker_starts_where_a_bare_window_looks() {
     p.orbit(std::f32::consts::PI, 4.0);
     p.wait(1.0);
     p.shoot("start-2-face");
+}
+
+fn feet_wow(p: &Painter) -> [f32; 3] {
+    bevy_to_wow(p.app.world().resource::<Player>().pos)
+}
+
+fn gap_under_the_feet(p: &mut Painter) -> f32 {
+    let from = p.app.world().resource::<Player>().pos + Vec3::Y * 2.0;
+    p.app
+        .world_mut()
+        .run_system_once(move |c: WorldCollision<'_, '_>| {
+            c.ray_body(from, Dir3::NEG_Y, 4.0).map(|h| h.distance - 2.0)
+        })
+        .expect("the system runs")
+        .expect("ground under the feet")
+}
+
+#[test]
+#[ignore = "draws on the GPU; set WOW_DATA and CAIRN_PICTURES"]
+fn a_zone_of_its_own_is_lit_and_heard_as_the_zone_it_borrows_and_stood_on() {
+    let look = CharacterLook::naked(1, 0);
+    let Some(mut goldshire) = Painter::new(GOLDSHIRE, EAST, look.clone()) else {
+        return;
+    };
+    goldshire.wait(0.5);
+    let elwynn = *goldshire.app.world().resource::<SceneLight>();
+    drop(goldshire);
+    let data = std::env::var_os("WOW_DATA").expect("the install");
+    let install = Install::open(Path::new(&data)).expect("the install");
+    let tile = install
+        .0
+        .read("World\\Maps\\Azeroth\\Azeroth_32_48.adt")
+        .expect("Northshire's tile");
+    let [x, y, z] = A_YARD_OVER_THE_GRASS_BELOW_THE_ABBEY;
+    let mut seen = Vec::new();
+    for (borrows, name) in [
+        ("Elwynn Forest", "zone-elwynn"),
+        ("Duskwood", "zone-duskwood"),
+    ] {
+        let zone = TestZone::new(name);
+        zone.write_map("Stillmere", &[((32, 48), tile.clone())]);
+        zone.write_file(&format!(
+            "name = Stillmere\nstart = {x}, {y}, {z}\nborrows = {borrows}\n"
+        ));
+        let mut p = Painter::in_zone(zone.path(), look.clone()).expect("the zone");
+        p.wait(2.0);
+        p.shoot(&format!("{name}-1-standing"));
+        let (gap, feet) = (gap_under_the_feet(&mut p), feet_wow(&p));
+        eprintln!("{name}: the feet at {feet:?}, {gap:.3} yd over the ground");
+        assert!(gap.abs() < 0.25 && (feet[0] - x).hypot(feet[1] - y) < 0.01);
+        assert!(
+            (z - 2.0..z).contains(&feet[2]),
+            "settled onto the ground below the start"
+        );
+        p.tilt_up(0.35);
+        p.wait(1.0);
+        p.shoot(&format!("{name}-2-sky"));
+        let world = p.app.world();
+        seen.push((
+            *world.resource::<SceneLight>(),
+            *world.resource::<CurrentArea>(),
+        ));
+        p.key(KeyCode::KeyW, ButtonState::Pressed);
+        p.wait(1.5);
+        p.shoot(&format!("{name}-3-running"));
+        p.key(KeyCode::KeyW, ButtonState::Released);
+        p.wait(1.0);
+        let (gap, ran_to) = (gap_under_the_feet(&mut p), feet_wow(&p));
+        let ran = (ran_to[0] - x).hypot(ran_to[1] - y);
+        eprintln!("{name}: ran {ran:.2} yd to {ran_to:?}, {gap:.3} yd over the ground");
+        let flags = p.app.world().resource::<Player>().move_flags;
+        assert!(ran > 5.0 && gap.abs() < 0.25 && flags & FALLING == 0);
+    }
+    for (light, area) in &seen {
+        eprintln!(
+            "{area:?}: fog {:?}, sky {:?}",
+            light.fog_color, light.sky[0]
+        );
+    }
+    let elwynn_forest = CurrentArea(Some(ELWYNN_FOREST_AREA));
+    assert_eq!(seen[0], (elwynn, elwynn_forest), "Elwynn's");
+    assert_ne!(
+        seen[1].0, elwynn,
+        "the control: Duskwood lights it otherwise"
+    );
+    assert_eq!(seen[1].1, CurrentArea(Some(DUSKWOOD_AREA)));
 }
 
 #[test]

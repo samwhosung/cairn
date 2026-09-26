@@ -90,7 +90,14 @@ fn facts() -> Facts {
         feet_wow: [-9436.1, 49.0, 81.6],
         heading: -std::f32::consts::FRAC_PI_2,
         spot: UVec2::new(812, 395),
-        patch: None,
+        opened: patched(None),
+    }
+}
+
+fn patched(patch: Option<&str>) -> crate::args::Map {
+    crate::args::Map::Install {
+        name: "Azeroth".into(),
+        patch: patch.map(PathBuf::from),
     }
 }
 
@@ -143,7 +150,8 @@ fn the_flags_a_note_gives_are_taken_by_the_shot_and_the_window_alike() {
     let window = flags("walk there: cairn ").expect("the window takes them");
     assert_eq!(shot.pose, window.pose);
     let [eye, look] = [facts().eye_wow, LOOK].map(Vec3::from_array);
-    assert_eq!((shot.pose.eye, shot.pose.target), (eye, look));
+    let pose = shot.pose.expect("a camera");
+    assert_eq!((pose.eye, pose.target), (eye, look));
     assert_eq!(
         (shot.size, window.size),
         (UVec2::new(3200, 1800), UVec2::new(1600, 900))
@@ -153,23 +161,45 @@ fn the_flags_a_note_gives_are_taken_by_the_shot_and_the_window_alike() {
 
 #[test]
 fn a_note_taken_through_a_patch_draws_again_through_it() {
-    let patch = PathBuf::from("/work/walk/B");
     let text = Facts {
-        patch: Some(patch.clone()),
+        opened: patched(Some("/work/walk/B")),
         ..facts()
     }
     .text(LOOK, None);
     for prefix in ["see it: cairn ", "walk there: cairn "] {
         let line = text.lines().find_map(|l| l.strip_prefix(prefix));
         let args = crate::args::parse(line.expect(prefix).split_whitespace().map(str::to_owned));
-        assert_eq!(args.expect(prefix).patch.as_ref(), Some(&patch), "{prefix}");
+        let map = args.expect(prefix).map;
+        assert_eq!(map, patched(Some("/work/walk/B")), "{prefix}");
     }
     let spaced = Facts {
-        patch: Some(PathBuf::from("/a b/it's")),
+        opened: patched(Some("/a b/it's")),
         ..facts()
     }
     .text(LOOK, None);
     assert!(spaced.contains(" --patch '/a b/it'\\''s' "), "{spaced}");
+}
+
+#[test]
+fn a_note_taken_in_a_zone_of_its_own_draws_again_in_it() {
+    let zone = crate::args::Map::Zone(PathBuf::from("/work/zones/B"));
+    let text = Facts {
+        map: "Stillmere".into(),
+        opened: zone.clone(),
+        ..facts()
+    }
+    .text(LOOK, None);
+    for prefix in ["see it: cairn ", "walk there: cairn "] {
+        let line = text.lines().find_map(|l| l.strip_prefix(prefix));
+        let args = crate::args::parse(line.expect(prefix).split_whitespace().map(str::to_owned));
+        assert_eq!(args.expect(prefix).map, zone, "{prefix}");
+    }
+    let spaced = Facts {
+        opened: crate::args::Map::Zone(PathBuf::from("/a b")),
+        ..facts()
+    }
+    .text(LOOK, None);
+    assert!(spaced.contains(" --zone '/a b' --time "), "{spaced}");
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! image from its own follow camera.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,11 +20,12 @@ use world::collision::{CollisionPlugin, CollisionResidency, WorldCollision};
 use world::coords::wow_to_bevy;
 use world::rig::{AnimParked, RigPose, RigSkin};
 use world::unit::{BodyDressed, CharacterLook, CharacterTables, UnitBody};
-use world::{CurrentMap, Install, Residency, TimeOfDay, WorldCamera};
+use world::{Residency, TimeOfDay, WorldCamera};
 
 use super::alone::{self, Pace};
 use super::clock::{Frames, SharedClock};
 use super::walker::{Through, time_update};
+use crate::args;
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
 use crate::player::camera::{CameraControl, CameraRig};
@@ -138,23 +139,46 @@ impl Painter {
         Some(painter)
     }
 
+    pub(super) fn in_zone(dir: &Path, look: CharacterLook) -> Option<Self> {
+        let zone = args::Map::Zone(dir.to_path_buf());
+        let through = Some(Through::ItsOwn { record: None });
+        let mut painter = Self::build_on(&zone, None, look, through)?;
+        painter.clock().pause();
+        painter.settle();
+        painter.clock().unpause();
+        Some(painter)
+    }
+
     pub(super) fn build(
         feet: [f32; 3],
         heading_deg: f32,
         look: CharacterLook,
         through: Option<Through>,
     ) -> Option<Self> {
-        let (Some(data), Some(out)) = (
+        let azeroth = args::Map::Install {
+            name: "Azeroth".into(),
+            patch: None,
+        };
+        let pose = Pose::start(Vec3::from_array(feet), heading_deg);
+        Self::build_on(&azeroth, Some(pose), look, through)
+    }
+
+    fn build_on(
+        opened: &args::Map,
+        pose: Option<Pose>,
+        look: CharacterLook,
+        through: Option<Through>,
+    ) -> Option<Self> {
+        let (Some(_), Some(out)) = (
             std::env::var_os("WOW_DATA"),
             std::env::var_os("CAIRN_PICTURES"),
         ) else {
             eprintln!("skipped: set WOW_DATA and CAIRN_PICTURES");
             return None;
         };
-        let install = Install::open(&PathBuf::from(data)).expect("open the install");
-        let map = CurrentMap::find(&install.0, "Azeroth").expect("the map");
+        let (install, map, start) = crate::open(opened).expect("the map opens");
         let tables = CharacterTables::load(&install).expect("the character tables");
-        let pose = Pose::orbit(Vec3::from_array(feet), heading_deg, 12.0, 16.0);
+        let pose = pose.unwrap_or(start);
         let over_loopback = matches!(through, Some(Through::Loopback { .. }));
         let judge_on_drop = through.as_ref().is_some_and(Through::hosted);
         let (net, frames) = match through {
@@ -182,7 +206,7 @@ impl Painter {
                 world::WorldPlugin,
                 NotePlugin {
                     dir: Some(PathBuf::from(&out).join("notes")),
-                    patch: None,
+                    map: opened.clone(),
                 },
             ));
         let joins = net.is_some();
