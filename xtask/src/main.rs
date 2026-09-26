@@ -185,6 +185,8 @@ const PICTURE_TESTS: [&str; 4] = [
     "scenarios::notes::",
 ];
 
+const WORLDS_LOADED_AT_ONCE: &str = "2";
+
 fn pictures(root: &Path, dir: &Path) -> Result<()> {
     if std::env::var_os("WOW_DATA").is_none() {
         bail!("pictures needs WOW_DATA, the install's Data directory");
@@ -195,6 +197,7 @@ fn pictures(root: &Path, dir: &Path) -> Result<()> {
         .args(["test", "-p", "cairn", "--locked", "--", "--ignored"])
         .args(PICTURE_TESTS)
         .args(["--skip", "the_frame_cost"])
+        .args(["--test-threads", WORLDS_LOADED_AT_ONCE])
         .env("CAIRN_PICTURES", &dir)
         .current_dir(root)
         .output()
