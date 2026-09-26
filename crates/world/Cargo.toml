@@ -1,6 +1,6 @@
 [package]
 name = "world"
-description = "World of Warcraft 1.12.1 in Bevy: its files as assets, its world drawn as the client draws it"
+description = "Draws the world in Bevy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-description = "Draws a zone of World of Warcraft 1.12.1 from above: the ground in its textures' colours, hill shading and water, and doodads and buildings as marks"
+description = "Draws a zone from above"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

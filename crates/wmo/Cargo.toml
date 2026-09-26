@@ -1,6 +1,6 @@
 [package]
 name = "wmo"
-description = "Reads World of Warcraft 1.12.1 WMO world objects: the root file and its group files"
+description = "Reads WoW 1.12.1 WMO buildings"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

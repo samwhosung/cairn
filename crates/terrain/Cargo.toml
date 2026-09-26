@@ -1,6 +1,6 @@
 [package]
 name = "terrain"
-description = "Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them"
+description = "Terrain and water meshes, and height queries"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

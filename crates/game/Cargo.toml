@@ -1,6 +1,6 @@
 [package]
 name = "game"
-description = "The rule API a game on the server is written on: kinds of rows in typed tables, rules that see the world as the last tick left it and change only the row they run for, letters between rows, timers, spawning and knobs, and the tick that runs them"
+description = "The API a game is written on"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

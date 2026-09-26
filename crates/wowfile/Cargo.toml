@@ -1,6 +1,6 @@
 [package]
 name = "wowfile"
-description = "Bounds-checked little-endian reads and the chunk walk the WoW file formats share"
+description = "Shared reading code for WoW's file formats"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

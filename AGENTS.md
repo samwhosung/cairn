@@ -1,8 +1,8 @@
 # Working in cairn
 
-cairn is an engine for World of Warcraft–style worlds, built for AI agents to work in: a client,
-an editor agents drive, and a server. It reads WoW 1.12.1's files from the player's own install
-at run time.
+cairn is an engine for World of Warcraft–style worlds: a client, a server, and an editor where
+people and AI build together. It reads WoW 1.12.1's files from the player's own install at run
+time.
 
 ## What cairn is
 

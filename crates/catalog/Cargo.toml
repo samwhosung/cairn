@@ -1,6 +1,6 @@
 [package]
 name = "catalog"
-description = "The games cairn carries, looked up by name for the server, the client and the bots"
+description = "The games cairn can run, by name"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

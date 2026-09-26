@@ -1,6 +1,6 @@
 [package]
 name = "survey"
-description = "What the maps of a World of Warcraft 1.12.1 install paint and place, by zone: every ground texture, doodad and building, with where and how often, written out as text and pictures an agent can search and look through"
+description = "What each zone's maps paint and place, for the catalog"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

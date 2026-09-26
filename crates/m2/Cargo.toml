@@ -1,6 +1,6 @@
 [package]
 name = "m2"
-description = "Reads World of Warcraft 1.12.1 M2 models: mesh, skins, bones, attachments and tracks"
+description = "Reads WoW 1.12.1 M2 models"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "model"
-description = "The render-ready view of World of Warcraft 1.12.1 M2 and WMO models: batches, bounds, collision, animation"
+description = "Models ready to draw: M2 and WMO batches, bounds, collision and animation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

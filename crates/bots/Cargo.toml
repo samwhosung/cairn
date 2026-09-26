@@ -1,6 +1,6 @@
 [package]
 name = "bots"
-description = "Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict"
+description = "Bots that load the server, and scripted scenarios with a verdict"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

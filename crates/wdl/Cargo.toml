@@ -1,6 +1,6 @@
 [package]
 name = "wdl"
-description = "Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from"
+description = "Reads WoW 1.12.1 WDL horizon maps"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

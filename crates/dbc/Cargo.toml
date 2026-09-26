@@ -1,6 +1,6 @@
 [package]
 name = "dbc"
-description = "Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns"
+description = "Reads WoW 1.12.1 DBC tables"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

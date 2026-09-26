@@ -1,6 +1,6 @@
 [package]
 name = "character"
-description = "World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear"
+description = "Characters and creatures: their looks, skins and gear"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

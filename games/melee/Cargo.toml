@@ -1,6 +1,6 @@
 [package]
 name = "melee"
-description = "A game on the rule API: every player fights every other hand to hand, and the dead rise at their spawn"
+description = "A small sample game: everyone fights hand to hand"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

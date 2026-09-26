@@ -1,6 +1,6 @@
 [package]
 name = "protocol"
-description = "The native wire between cairn's client and server: frames, the messages each side sends, and their encoding"
+description = "The wire between client and server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

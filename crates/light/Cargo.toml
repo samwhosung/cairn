@@ -1,6 +1,6 @@
 [package]
 name = "light"
-description = "Reads World of Warcraft 1.12.1 lighting tables into fog, sun, sky and water colour by place, weather and time, and traces the sun and moon through the day"
+description = "Lighting: sky, fog, sun and water colour by place and time"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

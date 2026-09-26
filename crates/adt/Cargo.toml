@@ -1,6 +1,6 @@
 [package]
 name = "adt"
-description = "Reads World of Warcraft 1.12.1 ADT terrain tiles: heights, textures, liquids and placements"
+description = "Reads WoW 1.12.1 ADT terrain tiles"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
