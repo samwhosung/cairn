@@ -287,7 +287,8 @@ pub fn texture_colors(
         .collect()
 }
 
-/// Draws the frame at `ypp` yards a pixel, dimming what lies outside zone `zone` when one is given.
+/// Draws the frame at `ypp` yards a pixel, dimming what lies outside zone `zone` when one is given,
+/// and counts the doodads standing in the zone, or on any tile loaded without one, each once.
 pub fn render<S: BuildHasher + Sync>(
     loaded: &[((u32, u32), TileMesh)],
     colors: &HashMap<String, [f32; 3], S>,
@@ -335,7 +336,7 @@ fn chunk_at<'a>(index: &ChunkIndex<'a>, wx: f32, wy: f32) -> Option<(&'a ChunkMe
     Some((c, gyf - gyf.floor(), gxf - gxf.floor()))
 }
 
-/// In zone `zone`, or anywhere without one; each once: every tile a doodad overlaps lists it.
+/// Every tile a doodad overlaps lists it.
 fn census(
     loaded: &[((u32, u32), TileMesh)],
     index: &ChunkIndex<'_>,
