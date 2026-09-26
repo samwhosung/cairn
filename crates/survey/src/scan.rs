@@ -4,7 +4,7 @@ use atlas::layer_weights;
 use dbc::{DbcParser, FieldType, Schema, SchemaField, Value};
 use mpq::Chain;
 use rayon::prelude::*;
-use terrain::{ALPHA_MAP_SIZE, ChunkMesh, Doodad, LiquidKind, WmoInstance};
+use terrain::{ALPHA_MAP_SIZE, CHUNK_SIZE, ChunkMesh, Doodad, LiquidKind, VERTICES, WmoInstance};
 use wdt::{GlobalWmo, WdtReader};
 
 use crate::WetCells;
@@ -12,6 +12,8 @@ use crate::WetCells;
 const MAP_DBC: &str = "DBFilesClient\\Map.dbc";
 const MAP_FIELDS: usize = 42;
 const CHUNKS_A_SIDE: u32 = 16;
+const ROW_STRIDE: usize = 17;
+const MOST_OF_A_CHUNK: f32 = 0.9999;
 pub(crate) const TEXELS_PER_CHUNK: usize = (ALPHA_MAP_SIZE * ALPHA_MAP_SIZE) as usize;
 
 pub(crate) struct MapTiles {
@@ -34,7 +36,16 @@ pub(crate) struct Paint {
 
 pub(crate) struct Listed<T> {
     pub(crate) placed: T,
-    pub(crate) area_here: Option<u32>,
+    pub(crate) here: Option<Underfoot>,
+}
+
+/// The ground under a point: its chunk's area, the texture that shows most at the point, and the
+/// slope of the cell holding it, in degrees.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Underfoot {
+    pub area: u32,
+    pub texture: Option<String>,
+    pub slope: Option<f32>,
 }
 
 pub(crate) struct TileSummary {
@@ -107,12 +118,12 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
                 .read(&format!("World\\Maps\\{dir}\\{dir}_{x}_{y}.adt"))
                 .ok()?;
             let mesh = terrain::adt_to_tile_mesh(&bytes).ok()?;
-            let area_here = |p: [f32; 3]| area_under(&mesh.chunks, (x, y), p);
+            let here = |p: [f32; 3]| underfoot(&mesh.chunks, (x, y), p);
             let doodads = mesh
                 .doodads
                 .iter()
                 .map(|d| Listed {
-                    area_here: area_here(d.position),
+                    here: here(d.position),
                     placed: d.clone(),
                 })
                 .collect();
@@ -120,7 +131,7 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
                 .wmos
                 .iter()
                 .map(|w| Listed {
-                    area_here: area_here(w.position),
+                    here: here(w.position),
                     placed: w.clone(),
                 })
                 .collect();
@@ -135,16 +146,51 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
         .collect()
 }
 
-/// A point on the edge between two chunks lies in the one south or east of it, as `world_to_chunk`
-/// places it.
-fn area_under(chunks: &[ChunkMesh], (tile_x, tile_y): (u32, u32), p: [f32; 3]) -> Option<u32> {
+/// The ground under `p` on the tile `Map_x_y.adt` numbers as `tile`, whose chunks these are; `None`
+/// off them. A point on the edge between two chunks lies in the one south or east of it, as
+/// `world_to_chunk` places it.
+pub fn underfoot(
+    chunks: &[ChunkMesh],
+    (tile_x, tile_y): (u32, u32),
+    p: [f32; 3],
+) -> Option<Underfoot> {
     let (chunk_x, chunk_y) = wdt::world_to_chunk(p[0], p[1]);
     let column = chunk_x.checked_sub(tile_x * CHUNKS_A_SIDE)?;
     let row = chunk_y.checked_sub(tile_y * CHUNKS_A_SIDE)?;
-    chunks
+    let c = chunks
         .iter()
-        .find(|c| c.index_x == column && c.index_y == row)
-        .map(|c| c.area_id)
+        .find(|c| c.index_x == column && c.index_y == row)?;
+    let nw = c.positions.first().copied().unwrap_or(p);
+    let across = |along: f32| (along / CHUNK_SIZE).clamp(0.0, MOST_OF_A_CHUNK);
+    let (south, east) = (across(nw[0] - p[0]), across(nw[1] - p[1]));
+    let layers = c.layer_textures.len().min(4);
+    let texture = (layers > 0).then(|| {
+        let side = ALPHA_MAP_SIZE as f32;
+        let texel = (south * side) as usize * ALPHA_MAP_SIZE as usize + (east * side) as usize;
+        let w = layer_weights(c.alpha_map.as_deref(), texel, layers);
+        let top = (0..layers)
+            .max_by(|&a, &b| w[a].total_cmp(&w[b]))
+            .unwrap_or(0);
+        c.layer_textures[top].clone()
+    });
+    Some(Underfoot {
+        area: c.area_id,
+        texture,
+        slope: cell_slope(c, (south * 8.0) as usize, (east * 8.0) as usize),
+    })
+}
+
+/// The slope of cell `(row, column)` from its four corners, in degrees.
+fn cell_slope(c: &ChunkMesh, row: usize, column: usize) -> Option<f32> {
+    if c.positions.len() != VERTICES {
+        return None;
+    }
+    let h = |r: usize, k: usize| c.positions[r * ROW_STRIDE + k][2];
+    let cell = CHUNK_SIZE / 8.0;
+    let (r, k) = (row, column);
+    let south = (h(r + 1, k) + h(r + 1, k + 1) - h(r, k) - h(r, k + 1)) / (2.0 * cell);
+    let east = (h(r, k + 1) + h(r + 1, k + 1) - h(r, k) - h(r + 1, k)) / (2.0 * cell);
+    Some(south.hypot(east).atan().to_degrees())
 }
 
 fn chunk(c: &ChunkMesh) -> ChunkSummary {
@@ -211,6 +257,10 @@ mod tests {
         }
     }
 
+    fn area_under(chunks: &[ChunkMesh], tile: (u32, u32), p: [f32; 3]) -> Option<u32> {
+        underfoot(chunks, tile, p).map(|u| u.area)
+    }
+
     #[test]
     fn a_point_on_an_edge_lies_in_the_chunk_south_of_it() {
         let chunks = [chunk(0, 0, 1), chunk(1, 0, 2)];
@@ -226,5 +276,43 @@ mod tests {
             None,
             "another tile's"
         );
+    }
+
+    #[test]
+    fn underfoot_is_the_texture_showing_most_and_the_cell_slope() {
+        let mut c = chunk(0, 0, 7);
+        let cell = CHUNK_SIZE / 8.0;
+        let rise = 30f32.to_radians().tan();
+        c.positions = (0..VERTICES)
+            .map(|i| {
+                let (row, at) = (i / ROW_STRIDE, i % ROW_STRIDE);
+                let (south, east) = if at < 9 {
+                    (row as f32, at as f32)
+                } else {
+                    (row as f32 + 0.5, (at - 9) as f32 + 0.5)
+                };
+                [-south * cell, -east * cell, south * cell * rise]
+            })
+            .collect();
+        c.layer_textures = vec!["Base.blp".into(), "East.blp".into()];
+        let side = ALPHA_MAP_SIZE as usize;
+        c.alpha_map = Some(
+            (0..side * side)
+                .flat_map(|t| [if t % side >= side / 2 { 255 } else { 0 }, 0, 0, 0])
+                .collect(),
+        );
+        let at = |south: f32, east: f32| {
+            underfoot(
+                std::slice::from_ref(&c),
+                (32, 32),
+                [-south * CHUNK_SIZE, -east * CHUNK_SIZE, 0.0],
+            )
+            .expect("on the chunk")
+        };
+        let west = at(0.3, 0.2);
+        assert_eq!(west.area, 7);
+        assert_eq!(west.texture.as_deref(), Some("Base.blp"));
+        assert!((west.slope.expect("a full grid") - 30.0).abs() < 0.01);
+        assert_eq!(at(0.3, 0.8).texture.as_deref(), Some("East.blp"));
     }
 }

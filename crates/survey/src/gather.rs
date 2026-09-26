@@ -5,9 +5,10 @@ use atlas::{Areas, Doodads};
 use mpq::Chain;
 use rayon::prelude::*;
 
-use crate::scan::{self, ChunkSummary, MapTiles, TileSummary};
+use crate::scan::{self, ChunkSummary, MapTiles, TileSummary, Underfoot};
 use crate::{
-    Example, Ground, Model, Place, Scales, Survey, Tally, TileSpan, WetCells, Zone, key, spelling,
+    Example, Ground, Model, Place, Placement, Scales, Survey, Tally, TileSpan, WetCells, Zone, key,
+    spelling,
 };
 
 const MIN_BESIDE_TEXELS: f32 = 41.0;
@@ -52,12 +53,21 @@ struct ModelAcc {
 struct Placed<'a> {
     map: usize,
     area: Option<u32>,
+    here: Option<&'a Underfoot>,
     unique_id: u32,
     model: &'a str,
     position: [f32; 3],
     heading: f32,
     scale: f32,
     doodad_set: u16,
+}
+
+struct Standing {
+    model: String,
+    zone: ZoneId,
+    position: [f32; 3],
+    ground: Option<String>,
+    slope: Option<f32>,
 }
 
 struct WmoRoot {
@@ -80,13 +90,14 @@ pub(crate) fn survey(chain: &Chain) -> Result<Survey, String> {
         zones: BTreeMap::new(),
         models: BTreeMap::new(),
         buildings: BTreeSet::new(),
+        standing: Vec::new(),
     };
     let grounds = gathering.paint(&tiles);
     let doodads = each_once(&tiles, |t| {
         t.doodads.iter().map(|d| {
             let p = &d.placed;
             (
-                d.area_here,
+                d.here.as_ref(),
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
@@ -113,7 +124,7 @@ fn buildings<'a>(tiles: &'a [TileSummary], maps: &'a [MapTiles], areas: &Areas) 
             let p = &w.placed;
             let set = p.doodad_set;
             (
-                w.area_here,
+                w.here.as_ref(),
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
@@ -128,6 +139,7 @@ fn buildings<'a>(tiles: &'a [TileSummary], maps: &'a [MapTiles], areas: &Areas) 
             wmos.push(Placed {
                 map,
                 area: areas.zones_on(m.id).first().copied(),
+                here: None,
                 unique_id: WHOLE_MAP_BUILDING_ID,
                 model: &g.model,
                 position: g.position,
@@ -146,6 +158,7 @@ struct Gathering<'a> {
     zones: BTreeMap<ZoneId, ZoneAcc>,
     models: BTreeMap<String, ModelAcc>,
     buildings: BTreeSet<String>,
+    standing: Vec<Standing>,
 }
 
 struct Grounds {
@@ -190,7 +203,18 @@ impl Gathering<'_> {
                 .count(atlas::kind(d.model));
             let m = self.models.entry(key(d.model)).or_default();
             m.place(d, self.maps, zone, true, None);
+            self.stand(d, zone);
         }
+    }
+
+    fn stand(&mut self, p: &Placed<'_>, zone: ZoneId) {
+        self.standing.push(Standing {
+            model: key(p.model),
+            zone,
+            position: p.position,
+            ground: p.here.and_then(|h| h.texture.as_deref()).map(key),
+            slope: p.here.and_then(|h| h.slope),
+        });
     }
 
     fn place_buildings(&mut self, wmos: &[Placed<'_>], roots: &BTreeMap<String, WmoRoot>) {
@@ -201,6 +225,7 @@ impl Gathering<'_> {
             self.buildings.insert(k.clone());
             let m = self.models.entry(k.clone()).or_default();
             m.place(w, self.maps, zone, true, None);
+            self.stand(w, zone);
             let Some(root) = roots.get(&k) else { continue };
             let own = (w.doodad_set != DEFAULT_DOODAD_SET).then_some(w.doodad_set);
             for set in std::iter::once(DEFAULT_DOODAD_SET).chain(own) {
@@ -260,6 +285,7 @@ impl Gathering<'_> {
             .zip(&grounds.keys)
             .map(|(acc, k)| finish_ground(acc, k, &zone_index))
             .collect();
+        let placements = placements(&self, &zone_index, &grounds);
         let models: Vec<Model> = std::mem::take(&mut self.models)
             .into_iter()
             .zip(shapes)
@@ -272,8 +298,41 @@ impl Gathering<'_> {
             zones,
             grounds,
             models,
+            placements,
         }
     }
+}
+
+fn placements(
+    gathering: &Gathering<'_>,
+    zone_index: &BTreeMap<ZoneId, usize>,
+    grounds: &[Ground],
+) -> Vec<Placement> {
+    let model_index: BTreeMap<&str, usize> = gathering
+        .models
+        .keys()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    let ground_index: BTreeMap<&str, usize> = grounds
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.key.as_str(), i))
+        .collect();
+    gathering
+        .standing
+        .iter()
+        .map(|s| Placement {
+            model: model_index[s.model.as_str()],
+            zone: zone_index[&s.zone],
+            position: s.position,
+            ground: s
+                .ground
+                .as_deref()
+                .and_then(|g| ground_index.get(g).copied()),
+            slope: s.slope,
+        })
+        .collect()
 }
 
 fn paint(
@@ -331,7 +390,7 @@ fn paint(
     }
 }
 
-type Listing<'a> = (Option<u32>, u32, &'a str, [f32; 3], f32, f32, u16);
+type Listing<'a> = (Option<&'a Underfoot>, u32, &'a str, [f32; 3], f32, f32, u16);
 
 /// A tile lists every placement that overlaps it, and an id is unique on its map.
 fn each_once<'a, I>(
@@ -343,10 +402,12 @@ where
 {
     let mut by_id: BTreeMap<(usize, u32), Placed<'a>> = BTreeMap::new();
     for tile in tiles {
-        for (area, unique_id, model, position, heading, scale, doodad_set) in listed(tile) {
+        for (here, unique_id, model, position, heading, scale, doodad_set) in listed(tile) {
+            let area = here.map(|h| h.area);
             let placed = Placed {
                 map: tile.map,
                 area,
+                here,
                 unique_id,
                 model,
                 position,

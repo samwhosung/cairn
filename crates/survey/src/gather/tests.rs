@@ -1,7 +1,7 @@
 use terrain::Doodad;
 
 use super::*;
-use crate::scan::Listed;
+use crate::scan::{Listed, Underfoot};
 
 fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> TileSummary {
     TileSummary {
@@ -10,7 +10,7 @@ fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> T
         chunks: Vec::new(),
         doodads: doodads
             .into_iter()
-            .map(|(unique_id, area_here, model)| Listed {
+            .map(|(unique_id, area, model)| Listed {
                 placed: Doodad {
                     model: model.into(),
                     position: [1.0, 2.0, 3.0],
@@ -18,7 +18,11 @@ fn tile(map: usize, at: (u32, u32), doodads: Vec<(u32, Option<u32>, &str)>) -> T
                     scale: 1.0,
                     unique_id,
                 },
-                area_here,
+                here: area.map(|area| Underfoot {
+                    area,
+                    texture: None,
+                    slope: None,
+                }),
             })
             .collect(),
         wmos: Vec::new(),
@@ -30,7 +34,7 @@ fn once(tiles: &[TileSummary]) -> Vec<(usize, u32, Option<u32>, &str)> {
         t.doodads.iter().map(|d| {
             let p = &d.placed;
             (
-                d.area_here,
+                d.here.as_ref(),
                 p.unique_id,
                 p.model.as_str(),
                 p.position,

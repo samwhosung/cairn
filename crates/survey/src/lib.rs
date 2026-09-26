@@ -19,6 +19,7 @@ use mpq::Chain;
 pub use gather::model_bounds as bounds;
 pub use pages::PICTURE_SIDE;
 pub use picture::{save_averaged, write_atomically};
+pub use scan::{Underfoot, underfoot};
 pub use text::ZoneSound;
 pub use write::{Lookups, Written, pictures_missing, write, write_pages};
 
@@ -29,6 +30,20 @@ pub struct Survey {
     pub zones: Vec<Zone>,
     pub grounds: Vec<Ground>,
     pub models: Vec<Model>,
+    /// Every doodad and building standing on a map's ground, by map and id, doodads first.
+    pub placements: Vec<Placement>,
+}
+
+/// A doodad or building on a map's ground, in world coordinates: x north, y west, z up. `ground`
+/// is the texture that shows most under it and `slope` its cell's, in degrees; neither is known
+/// for a map's whole-map building.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placement {
+    pub model: usize,
+    pub zone: usize,
+    pub position: [f32; 3],
+    pub ground: Option<usize>,
+    pub slope: Option<f32>,
 }
 
 /// An `AreaTable` row with no parent, on one map; ground in no zone is area 0's.

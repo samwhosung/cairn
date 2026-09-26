@@ -45,6 +45,21 @@ fn the_maps_are_read_whole_each_placement_once() {
         .map(|m| m.on_ground)
         .sum();
     assert_eq!(on_ground, 378_639, "every doodad the maps place, once");
+    let standing = |building: bool| {
+        inv.placements
+            .iter()
+            .filter(|p| inv.models[p.model].building == building)
+            .count()
+    };
+    assert_eq!(standing(false), 378_639, "a placement each");
+    assert_eq!(standing(true), 3_748, "and each building on the ground");
+    let bare = inv.placements.iter().filter(|p| p.ground.is_none()).count();
+    let flat = inv.placements.iter().filter(|p| p.slope.is_none()).count();
+    assert_eq!(
+        (bare, flat),
+        (61, 24),
+        "the 24 whole-map buildings stand on no ground, and 37 more on chunks painted nothing"
+    );
     assert!(inv.models.iter().all(|m| m.bounds.is_some()));
     let mut keys: Vec<&str> = inv.zones.iter().map(|z| z.key.as_str()).collect();
     keys.sort_unstable();
