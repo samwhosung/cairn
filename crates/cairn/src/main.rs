@@ -1,4 +1,4 @@
-//! The cairn client: walks a window through a WoW 1.12.1 install, renders one shot of it to a PNG, or draws a zone of it from above.
+//! The cairn client: walks a window through a WoW 1.12.1 install, renders one shot of it to a PNG, draws a zone of it from above, or writes a catalog of its assets.
 #![allow(
     clippy::needless_pass_by_value,
     reason = "Bevy hands systems their parameters by value"

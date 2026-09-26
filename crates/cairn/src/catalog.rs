@@ -1,6 +1,3 @@
-//! `cairn catalog`: the install's ground textures, doodads, buildings and zones written out for an
-//! agent to search and look through.
-
 mod studio;
 
 use std::fmt::Write as _;
@@ -15,16 +12,12 @@ use world::Install;
 use studio::Sitter;
 
 const DEFAULT_DIR: &str = "catalog";
-/// A model's picture is this many pixels square.
-const PICTURE: u32 = 480;
-/// The first line of `catalog.txt`: a catalog written by another version is not added to.
-const FORMAT: &str = "cairn catalog 1";
+const CATALOG_VERSION: &str = "cairn catalog 1";
 
 #[derive(Debug, PartialEq)]
 pub struct Order {
     pub dir: PathBuf,
-    /// Draw at most this many of the missing pictures, then stop.
-    pub draw: Option<usize>,
+    pub draw_at_most: Option<usize>,
 }
 
 pub fn main(argv: &[String]) -> AppExit {
@@ -57,12 +50,12 @@ pub fn main(argv: &[String]) -> AppExit {
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Order, String> {
     let mut args = args.into_iter();
-    let (mut dir, mut draw) = (None, None);
+    let (mut dir, mut draw_at_most) = (None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--draw" if draw.is_none() => {
+            "--draw" if draw_at_most.is_none() => {
                 let n = args.next().ok_or("--draw needs a count")?;
-                draw = Some(
+                draw_at_most = Some(
                     n.trim()
                         .parse::<usize>()
                         .map_err(|_| format!("--draw wants a count of pictures, not {n}"))?,
@@ -79,7 +72,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Order, String> {
     }
     Ok(Order {
         dir: dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DIR)),
-        draw,
+        draw_at_most,
     })
 }
 
@@ -88,32 +81,33 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
     let chain = &install.0;
     let inv = survey::read(chain)?;
     let read_in = started.elapsed();
-    stamp(&order.dir, data)?;
-    let sounds = Sounds::load(install)?;
-    let px_per_yard = |m: &Model| m.bounds.map(|b| PICTURE as f32 / studio::frame(b).side);
+    stamp_or_check(&order.dir, data)?;
+    let sounds = SoundTables::load(install)?;
+    let px_per_yard = |m: &Model| {
+        m.bounds
+            .map(|b| survey::PICTURE_SIDE as f32 / studio::frame(b).yards_across)
+    };
     let text = survey::write(&inv, chain, &order.dir, &|z| sounds.of(z), &px_per_yard)?;
     let missing = survey::pictures_missing(&inv, &order.dir);
     let to_draw: Vec<Sitter> = missing
         .iter()
-        .take(order.draw.unwrap_or(usize::MAX))
+        .take(order.draw_at_most.unwrap_or(usize::MAX))
         .filter_map(|&i| sitter(&inv.models[i], &order.dir))
         .collect();
     let drawing = Instant::now();
     let drawn = if to_draw.is_empty() {
         Vec::new()
     } else {
-        studio::draw(install, to_draw, PICTURE)?
+        studio::draw(install, to_draw, survey::PICTURE_SIDE)?
     };
     let drawn_in = drawing.elapsed();
-    for d in drawn.iter().filter(|d| d.failed.is_some()) {
-        eprintln!(
-            "cairn: {}: {}",
-            d.path,
-            d.failed.as_deref().unwrap_or_default()
-        );
+    for d in &drawn {
+        if let Some(trouble) = &d.trouble {
+            eprintln!("cairn: {}: {trouble}", d.install_path);
+        }
     }
     let still = survey::pictures_missing(&inv, &order.dir).len();
-    let pages = if still == 0 && order.draw.is_none() {
+    let pages = if still == 0 && order.draw_at_most.is_none() {
         Some(survey::write_pages(&inv, &order.dir)?)
     } else {
         None
@@ -150,16 +144,14 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
 
 fn sitter(m: &Model, dir: &Path) -> Option<Sitter> {
     Some(Sitter {
-        path: m.path.clone(),
+        install_path: m.path.clone(),
         building: m.building,
         bounds: m.bounds?,
         out: dir.join(format!("models/{}.png", m.key)),
     })
 }
 
-/// Writes `catalog.txt`, naming the format and the install's archives, or checks the one there
-/// names the same: a catalog of another install or format is never added to.
-fn stamp(dir: &Path, data: &Path) -> Result<(), String> {
+fn stamp_or_check(dir: &Path, data: &Path) -> Result<(), String> {
     let mut archives: Vec<(String, u64)> = std::fs::read_dir(data)
         .map_err(|e| format!("{}: {e}", data.display()))?
         .filter_map(Result::ok)
@@ -172,7 +164,7 @@ fn stamp(dir: &Path, data: &Path) -> Result<(), String> {
         })
         .collect();
     archives.sort();
-    let mut want = format!("{FORMAT}\nthe install's archives:\n");
+    let mut want = format!("{CATALOG_VERSION}\nthe install's archives:\n");
     for (name, size) in &archives {
         let _ = writeln!(want, "  {name} {size}");
     }
@@ -189,13 +181,12 @@ fn stamp(dir: &Path, data: &Path) -> Result<(), String> {
     }
 }
 
-/// The sound tables, which name a zone's music and ambience.
-struct Sounds {
+struct SoundTables {
     areas: AreaSounds,
     kits: KitCatalog,
 }
 
-impl Sounds {
+impl SoundTables {
     fn load(install: &Install) -> Result<Self, String> {
         Ok(Self {
             areas: AreaSounds::load(&install.0).map_err(|e| e.to_string())?,

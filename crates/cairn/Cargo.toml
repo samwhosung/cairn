@@ -1,6 +1,6 @@
 [package]
 name = "cairn"
-description = "The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, or draws a zone of it from above"
+description = "The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, draws a zone of it from above, or writes a catalog of its assets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,6 +26,7 @@ world = { path = "../world" }
 
 [dev-dependencies]
 game = { path = "../game" }
+image = { version = "0.25", default-features = false, features = ["png"] }
 mpq = { path = "../mpq" }
 
 [lints]

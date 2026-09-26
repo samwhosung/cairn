@@ -1463,6 +1463,7 @@ dependencies = [
  "catalog",
  "dbc",
  "game",
+ "image",
  "light",
  "mpq",
  "protocol",

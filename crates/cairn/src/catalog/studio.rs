@@ -1,7 +1,3 @@
-//! Models drawn one at a time, apart from any place: each from the same angle through an
-//! orthographic camera, beside a figure a player's height, on a flat backdrop. The world's clock
-//! never runs, so each is drawn at rest, whatever was drawn before it.
-
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -28,15 +24,13 @@ use crate::view::Pose;
 /// A corner of Azeroth that no tile, horizon or light sphere reaches: the models stand here, lit
 /// by the map's own noon.
 const STAGE: Vec3 = Vec3::new(16_000.0, 16_000.0, 0.0);
-const STAGE_ID: u32 = u32::MAX - 1;
+const STAGE_ID: u32 = world::GLOBAL_WMO_ID - 1;
 /// The camera looks south-east, down onto the model's front (+x) and its left side (+y), with
 /// the sun behind it.
 const AZIMUTH: f32 = 225.0;
 const ELEVATION: f32 = 25.0;
-/// A model larger than this, in yards from its middle to a corner, is drawn scaled down to it,
-/// and its figure with it, so all of it lies within the world's far clip. Seen orthographically,
-/// the picture is the same.
-const STAGE_RADIUS: f32 = 120.0;
+const MAX_UNSCALED_RADIUS: f32 = 120.0;
+const _: () = assert!(2.0 * MAX_UNSCALED_RADIUS + 2.0 < world::FARCLIP);
 const MARGIN: f32 = 0.06;
 const BACKDROP: [f32; 3] = [0.64, 0.68, 0.72];
 const FIGURE: [f32; 3] = [0.22, 0.26, 0.33];
@@ -44,62 +38,54 @@ const FIGURE_BODY_RADIUS: f32 = 0.26;
 const FIGURE_BODY_HEIGHT: f32 = 1.64;
 const FIGURE_HEAD_RADIUS: f32 = 0.19;
 const FIGURE_GAP: f32 = 0.5;
-/// Drawn at this many times the picture's size and averaged down, which smooths the edges the
-/// client's own frame leaves sharp.
 const SUPERSAMPLE: u32 = 2;
 const SAME_CAPTURES: u32 = 2;
-/// A model not settled by then is drawn as it stands, and said so.
-const MODEL_TIMEOUT: Duration = Duration::from_secs(60);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
 const NOON: u32 = 12 * 60;
 const NO_FOG: f32 = 1.0e9;
 
-/// A model to draw, and where its picture goes.
 #[derive(Clone, Debug)]
 pub struct Sitter {
-    /// The install path, as the maps name it.
-    pub path: String,
+    pub install_path: String,
     pub building: bool,
-    /// Its box at scale 1 in its own axes: x forward, y left, z up.
     pub bounds: [[f32; 3]; 2],
     pub out: PathBuf,
 }
 
-/// How a model's picture came out.
 #[derive(Clone, Debug)]
 pub struct Drawn {
-    pub path: String,
-    /// Why the picture may not show the model as it should.
-    pub failed: Option<String>,
+    pub install_path: String,
+    pub trouble: Option<String>,
 }
 
-/// Where the camera stands for a model, in the model's own yards with its origin on the stage's.
+/// In the model's own yards, its origin on the stage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Framing {
-    /// The point at the middle of the picture.
     pub target: Vec3,
     pub dist: f32,
-    /// Yards across the square picture.
-    pub side: f32,
-    /// The feet of the figure.
-    pub figure: Vec3,
+    pub yards_across: f32,
+    pub figure_feet: Vec3,
     pub far: f32,
-    /// The scale the model and the figure stand at, 1 but for a model too large for the far clip.
     pub stage_scale: f32,
 }
 
-/// Right and up across the picture, and forward into it, in WoW's axes.
-fn view_axes() -> (Vec3, Vec3, Vec3) {
+/// In WoW's axes.
+struct ViewAxes {
+    right: Vec3,
+    up: Vec3,
+    forward: Vec3,
+}
+
+fn view_axes() -> ViewAxes {
     let pose = Pose::orbit(Vec3::ZERO, AZIMUTH, ELEVATION, 1.0);
     let forward = (pose.target - pose.eye).normalize();
     let right = forward.cross(Vec3::Z).normalize();
     let up = right.cross(forward);
-    (right, up, forward)
+    ViewAxes { right, up, forward }
 }
 
-/// The picture of a model filling `bounds`: the model and, beside it on the ground to its left,
-/// the figure, both whole.
 pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
-    let (right, up, forward) = view_axes();
+    let ViewAxes { right, up, forward } = view_axes();
     let [lo, hi] = bounds.map(Vec3::from_array);
     let corners = (0..8).map(|i| {
         Vec3::new(
@@ -116,10 +102,10 @@ pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
     let middle = (lo + hi) * 0.5;
     let ground = Vec3::new(middle.x, middle.y, 0.0);
     let reach = FIGURE_BODY_RADIUS.max(FIGURE_HEAD_RADIUS);
-    let figure = ground + right * (left_edge - FIGURE_GAP - reach - ground.dot(right));
+    let figure_feet = ground + right * (left_edge - FIGURE_GAP - reach - ground.dot(right));
     for z in [0.0, CAPSULE_HEIGHT] {
         for side in [-reach, reach] {
-            points.push(figure + Vec3::Z * z + right * side);
+            points.push(figure_feet + Vec3::Z * z + right * side);
         }
     }
     let span = |axis: Vec3| {
@@ -131,7 +117,7 @@ pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
             })
     };
     let ((u0, u1), (v0, v1)) = (span(right), span(up));
-    let side = (u1 - u0).max(v1 - v0).max(0.1) * (1.0 + 2.0 * MARGIN);
+    let yards_across = (u1 - u0).max(v1 - v0).max(0.1) * (1.0 + 2.0 * MARGIN);
     let all_middle = points.iter().copied().sum::<Vec3>() / points.len() as f32;
     let radius = points
         .iter()
@@ -142,15 +128,14 @@ pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
     Framing {
         target: right * f32::midpoint(u0, u1) + up * f32::midpoint(v0, v1) + forward * depth,
         dist: radius + 1.0,
-        side,
-        figure,
+        yards_across,
+        figure_feet,
         far: 2.0 * radius + 2.0,
-        stage_scale: (STAGE_RADIUS / radius).min(1.0),
+        stage_scale: (MAX_UNSCALED_RADIUS / radius).min(1.0),
     }
 }
 
-/// Draws each model into its picture, `side` pixels square, in the order given.
-pub fn draw(install: &Install, sitters: Vec<Sitter>, side: u32) -> Result<Vec<Drawn>, String> {
+pub fn draw(install: &Install, sitters: Vec<Sitter>, side_px: u32) -> Result<Vec<Drawn>, String> {
     let map = CurrentMap::find(&install.0, "Azeroth")?;
     let mut app = App::new();
     world::register_source(&mut app, install);
@@ -167,7 +152,7 @@ pub fn draw(install: &Install, sitters: Vec<Sitter>, side: u32) -> Result<Vec<Dr
             world::WorldPlugin,
         ));
     let pipelines = watch_pipelines(&mut app);
-    let size = side * SUPERSAMPLE;
+    let size = side_px * SUPERSAMPLE;
     let image = Image::new_target_texture(size, size, TextureFormat::Rgba8UnormSrgb, None);
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     let drawn = Arc::new(Mutex::new(Vec::new()));
@@ -176,7 +161,7 @@ pub fn draw(install: &Install, sitters: Vec<Sitter>, side: u32) -> Result<Vec<Dr
             queue: sitters.into(),
             sitting: None,
             target: target.clone(),
-            side,
+            side_px,
             drawn: drawn.clone(),
             captured: None,
         })
@@ -203,7 +188,7 @@ struct Studio {
     queue: VecDeque<Sitter>,
     sitting: Option<Sitting>,
     target: Handle<Image>,
-    side: u32,
+    side_px: u32,
     drawn: Arc<Mutex<Vec<Drawn>>>,
     captured: Option<Vec<u8>>,
 }
@@ -268,7 +253,6 @@ fn stage_point(framing: &Framing, local: Vec3) -> Vec3 {
     wow_to_bevy((STAGE + local * framing.stage_scale).to_array())
 }
 
-/// Stands the next model on the stage, or waits for the one there to settle and draws it.
 #[allow(clippy::too_many_arguments)]
 fn sit(
     mut commands: Commands<'_, '_>,
@@ -281,19 +265,34 @@ fn sit(
     mut figure: FigureQuery<'_, '_>,
     mut exit: MessageWriter<'_, AppExit>,
 ) {
-    let studio = &mut *studio;
-    let Some(sitting) = &mut studio.sitting else {
-        match studio.queue.pop_front() {
-            Some(sitter) => {
-                let sitting = seat(sitter, &server, &mut placements, &mut camera, &mut figure);
-                commands.insert_resource(world::rig::AnimRng::default());
-                studio.sitting = Some(sitting);
-            }
-            None => {
-                exit.write(AppExit::Success);
-            }
+    if studio.sitting.is_some() {
+        let settled = residency.settled() && pipelines.built.load(Ordering::Relaxed);
+        let drawn = draw_once_settled(&mut commands, &server, &mut studio, settled);
+        if drawn {
+            placements.lift(STAGE_ID);
         }
         return;
+    }
+    match studio.queue.pop_front() {
+        Some(sitter) => {
+            let sitting = seat(sitter, &server, &mut placements, &mut camera, &mut figure);
+            commands.insert_resource(world::rig::AnimRng::default());
+            studio.sitting = Some(sitting);
+        }
+        None => {
+            exit.write(AppExit::Success);
+        }
+    }
+}
+
+fn draw_once_settled(
+    commands: &mut Commands<'_, '_>,
+    server: &AssetServer,
+    studio: &mut Studio,
+    settled: bool,
+) -> bool {
+    let Some(sitting) = &mut studio.sitting else {
+        return false;
     };
     sitting.frames += 1;
     if let Some(bytes) = studio.captured.take() {
@@ -305,33 +304,32 @@ fn sit(
             sitting.same = 1;
         }
     }
-    let timed_out = sitting.since.elapsed() > MODEL_TIMEOUT;
+    let timed_out = sitting.since.elapsed() > SETTLE_TIMEOUT;
     if sitting.same >= SAME_CAPTURES || (timed_out && sitting.last.is_some()) {
-        let failed = server
+        let trouble = server
             .load_state(sitting.handle)
             .is_failed()
             .then(|| "the file did not load".to_owned())
             .or_else(|| timed_out.then(|| "it did not settle in time".to_owned()));
         let bytes = sitting.last.take().unwrap_or_default();
-        let big = studio.side * SUPERSAMPLE;
+        let big = studio.side_px * SUPERSAMPLE;
         let written = survey::save_averaged(&bytes, big, SUPERSAMPLE, &sitting.sitter.out);
         if let Ok(mut drawn) = studio.drawn.lock() {
             drawn.push(Drawn {
-                path: sitting.sitter.path.clone(),
-                failed: written.err().or(failed),
+                install_path: sitting.sitter.install_path.clone(),
+                trouble: written.err().or(trouble),
             });
         }
-        placements.lift(STAGE_ID);
         studio.sitting = None;
-        return;
+        return true;
     }
-    let settled = residency.settled() && pipelines.built.load(Ordering::Relaxed);
     if sitting.frames > 2 && (settled || timed_out) && !sitting.capturing {
         sitting.capturing = true;
         commands
             .spawn(Screenshot::image(studio.target.clone()))
             .observe(keep_capture);
     }
+    false
 }
 
 fn seat(
@@ -343,7 +341,7 @@ fn seat(
 ) -> Sitting {
     let framing = frame(sitter.bounds);
     let (model, handle) = if sitter.building {
-        let url = world::wmo_url(&sitter.path);
+        let url = world::wmo_url(&sitter.install_path);
         let handle: Handle<WmoModel> = server.load(&url);
         let model = PlacedModel::Building {
             url,
@@ -352,7 +350,7 @@ fn seat(
         };
         (model, handle.id().untyped())
     } else {
-        let url = world::m2_url(&sitter.path);
+        let url = world::m2_url(&sitter.install_path);
         let handle: Handle<M2Model> = server.load(&url);
         (PlacedModel::Doodad { url }, handle.id().untyped())
     };
@@ -372,14 +370,14 @@ fn seat(
             near: 0.0,
             far: framing.far * s,
             scaling_mode: ScalingMode::Fixed {
-                width: framing.side * s,
-                height: framing.side * s,
+                width: framing.yards_across * s,
+                height: framing.yards_across * s,
             },
             ..OrthographicProjection::default_3d()
         });
     }
     if let Ok((mut t, mut visibility)) = figure.single_mut() {
-        *t = Transform::from_translation(stage_point(&framing, framing.figure))
+        *t = Transform::from_translation(stage_point(&framing, framing.figure_feet))
             .with_scale(Vec3::splat(s));
         *visibility = Visibility::Inherited;
     }
@@ -398,7 +396,6 @@ fn keep_capture(captured: On<'_, '_, ScreenshotCaptured>, mut studio: ResMut<'_,
     studio.captured = Some(captured.image.data.clone().unwrap_or_default());
 }
 
-/// The world's light as it samples it, with no fog, no sky bodies and one colour behind.
 fn backdrop(mut light: ResMut<'_, SceneLight>, mut clear: ResMut<'_, ClearColor>) {
     let light = &mut *light;
     light.fog_color = BACKDROP;
@@ -429,22 +426,22 @@ mod tests {
     #[test]
     fn the_figure_stands_to_the_left_on_the_ground_and_both_fit() {
         let lamp = frame([[-0.11, -0.57, -0.01], [0.29, 1.71, 4.09]]);
-        let (right, up, _) = view_axes();
-        assert!(lamp.figure.z.abs() < 1e-6, "on the ground");
-        let figure_u = lamp.figure.dot(right);
+        let ViewAxes { right, up, .. } = view_axes();
+        assert!(lamp.figure_feet.z.abs() < 1e-6, "on the ground");
+        let figure_u = lamp.figure_feet.dot(right);
         let lamp_left = [-0.11f32, 0.29]
             .iter()
             .flat_map(|&x| [-0.57f32, 1.71].map(|y| Vec3::new(x, y, 0.0).dot(right)))
             .fold(f32::INFINITY, f32::min);
         assert!(figure_u < lamp_left - FIGURE_GAP, "left of the lamp");
         let top = Vec3::new(0.29, 1.71, 4.09).dot(up);
-        let half = lamp.side / 2.0;
+        let half = lamp.yards_across / 2.0;
         assert!(
             top < lamp.target.dot(up) + half,
             "the lamp's top is in the picture"
         );
         assert!((lamp.stage_scale - 1.0).abs() < f32::EPSILON);
         let city = frame([[-600.0, -600.0, 0.0], [600.0, 600.0, 200.0]]);
-        assert!(city.stage_scale < 0.2 && city.far * city.stage_scale < 350.0);
+        assert!(city.stage_scale < 0.2 && city.far * city.stage_scale < world::FARCLIP);
     }
 }

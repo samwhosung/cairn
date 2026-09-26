@@ -34,7 +34,7 @@ gates enforce the rest.
 - [`atlas`](crates/atlas) — Draws a zone of World of Warcraft 1.12.1 from above: the ground in its textures' colours, hill shading and water, and doodads and buildings as marks
 - [`blp`](crates/blp) — Decodes World of Warcraft 1.12.1 BLP2 textures to RGBA8, or keeps their DXT blocks for the GPU
 - [`bots`](crates/bots) — Bots for the server: a crowd over TCP that checks what it is shown, and scenarios run in process on the server's clock, each ending in one verdict
-- [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, or draws a zone of it from above
+- [`cairn`](crates/cairn) — The client: walks a window through your WoW 1.12.1 install, renders one shot of it to a PNG, draws a zone of it from above, or writes a catalog of its assets
 - [`catalog`](crates/catalog) — The games cairn carries, looked up by name for the server, the client and the bots
 - [`character`](crates/character) — World of Warcraft 1.12.1 characters and creatures: customization, geosets, the composited skin, and the item and creature displays they wear
 - [`dbc`](crates/dbc) — Reads World of Warcraft 1.12.1 DBC tables, given a schema for their columns
