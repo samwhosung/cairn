@@ -20,7 +20,7 @@ use terrain::{CHUNK_SIZE, ChunkMesh, TILE_SIZE, VERTICES};
 use crate::adt::AdtTile;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::light::LightBuffer;
-use crate::model_material::{ModelMaterial, clutter_material};
+use crate::model_material::{ModelMaterial, clutter_materials};
 use crate::source::Repeat;
 use crate::stream::Streamer;
 use crate::texture::blp_image;
@@ -53,7 +53,7 @@ pub(crate) struct Clutter {
     built: BTreeMap<(u32, u32), Built>,
     models: HashMap<Arc<str>, Arc<[RenderSubmesh]>>,
     textures: HashMap<(String, Repeat), Option<Handle<Image>>>,
-    materials: HashMap<Option<AssetId<Image>>, Handle<ModelMaterial>>,
+    materials: HashMap<Option<AssetId<Image>>, [Handle<ModelMaterial>; 2]>,
 }
 
 struct Built {
@@ -221,20 +221,19 @@ impl Builder<'_, '_, '_> {
                     };
                     self.texture(clutter, t, repeat)
                 });
-                let material = clutter
+                let passes = clutter
                     .materials
                     .entry(texture.as_ref().map(Handle::id))
                     .or_insert_with(|| {
-                        let material = clutter_material(texture, FADE_FAR, self.light);
-                        self.materials.add(material)
+                        clutter_materials(texture, FADE_FAR, self.light)
+                            .map(|material| self.materials.add(material))
                     })
                     .clone();
                 let mesh = self.meshes.add(mesh);
-                parts.push(
-                    self.commands
-                        .spawn((Mesh3d(mesh), MeshMaterial3d(material), aabb))
-                        .id(),
-                );
+                for material in passes {
+                    let part = (Mesh3d(mesh.clone()), MeshMaterial3d(material), aabb);
+                    parts.push(self.commands.spawn(part).id());
+                }
             }
         }
         parts

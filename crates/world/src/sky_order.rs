@@ -14,8 +14,10 @@ pub(crate) const SKYBOX_SORT_RUNG: f32 = -6.0e4;
 /// transparent: a unit's shadow first, the footprints over it.
 pub(crate) const SHADOW_SORT_RUNG: f32 = -5.2e4;
 pub(crate) const FOOTPRINT_SORT_RUNG: f32 = -5.0e4;
+/// Ground clutter's depth, laid before any of its colour.
+pub(crate) const CLUTTER_DEPTH_SORT_RUNG: f32 = -4.69e4;
 /// Ground clutter blends over the ground and its decals, and the water over the clutter under it.
-pub(crate) const CLUTTER_SORT_RUNG: f32 = -4.5e4;
+pub(crate) const CLUTTER_SORT_RUNG: f32 = -4.38e4;
 pub(crate) const FAR_SIDE_SORT_RUNG: f32 = -4.0e4;
 pub(crate) const WATER_SORT_RUNG: f32 = -2.0e4;
 pub(crate) const FOAM_SORT_RUNG: f32 = -1.0e4;
@@ -63,6 +65,7 @@ const _: () = {
         SECOND_MOON_SORT_RUNG,
         CLOUDS_SORT_RUNG,
         SKYBOX_SORT_RUNG,
+        CLUTTER_DEPTH_SORT_RUNG,
         CLUTTER_SORT_RUNG,
         FAR_SIDE_SORT_RUNG,
         WATER_SORT_RUNG,
@@ -83,5 +86,5 @@ const _: () = {
     // their order.
     assert!(SHADOW_SORT_RUNG - SKYBOX_SORT_RUNG > PROJECTION_FAR);
     assert!(FOOTPRINT_SORT_RUNG - SHADOW_SORT_RUNG > FARCLIP);
-    assert!(CLUTTER_SORT_RUNG - FOOTPRINT_SORT_RUNG > PROJECTION_FAR);
+    assert!(CLUTTER_DEPTH_SORT_RUNG - FOOTPRINT_SORT_RUNG > PROJECTION_FAR);
 };

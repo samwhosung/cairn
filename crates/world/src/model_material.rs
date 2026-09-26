@@ -16,7 +16,7 @@ use model::{FogPolicy, ModelBlend, WmoBatchClass};
 
 use crate::draw_order::OrderedMaterialPlugin;
 use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
-use crate::sky_order::{BAND_DROP, CLUTTER_SORT_RUNG, FAR_SIDE_SORT_RUNG};
+use crate::sky_order::{BAND_DROP, CLUTTER_DEPTH_SORT_RUNG, CLUTTER_SORT_RUNG, FAR_SIDE_SORT_RUNG};
 
 pub type ModelMaterial = ExtendedMaterial<StandardMaterial, ModelExtension>;
 
@@ -496,25 +496,31 @@ fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
     }
 }
 
-/// Ground clutter as the client draws it: both faces, writing depth, cut out and blended, faded
-/// out by view depth up to `fade_far`.
-pub(crate) fn clutter_material(
+/// Ground clutter's two draws of each mesh: its depth alone first, then its colour, blended but
+/// writing no depth. On an Apple GPU a draw that both blends and writes depth settles overlapping
+/// fragments differently from frame to frame; this way only the nearest tuft at a pixel blends.
+pub(crate) fn clutter_materials(
     texture: Option<Handle<Image>>,
     fade_far: f32,
     light: &Buffer,
-) -> ModelMaterial {
-    ExtendedMaterial {
+) -> [ModelMaterial; 2] {
+    let pass = |markers: u16, rung: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
-            base_color_texture: texture,
+            base_color_texture: texture.clone(),
             alpha_mode: AlphaMode::Blend,
             double_sided: true,
             cull_mode: None,
-            depth_bias: CLUTTER_SORT_RUNG,
+            depth_bias: rung,
             ..StandardMaterial::default()
         },
         extension: ModelExtension {
-            clutter_fade: Vec4::new(fade_far * CLUTTER_FADE_START_SHARE, fade_far, 0.0, 1.0),
+            clutter_fade: Vec4::new(
+                fade_far * CLUTTER_FADE_START_SHARE,
+                fade_far,
+                f32::from(markers),
+                1.0,
+            ),
             model_flags: Vec4::ZERO,
             sun_scale: Vec4::new(GroundShade::Entity.selector(), 0.0, 0.0, 0.0),
             tint: Vec4::ONE,
@@ -522,5 +528,9 @@ pub(crate) fn clutter_material(
             anim_slots: Vec4::ZERO,
             light: light.clone(),
         },
-    }
+    };
+    [
+        pass(DEPTH_PRIME, CLUTTER_DEPTH_SORT_RUNG),
+        pass(NO_DEPTH_WRITE, CLUTTER_SORT_RUNG),
+    ]
 }
