@@ -15,7 +15,6 @@ pub(crate) use around::{Found, Surroundings};
 
 const DEFAULT_DIR: &str = "catalog";
 const DEFAULT_MAP: &str = "Azeroth";
-pub const TABLES: &str = "fits";
 const DEFAULT_TOP: usize = 20;
 const NEAREST_SHOWN: usize = 4;
 const MARKED_LIFT: f64 = 1.5;
@@ -158,7 +157,7 @@ fn point(value: &str) -> Result<[f32; 2], String> {
 
 fn run(asked: &Asked) -> Result<String, String> {
     let reading = Instant::now();
-    let dir = asked.dir.join(TABLES);
+    let dir = asked.dir.join(fits::IN_CATALOG);
     let tables = fits::read(&dir).map_err(|e| {
         format!(
             "{e}\nthe catalog in {} has no tables of what fits: `cairn catalog` writes them",

@@ -74,7 +74,7 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn read(dir: &Path) -> Result<Self, String> {
-        let tables = fits::read(&dir.join(what_fits::TABLES)).map_err(|e| {
+        let tables = fits::read(&dir.join(fits::IN_CATALOG)).map_err(|e| {
             format!(
                 "{e}\nthe catalog in {} has no tables of what fits: `cairn catalog` writes them",
                 dir.display()

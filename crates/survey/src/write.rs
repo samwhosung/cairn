@@ -372,7 +372,9 @@ What is here
                zone/   a zone's models by kind and its ground, most first
   fits/        what the maps place together, which `cairn catalog fits` ranks models by: each
                zone's palette, what stands on each ground and slope, and which models stand
-               within 8 and 20 yd of which, how often and how far apart
+               within 8 and 20 yd of which, how often and how far apart; and rules.tsv, how each
+               model stands where it is placed, the rules `cairn zone scatter` keeps: the slopes
+               under it, how far apart, its scales, and whether it leans with the ground
 
 Searching: every .tsv is tab-separated, a header first, a row a thing. A row names every zone its
 thing is placed in, and zone names hold words too (Silverpine Forest holds pine), so match the

@@ -1,6 +1,6 @@
 [package]
 name = "fits"
-description = "What fits a spot: models ranked by what the install places together"
+description = "What fits a spot: models ranked by what the install places together, and the rules each keeps there"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

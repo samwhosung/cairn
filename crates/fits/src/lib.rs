@@ -1,9 +1,12 @@
 //! What fits a spot: the models the install's maps place, ranked by the zone's palette, the ground
-//! under the spot and what stands near it, each count taken from where Blizzard placed things.
+//! under the spot and what stands near it, each count taken from where Blizzard placed things; and
+//! the rules each model keeps where it is placed: the slopes under it, how far apart, its scales,
+//! and whether it leans with the ground.
 
 mod count;
 mod files;
 mod own;
+pub mod rules;
 mod score;
 mod tally;
 
@@ -11,10 +14,13 @@ use std::collections::BTreeMap;
 
 pub use files::{FILES, read, write};
 pub use own::Own;
+pub use rules::Rules;
 pub use score::{Beside, Evidence, Fit, Spot, Why};
 pub use survey::MODEL_KINDS;
 pub use tally::{HEADER, Tally, shuffled};
 
+/// The folder of a catalog the tables and the rules are written in.
+pub const IN_CATALOG: &str = "fits";
 /// Two things stand near each other within this many yards.
 pub const NEAR: f32 = 8.0;
 /// Two things stand around each other within this many yards.

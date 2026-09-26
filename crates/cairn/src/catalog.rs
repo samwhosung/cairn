@@ -94,9 +94,9 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
     };
     let text = survey::write(&inv, chain, &order.dir, &lookups)?;
     let counting = Instant::now();
-    let tables = fits::write(&order.dir.join(what_fits::TABLES), || {
-        fits::Tables::of(&inv)
-    })?;
+    let in_catalog = order.dir.join(fits::IN_CATALOG);
+    let tables = fits::write(&in_catalog, || fits::Tables::of(&inv))?;
+    let rules = fits::rules::write(&in_catalog, || fits::rules::of(&inv))?;
     let counted_in = counting.elapsed();
     let missing = survey::pictures_missing(&inv, &order.dir);
     let to_draw: Vec<Sitter> = missing
@@ -126,7 +126,7 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
     let mut said = format!(
         "cairn: {} models ({buildings} buildings), {} ground textures and {} zones read in {:.1} s\n\
          cairn: text, swatches and skies: wrote {}, kept {}\n\
-         cairn: what fits where: wrote {tables} of {} tables in {:.1} s\n\
+         cairn: what fits where: wrote {tables} of {} tables{} in {:.1} s\n\
          cairn: drew {} pictures in {:.1} s; {still} still to draw",
         inv.models.len(),
         inv.grounds.len(),
@@ -135,6 +135,7 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
         text.wrote,
         text.kept,
         fits::FILES.len(),
+        if rules { " and the models' rules" } else { "" },
         counted_in.as_secs_f32(),
         drawn.len(),
         drawn_in.as_secs_f32(),
