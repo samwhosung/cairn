@@ -12,14 +12,13 @@ use std::collections::BTreeMap;
 pub use files::{FILES, read, write};
 pub use own::Own;
 pub use score::{Beside, Evidence, Fit, Spot};
+pub use survey::MODEL_KINDS;
 pub use tally::{HEADER, Tally, shuffled};
 
 /// Two things stand near each other within this many yards.
 pub const NEAR: f32 = 8.0;
-/// And around each other within this many.
+/// Two things stand around each other within this many yards.
 pub const AROUND: f32 = 20.0;
-/// What a list can be narrowed to, as the survey names a model's kind.
-pub const KINDS: [&str; 6] = ["tree", "shrub", "rock", "fence", "prop", "building"];
 const SLOPE_EDGES: [f32; 4] = [10.0, 20.0, 30.0, 45.0];
 const SLOPE_NAMES: [&str; 5] = ["0-10", "10-20", "20-30", "30-45", "45-90"];
 
@@ -37,6 +36,37 @@ pub fn band_name(band: u8) -> &'static str {
         .get(usize::from(band))
         .copied()
         .unwrap_or("45-90")
+}
+
+/// How close two things stand to count as beside each other: within [`NEAR`] or [`AROUND`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    Near,
+    Around,
+}
+
+impl Reach {
+    pub fn yards(self) -> f32 {
+        match self {
+            Self::Near => NEAR,
+            Self::Around => AROUND,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Counts<T> {
+    pub(crate) near: T,
+    pub(crate) around: T,
+}
+
+impl<T: Copy> Counts<T> {
+    pub(crate) fn get(self, reach: Reach) -> T {
+        match reach {
+            Reach::Near => self.near,
+            Reach::Around => self.around,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +110,18 @@ pub struct Pair {
     pub b_to_a: f32,
 }
 
+impl Pair {
+    /// How often a placement of either model has one of the other within `reach`: a model beside
+    /// itself is seen from both ends of each pair.
+    pub fn seen(&self, reach: Reach) -> u32 {
+        let pairs = match reach {
+            Reach::Near => self.near,
+            Reach::Around => self.around,
+        };
+        if self.a == self.b { 2 * pairs } else { pairs }
+    }
+}
+
 /// What the install places together: each zone's palette, what stands on each ground and slope,
 /// and which models stand near which.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,9 +129,9 @@ pub struct Tables {
     pub models: Vec<Model>,
     pub grounds: Vec<String>,
     pub zones: Vec<Zone>,
-    /// Per zone, each model it places and how often, by model.
+    /// Per zone, each model it places and how often, in model order.
     pub palette: Vec<Vec<(usize, u32)>>,
-    /// Per ground texture and slope band, each model standing there and how often, by model.
+    /// Per ground texture and slope band, each model standing there and how often, in model order.
     pub ground: BTreeMap<(usize, u8), Vec<(usize, u32)>>,
     pub pairs: Vec<Pair>,
     index: Index,
@@ -101,11 +143,14 @@ struct Index {
     placed: Vec<u32>,
     by_key: BTreeMap<String, usize>,
     grounds_by_key: BTreeMap<String, usize>,
-    /// Per model, the models it pairs with, by model, and the pair's place in `pairs`.
-    beside: Vec<Vec<(usize, usize)>>,
-    /// Per model, near and around: how many placements it pairs with, a pair of it with itself
-    /// counted from both ends.
-    sums: [Vec<u64>; 2],
+    partners: Vec<Vec<Partner>>,
+    seen_beside: Vec<Counts<u64>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Partner {
+    model: usize,
+    pair: usize,
 }
 
 impl Tables {
@@ -175,10 +220,10 @@ impl Tables {
             .min_by_key(|&z| (self.zones[z].area, std::cmp::Reverse(placed(z)), z))
     }
 
-    /// Where the model's kind stands in [`KINDS`], or `None` for a kind no list is made of.
+    /// Where the model's kind stands in [`MODEL_KINDS`], or `None` for a kind no list is made of.
     pub fn kind_of(&self, model: usize) -> Option<usize> {
         let k = *self.index.kinds.get(model)?;
-        (usize::from(k) < KINDS.len()).then_some(usize::from(k))
+        (usize::from(k) < MODEL_KINDS.len()).then_some(usize::from(k))
     }
 
     /// How often the maps place `model` on the ground.
@@ -186,7 +231,6 @@ impl Tables {
         self.index.placed.get(model).copied().unwrap_or(0)
     }
 
-    /// How often the zone places `model`.
     pub fn in_zone(&self, zone: usize, model: usize) -> u32 {
         self.palette.get(zone).map_or(0, |list| {
             list.binary_search_by_key(&model, |&(m, _)| m)
@@ -196,9 +240,17 @@ impl Tables {
 
     /// The pair of `a` and `b`, when they stand around each other anywhere.
     pub fn pair(&self, a: usize, b: usize) -> Option<&Pair> {
-        let list = self.index.beside.get(a)?;
-        let i = list.binary_search_by_key(&b, |&(m, _)| m).ok()?;
-        self.pairs.get(list[i].1)
+        let list = self.index.partners.get(a)?;
+        let i = list.binary_search_by_key(&b, |p| p.model).ok()?;
+        self.pairs.get(list[i].pair)
+    }
+
+    /// How often a placement of `model` has another placement within `reach`.
+    pub fn seen_beside(&self, model: usize, reach: Reach) -> u64 {
+        self.index
+            .seen_beside
+            .get(model)
+            .map_or(0, |c| c.get(reach))
     }
 
     /// How far the nearest `to` usually stands from a `from` that has one around it.
@@ -215,7 +267,7 @@ impl Index {
             .models
             .iter()
             .map(|model| {
-                KINDS
+                MODEL_KINDS
                     .iter()
                     .position(|k| *k == model.kind)
                     .map_or(u8::MAX, |k| k as u8)
@@ -237,19 +289,19 @@ impl Index {
             .enumerate()
             .map(|(i, g)| (survey::key(g), i))
             .collect();
-        let mut beside = vec![Vec::new(); m];
-        let mut sums = [vec![0u64; m], vec![0u64; m]];
-        for (i, p) in t.pairs.iter().enumerate() {
-            beside[p.a].push((p.b, i));
+        let mut partners = vec![Vec::new(); m];
+        let mut seen_beside = vec![Counts::<u64>::default(); m];
+        for (pair, p) in t.pairs.iter().enumerate() {
+            partners[p.a].push(Partner { model: p.b, pair });
             if p.a != p.b {
-                beside[p.b].push((p.a, i));
+                partners[p.b].push(Partner { model: p.a, pair });
             }
-            for (sum, n) in sums.iter_mut().zip([p.near, p.around]) {
-                sum[p.a] += u64::from(n);
-                sum[p.b] += u64::from(n);
+            for model in [p.a, p.b] {
+                seen_beside[model].near += u64::from(p.near);
+                seen_beside[model].around += u64::from(p.around);
             }
         }
-        for list in &mut beside {
+        for list in &mut partners {
             list.sort_unstable();
         }
         Self {
@@ -257,8 +309,8 @@ impl Index {
             placed,
             by_key,
             grounds_by_key,
-            beside,
-            sums,
+            partners,
+            seen_beside,
         }
     }
 }

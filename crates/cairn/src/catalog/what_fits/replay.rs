@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use fits::{AROUND, Evidence, HEADER, Own, Spot, Tables, Tally};
+use fits::{Evidence, HEADER, Own, Reach, Spot, Tables, Tally};
 
 use super::Borrows;
 
@@ -16,8 +16,6 @@ const ORDERS: [&str; 7] = [
     "the zone's own placements alone",
 ];
 
-/// Ranks every model before each placement a zone's history makes, from what the zone held then,
-/// and tallies where each list order put the model placed.
 pub(super) fn run(
     tables: &Tables,
     file: &Path,
@@ -69,7 +67,7 @@ pub(super) fn run(
                     ground: None,
                     near: own.around(at),
                 };
-                let near = install.beside(AROUND, &spot.beside(AROUND));
+                let near = install.beside(Reach::Around, &spot.beside(Reach::Around));
                 let started = Instant::now();
                 let lists = Evidence::new(tables, &own, palette.is_some()).scores(&spot);
                 ranking += started.elapsed();

@@ -3,16 +3,16 @@ use std::path::PathBuf;
 
 use super::*;
 
-/// One placement in this many on the held-out tiles is ranked.
-const EVERY: usize = 4;
-/// The share of held-out doodads with a neighbour within 8 yd whose model the lists must put on
-/// the first page of its kind.
-const BAR: f64 = 0.85;
+const RANK_ONE_IN: usize = 4;
+const MIN_FIRST_PAGE_SHARE: f64 = 0.85;
 const LISTS: &str = "the lists: palette, ground, 8 yd else 20";
+const EASTERN_KINGDOMS: u32 = 0;
+const KALIMDOR: u32 = 1;
+const HOLD_OUT_ONE_IN: u64 = 5;
 
-/// A fifth of the two continents' tiles, picked by a hash of the map and the tile.
 fn held_out(map: u32, (x, y): (u32, u32)) -> bool {
-    map <= 1 && tally::fnv([map, x, y].iter().flat_map(|v| v.to_le_bytes())) % 5 == 0
+    let hash = tally::fnv([map, x, y].iter().flat_map(|v| v.to_le_bytes()));
+    [EASTERN_KINGDOMS, KALIMDOR].contains(&map) && hash % HOLD_OUT_ONE_IN == 0
 }
 
 fn plus(a: &[f64], b: &[f64]) -> Vec<f64> {
@@ -57,23 +57,29 @@ impl Orders {
     }
 }
 
-/// The tables counted on the tiles kept, and the placements on the tiles held out.
-fn split(survey: &survey::Survey) -> (Tables, Vec<Stand>) {
+struct Split {
+    kept: Tables,
+    held_out: Vec<Stand>,
+}
+
+fn split(survey: &survey::Survey) -> Split {
     let (models, grounds, zones) = lists(survey);
-    let (mut train, mut test) = (Vec::new(), Vec::new());
+    let (mut kept, mut out) = (Vec::new(), Vec::new());
     for s in stands(survey) {
         let tile = wdt::world_to_tile(s.at[0], s.at[1]);
         if held_out(zones[s.zone].map, tile) {
-            test.push(s);
+            out.push(s);
         } else {
-            train.push(s);
+            kept.push(s);
         }
     }
-    (Tables::count(models, grounds, zones, &train), test)
+    Split {
+        kept: Tables::count(models, grounds, zones, &kept),
+        held_out: out,
+    }
 }
 
-/// Every held-out placement's spot, with what else on the held-out tiles stands around it.
-fn spots<'a>(t: &'a Tables, test: &'a [Stand]) -> impl Iterator<Item = (usize, Spot)> + 'a {
+fn sampled_spots<'a>(t: &'a Tables, test: &'a [Stand]) -> impl Iterator<Item = (usize, Spot)> + 'a {
     let cell = |s: &Stand| {
         let c = |v: f32| (v / AROUND).floor() as i32;
         (t.zones[s.zone].map, c(s.at[0]), c(s.at[1]))
@@ -82,27 +88,31 @@ fn spots<'a>(t: &'a Tables, test: &'a [Stand]) -> impl Iterator<Item = (usize, S
     for (i, s) in test.iter().enumerate() {
         grid.entry(cell(s)).or_default().push(i);
     }
-    test.iter().enumerate().step_by(EVERY).map(move |(i, s)| {
-        let (map, cx, cy) = cell(s);
-        let mut near = Vec::new();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for &j in grid.get(&(map, cx + dx, cy + dy)).into_iter().flatten() {
-                    let o = &test[j];
-                    let d = (s.at[0] - o.at[0]).hypot(s.at[1] - o.at[1]);
-                    if j != i && d <= AROUND {
-                        near.push((o.model, d));
+    test.iter()
+        .enumerate()
+        .step_by(RANK_ONE_IN)
+        .map(move |(i, s)| {
+            let (map, cx, cy) = cell(s);
+            let mut near = Vec::new();
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &j in grid.get(&(map, cx + dx, cy + dy)).into_iter().flatten() {
+                        let o = &test[j];
+                        let d = (s.at[0] - o.at[0]).hypot(s.at[1] - o.at[1]);
+                        if j != i && d <= AROUND {
+                            near.push((o.model, d));
+                        }
                     }
                 }
             }
-        }
-        let spot = Spot {
-            zone: Some(s.zone),
-            ground: s.ground,
-            near,
-        };
-        (s.model, spot)
-    })
+            near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            let spot = Spot {
+                zone: Some(s.zone),
+                ground: s.ground,
+                near,
+            };
+            (s.model, spot)
+        })
 }
 
 #[test]
@@ -113,7 +123,10 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
     };
     let chain = mpq::Chain::open(data).expect("the install");
     let survey = survey::read(&chain).expect("the survey");
-    let (t, test) = split(&survey);
+    let Split {
+        kept: t,
+        held_out: test,
+    } = split(&survey);
     let own = Own::default();
     let ev = Evidence::new(&t, &own, true);
     let control = shuffled(&t);
@@ -127,7 +140,7 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
         "palette, ground and within 8 yd",
         LISTS,
     ]);
-    let kinds: Vec<String> = KINDS[..5]
+    let kinds: Vec<String> = MODEL_KINDS[..5]
         .iter()
         .map(|k| format!("the lists, {k}s"))
         .collect();
@@ -145,7 +158,7 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
         "the zone's palette",
         LISTS,
     ]);
-    for (placed, spot) in spots(&t, &test) {
+    for (placed, spot) in sampled_spots(&t, &test) {
         let palette = ev.palette(spot.zone);
         let lists = ev.scores(&spot);
         let first = [control.clone(), everywhere.clone(), palette.clone()];
@@ -153,10 +166,11 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
             buildings.add(&t, placed, &[&first[..], &[lists]].concat());
             continue;
         }
-        let beside = spot.beside(NEAR);
+        let beside = spot.beside(Reach::Near);
         if beside.is_empty() {
             if !spot.near.is_empty() {
-                let within = plus(&everywhere, &ev.beside(AROUND, &spot.beside(AROUND)));
+                let neighbours = spot.beside(Reach::Around);
+                let within = plus(&everywhere, &ev.beside(Reach::Around, &neighbours));
                 around.add(&t, placed, &[&first[..], &[within, lists]].concat());
             }
             continue;
@@ -164,7 +178,7 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
         let ground = spot
             .ground
             .map_or_else(|| vec![0.0; t.models.len()], |g| ev.ground(g));
-        let beside = ev.beside(NEAR, &beside);
+        let beside = ev.beside(Reach::Near, &beside);
         let all = plus(&plus(&palette, &ground), &beside);
         if let Some(k) = t.kind_of(placed).filter(|&k| k < kinds.len()) {
             by_kind.0[k].add(&t, &lists, placed);
@@ -189,9 +203,9 @@ fn the_model_placed_on_a_held_out_tile_heads_its_kinds_list() {
         assert!(o.ten(LISTS) > o.ten("most placed"));
         assert!(o.ten("most placed") > o.ten("shuffled"));
     }
-    assert!(near.page(LISTS) >= BAR, "on its kind's first page");
+    assert!(near.page(LISTS) >= MIN_FIRST_PAGE_SHARE);
     assert!(
-        near.page("shuffled") < BAR,
+        near.page("shuffled") < MIN_FIRST_PAGE_SHARE,
         "the control fails the same bar"
     );
     assert!(near.get(LISTS).len() > 5_000, "enough ranked to tell");

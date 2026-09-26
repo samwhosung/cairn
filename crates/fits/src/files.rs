@@ -158,16 +158,16 @@ pub fn read(dir: &Path) -> Result<Tables, String> {
             b_to_a: number(f[5])?,
         })
     })?;
-    ordered(&at, &pairs, |p| (p.a, p.b))?;
+    strictly_ascending(&at, &pairs, |p| (p.a, p.b))?;
     for (z, list) in palette.iter().enumerate() {
-        ordered(
+        strictly_ascending(
             &format!("{dir}/palette.tsv, zone {z}", dir = dir.display()),
             list,
             |e| e.0,
         )?;
     }
     for list in ground.values() {
-        ordered(&format!("{}/ground.tsv", dir.display()), list, |e| e.0)?;
+        strictly_ascending(&format!("{}/ground.tsv", dir.display()), list, |e| e.0)?;
     }
     Ok(Tables::from_parts(
         models, grounds, zones, palette, ground, pairs,
@@ -218,8 +218,11 @@ fn index(s: &str, len: usize) -> Result<usize, String> {
     }
 }
 
-/// Lookups search the lists, so each must be in order, once each.
-fn ordered<T, K: Ord>(at: &str, list: &[T], key: impl Fn(&T) -> K) -> Result<(), String> {
+fn strictly_ascending<T, K: Ord>(
+    at: &str,
+    list: &[T],
+    key: impl Fn(&T) -> K,
+) -> Result<(), String> {
     match list.windows(2).position(|w| key(&w[0]) >= key(&w[1])) {
         Some(i) => Err(format!("{at}: row {} is out of order", i + 2)),
         None => Ok(()),

@@ -21,7 +21,7 @@ pub use pages::{Cell, PICTURE_SIDE, draw as draw_page};
 pub use picture::{save_averaged, write_atomically};
 pub use scan::{Underfoot, underfoot};
 pub use text::ZoneSound;
-pub use write::{Lookups, Written, pictures_missing, write, write_pages};
+pub use write::{Lookups, MODEL_KINDS, Written, pictures_missing, write, write_pages};
 
 /// Everything the maps paint and place: the zones by map and area, the grounds and models by key,
 /// and every list inside those most first, but for a model's examples, its first placements by map
@@ -30,13 +30,14 @@ pub struct Survey {
     pub zones: Vec<Zone>,
     pub grounds: Vec<Ground>,
     pub models: Vec<Model>,
-    /// Every doodad and building standing on a map's ground, by map and id, doodads first.
+    /// Every doodad and building standing on a map's ground: the doodads by map and id, then the
+    /// buildings by map and id, then each map's whole-map building.
     pub placements: Vec<Placement>,
 }
 
 /// A doodad or building on a map's ground, in world coordinates: x north, y west, z up. `ground`
-/// is the texture that shows most under it and `slope` its cell's, in degrees; neither is known
-/// for a map's whole-map building.
+/// is the texture that shows most under it and `slope` its cell's, in degrees. Neither is known for
+/// a map's whole-map building, and `ground` isn't on a chunk painted nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placement {
     pub model: usize,

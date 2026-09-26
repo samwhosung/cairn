@@ -43,8 +43,6 @@ fn cell(map: u32, at: [f32; 2]) -> Cell {
     )
 }
 
-/// Every two placements on one map within [`AROUND`] of each other, by their models, with the
-/// median distance from each placement to the nearest of the other model around it.
 fn pairs(zones: &[Zone], stands: &[Stand]) -> Vec<Pair> {
     let mut grid: HashMap<Cell, Vec<usize>> = HashMap::new();
     for (i, s) in stands.iter().enumerate() {
@@ -95,18 +93,21 @@ fn pairs(zones: &[Zone], stands: &[Stand]) -> Vec<Pair> {
                 b,
                 near,
                 around,
-                a_to_b: median(nearest.get_mut(&(a, b))),
-                b_to_a: median(nearest.get_mut(&(b, a))),
+                a_to_b: to_tenth(lower_median(nearest.get_mut(&(a, b)))),
+                b_to_a: to_tenth(lower_median(nearest.get_mut(&(b, a)))),
             }
         })
         .collect()
 }
 
-/// The lower middle of the distances, to a tenth of a yard.
-fn median(distances: Option<&mut Vec<f32>>) -> f32 {
+fn lower_median(distances: Option<&mut Vec<f32>>) -> f32 {
     let Some(d) = distances.filter(|d| !d.is_empty()) else {
         return f32::NAN;
     };
     d.sort_by(f32::total_cmp);
-    (d[(d.len() - 1) / 2] * 10.0).round() / 10.0
+    d[(d.len() - 1) / 2]
+}
+
+fn to_tenth(yards: f32) -> f32 {
+    (yards * 10.0).round() / 10.0
 }

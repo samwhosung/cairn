@@ -1,18 +1,19 @@
 mod replay;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bevy::app::AppExit;
-use fits::{Evidence, Fit, KINDS, Own, Spot, Tables};
+use fits::{Evidence, Fit, MODEL_KINDS, Own, Spot, Tables};
 use terrain::TileMesh;
 use world::{CurrentMap, Install};
 
 use crate::zone::Zone;
 
 const DEFAULT_DIR: &str = "catalog";
+const DEFAULT_MAP: &str = "Azeroth";
 pub const TABLES: &str = "fits";
 const DEFAULT_TOP: usize = 20;
 const NEAREST_SHOWN: usize = 4;
@@ -33,12 +34,9 @@ pub struct Asked {
 
 #[derive(Debug, PartialEq)]
 pub enum What {
-    /// A spot on a map of the install's, Azeroth unless named.
-    Install { at: [f32; 2], map: Option<String> },
-    /// A spot in a zone of its own.
-    Own { at: [f32; 2], zone: PathBuf },
-    /// A zone's placements in the order they were made.
-    Replay(PathBuf),
+    Install { at: [f32; 2], map: String },
+    OwnZone { at: [f32; 2], root: PathBuf },
+    Replay { history: PathBuf },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -91,22 +89,27 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Asked, String> {
         .map(|v| point(&v).map_err(|e| format!("--at wants {e}")))
         .transpose()?;
     let what = match (at, take("map"), take("zone"), take("replay")) {
-        (Some(at), map, None, None) => What::Install { at, map },
-        (Some(at), None, Some(zone), None) => What::Own {
+        (Some(at), map, None, None) => What::Install {
             at,
-            zone: PathBuf::from(zone),
+            map: map.unwrap_or_else(|| DEFAULT_MAP.to_owned()),
         },
-        (None, None, None, Some(file)) => What::Replay(PathBuf::from(file)),
+        (Some(at), None, Some(zone), None) => What::OwnZone {
+            at,
+            root: PathBuf::from(zone),
+        },
+        (None, None, None, Some(file)) => What::Replay {
+            history: PathBuf::from(file),
+        },
         (Some(_), Some(_), Some(_), _) => return Err("--map or --zone, not both".into()),
         (_, _, _, Some(_)) => return Err("--replay takes no spot, map or zone".into()),
         (None, ..) => return Err("where? --at X,Y, or --replay FILE".into()),
     };
     let kind = take("kind")
         .map(|k| {
-            KINDS
+            MODEL_KINDS
                 .iter()
                 .position(|known| *known == k)
-                .ok_or_else(|| format!("--kind is one of {}, not {k}", KINDS.join(", ")))
+                .ok_or_else(|| format!("--kind is one of {}, not {k}", MODEL_KINDS.join(", ")))
         })
         .transpose()?;
     let borrows = take("borrows").map(|b| match b.as_str() {
@@ -164,15 +167,15 @@ fn run(asked: &Asked) -> Result<String, String> {
     let read_in = reading.elapsed();
     let borrows = asked.borrows.as_ref();
     let found = match &asked.what {
-        What::Replay(file) => return replay::run(&tables, file, borrows),
-        What::Install { at, map } => on_the_install(&tables, *at, map.as_deref())?,
-        What::Own { at, zone } => in_a_zone_of_its_own(&tables, *at, zone, borrows)?,
+        What::Replay { history } => return replay::run(&tables, history, borrows),
+        What::Install { at, map } => on_the_install(&tables, *at, map)?,
+        What::OwnZone { at, root } => in_a_zone_of_its_own(&tables, *at, root, borrows)?,
     };
     let ranking = Instant::now();
     let evidence = Evidence::new(&tables, &found.own, found.install);
     let list = evidence.list(&found.spot, asked.kind, asked.top);
     let ranked_in = ranking.elapsed();
-    let mut out = found.said.clone();
+    let mut out = found.header.clone();
     out.push_str("\nrank\tkind\tpath\twhy\tpicture\n");
     for (i, f) in list.iter().enumerate() {
         let m = &tables.models[f.model];
@@ -192,7 +195,7 @@ fn run(asked: &Asked) -> Result<String, String> {
     }
     let of = asked
         .kind
-        .map_or("models".to_owned(), |k| format!("{}s", KINDS[k]));
+        .map_or("models".to_owned(), |k| format!("{}s", MODEL_KINDS[k]));
     let counted = (0..tables.models.len())
         .filter(|&m| asked.kind.is_none_or(|k| tables.kind_of(m) == Some(k)))
         .count();
@@ -205,20 +208,18 @@ fn run(asked: &Asked) -> Result<String, String> {
     Ok(out)
 }
 
-/// A spot to rank for, what counts toward its list, and what to say of it.
 struct Found {
     spot: Spot,
     own: Own,
     install: bool,
-    said: String,
-    /// The place in a few words, for a sheet's title.
-    place: String,
+    header: String,
+    sheet_place: String,
 }
 
-fn on_the_install(tables: &Tables, at: [f32; 2], map: Option<&str>) -> Result<Found, String> {
+fn on_the_install(tables: &Tables, at: [f32; 2], map: &str) -> Result<Found, String> {
     let install = crate::install(None).map_err(|_| "the install would not open".to_owned())?;
     let chain = &install.0;
-    let map = CurrentMap::find(chain, map.unwrap_or("Azeroth"))?;
+    let map = CurrentMap::find(chain, map)?;
     let tiles = tiles_around(&install, &map.directory, at);
     let here = underfoot(&tiles, at)
         .ok_or_else(|| format!("{},{} has no ground on {}", at[0], at[1], map.directory))?;
@@ -226,12 +227,12 @@ fn on_the_install(tables: &Tables, at: [f32; 2], map: Option<&str>) -> Result<Fo
     let zone = tables.zone(map.id, areas.top_zone(here.area).unwrap_or(0));
     let mut near = Vec::new();
     let mut unknown = 0;
-    for (m, xy) in standing(&tiles) {
-        let d = (xy[0] - at[0]).hypot(xy[1] - at[1]);
+    for s in each_once(&tiles).values() {
+        let d = (s.at[0] - at[0]).hypot(s.at[1] - at[1]);
         if d > fits::AROUND {
             continue;
         }
-        match tables.model(&m) {
+        match tables.model(s.model) {
             Some(m) => near.push((m, d)),
             None => unknown += 1,
         }
@@ -242,16 +243,16 @@ fn on_the_install(tables: &Tables, at: [f32; 2], map: Option<&str>) -> Result<Fo
         ground: ground_here(tables, &here),
         near,
     };
-    let place = zone
+    let sheet_place = zone
         .map_or("no zone", |z| tables.zones[z].name.as_str())
         .to_owned();
-    let where_ = format!("{},{} on {}, in {place}", at[0], at[1], map.directory);
+    let place = format!("{},{} on {}, in {sheet_place}", at[0], at[1], map.directory);
     Ok(Found {
-        said: header(tables, &where_, &here, &spot, unknown),
+        header: header(tables, &place, &here, &spot, unknown),
         spot,
         own: Own::default(),
         install: true,
-        place,
+        sheet_place,
     })
 }
 
@@ -268,7 +269,7 @@ fn in_a_zone_of_its_own(
     if tiles.is_empty() {
         return Err(format!("no tile of {} reads", zone.directory));
     }
-    let (own, unknown) = placed_in(tables, &tiles);
+    let Placed { own, unknown } = placed_in(tables, &tiles);
     let borrowed = match borrows {
         Some(Borrows::Nothing) => None,
         Some(Borrows::Zone(name)) => Some(name.as_str()),
@@ -288,22 +289,22 @@ fn in_a_zone_of_its_own(
         ground: ground_here(tables, &here),
         near: own.around(at),
     };
-    let place = palette.map_or_else(
+    let sheet_place = palette.map_or_else(
         || format!("{}, by its own placements alone", zone.directory),
         |z| format!("{}, borrowing {}", zone.directory, tables.zones[z].name),
     );
-    let where_ = format!(
-        "{},{} in {place}, a zone of its own with {} things",
+    let place = format!(
+        "{},{} in {sheet_place}, a zone of its own with {} things",
         at[0],
         at[1],
         own.len()
     );
     Ok(Found {
-        said: header(tables, &where_, &here, &spot, unknown),
+        header: header(tables, &place, &here, &spot, unknown),
         spot,
         own,
         install: palette.is_some(),
-        place,
+        sheet_place,
     })
 }
 
@@ -313,37 +314,24 @@ fn underfoot(tiles: &[((u32, u32), TileMesh)], at: [f32; 2]) -> Option<survey::U
     survey::underfoot(&mesh.chunks, tile, [at[0], at[1], 0.0])
 }
 
-/// What a zone of its own has placed, each thing once from the tile it stands on, and how many
-/// things are of models the catalog doesn't know.
-fn placed_in(tables: &Tables, tiles: &[((u32, u32), TileMesh)]) -> (Own, usize) {
-    let mut things: BTreeMap<String, Thing> = BTreeMap::new();
-    let mut unknown = BTreeSet::new();
-    for (tile, mesh) in tiles {
-        for (id, model, p) in placed_on(mesh) {
-            let Some(model) = tables.model(model) else {
-                unknown.insert(id);
-                continue;
-            };
-            let under = survey::underfoot(&mesh.chunks, *tile, p);
-            let ground = under.as_ref().and_then(|u| ground_here(tables, u));
-            let at = [p[0], p[1]];
-            let thing = things.entry(id).or_insert(Thing { model, at, ground });
-            if under.is_some() {
-                *thing = Thing { model, at, ground };
-            }
-        }
-    }
-    let mut own = Own::default();
-    for (id, t) in &things {
-        own.place(id, t.model, t.at, t.ground);
-    }
-    (own, unknown.len())
+struct Placed {
+    own: Own,
+    unknown: usize,
 }
 
-struct Thing {
-    model: usize,
-    at: [f32; 2],
-    ground: Option<(usize, u8)>,
+fn placed_in(tables: &Tables, tiles: &[((u32, u32), TileMesh)]) -> Placed {
+    let mut own = Own::default();
+    let mut unknown = 0;
+    for (id, s) in each_once(tiles) {
+        match tables.model(s.model) {
+            Some(m) => {
+                let ground = s.under.as_ref().and_then(|u| ground_here(tables, u));
+                own.place(&id, m, s.at, ground);
+            }
+            None => unknown += 1,
+        }
+    }
+    Placed { own, unknown }
 }
 
 fn ground_here(tables: &Tables, here: &survey::Underfoot) -> Option<(usize, u8)> {
@@ -351,7 +339,6 @@ fn ground_here(tables: &Tables, here: &survey::Underfoot) -> Option<(usize, u8)>
     Some((texture, fits::band(here.slope?)))
 }
 
-/// Every tile of `directory` within reach of `at`.
 fn tiles_around(install: &Install, directory: &str, at: [f32; 2]) -> Vec<((u32, u32), TileMesh)> {
     let reach = fits::AROUND;
     let mut wanted: Vec<(u32, u32)> = [-reach, reach]
@@ -369,15 +356,24 @@ fn tiles_around(install: &Install, directory: &str, at: [f32; 2]) -> Vec<((u32, 
         .collect()
 }
 
-/// Each doodad and building on the tiles once, by id, with where it stands.
-fn standing(tiles: &[((u32, u32), TileMesh)]) -> Vec<(String, [f32; 2])> {
-    let mut by_id: BTreeMap<String, (String, [f32; 2])> = BTreeMap::new();
-    for (_, mesh) in tiles {
+struct Standing<'a> {
+    model: &'a str,
+    at: [f32; 2],
+    under: Option<survey::Underfoot>,
+}
+
+fn each_once(tiles: &[((u32, u32), TileMesh)]) -> BTreeMap<String, Standing<'_>> {
+    let mut by_id: BTreeMap<String, Standing<'_>> = BTreeMap::new();
+    for (tile, mesh) in tiles {
         for (id, model, p) in placed_on(mesh) {
-            by_id.insert(id, (model.to_owned(), [p[0], p[1]]));
+            let under = survey::underfoot(&mesh.chunks, *tile, p);
+            if by_id.get(&id).is_none_or(|s| s.under.is_none()) {
+                let at = [p[0], p[1]];
+                by_id.insert(id, Standing { model, at, under });
+            }
         }
     }
-    by_id.into_values().collect()
+    by_id
 }
 
 fn placed_on(mesh: &TileMesh) -> impl Iterator<Item = (String, &str, [f32; 3])> {
@@ -456,7 +452,7 @@ fn why(tables: &Tables, spot: &Spot, f: &Fit) -> String {
                 1 => "1 pair".to_owned(),
                 n => format!("{n} pairs"),
             },
-            b.within
+            b.reach.yards()
         );
         if let Some(d) = b.usual {
             let _ = write!(s, ", the nearest usually {d:.1} yd from it");
@@ -535,17 +531,17 @@ fn draw(
         })
         .collect();
     let at = match &asked.what {
-        What::Install { at, .. } | What::Own { at, .. } => *at,
-        What::Replay(_) => [0.0; 2],
+        What::Install { at, .. } | What::OwnZone { at, .. } => *at,
+        What::Replay { .. } => [0.0; 2],
     };
     let of = asked
         .kind
-        .map_or("every kind".to_owned(), |k| format!("{}s", KINDS[k]));
+        .map_or("every kind".to_owned(), |k| format!("{}s", MODEL_KINDS[k]));
     let title = format!(
         "what fits at {:.0}, {:.0} ({}): {of}, 1 to {}",
         at[0],
         at[1],
-        found.place,
+        found.sheet_place,
         cells.len()
     );
     survey::draw_page(&title, 1, &cells, out)

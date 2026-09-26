@@ -176,12 +176,11 @@ pub fn underfoot(
     Some(Underfoot {
         area: c.area_id,
         texture,
-        slope: cell_slope(c, (south * 8.0) as usize, (east * 8.0) as usize),
+        slope: cell_slope_degrees(c, (south * 8.0) as usize, (east * 8.0) as usize),
     })
 }
 
-/// The slope of cell `(row, column)` from its four corners, in degrees.
-fn cell_slope(c: &ChunkMesh, row: usize, column: usize) -> Option<f32> {
+fn cell_slope_degrees(c: &ChunkMesh, row: usize, column: usize) -> Option<f32> {
     if c.positions.len() != VERTICES {
         return None;
     }

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{AROUND, NEAR};
+use crate::{AROUND, Counts, NEAR, Reach};
 
 /// What a zone of its own has placed so far, counted as the tables count the install's.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -8,9 +8,8 @@ pub struct Own {
     things: BTreeMap<String, Thing>,
     pub(crate) placed: BTreeMap<usize, u32>,
     pub(crate) ground: BTreeMap<(usize, u8), BTreeMap<usize, u32>>,
-    /// Both ways round, and a model beside itself from both ends, near and around.
-    pub(crate) pairs: BTreeMap<(usize, usize), [u32; 2]>,
-    pub(crate) sums: BTreeMap<usize, [u32; 2]>,
+    pub(crate) pairs_both_ways: BTreeMap<(usize, usize), Counts<u32>>,
+    seen_beside: BTreeMap<usize, Counts<u32>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +63,7 @@ impl Own {
         self.things.is_empty()
     }
 
-    /// What stands within [`AROUND`] of `at`, by model, with its distance.
+    /// What stands within [`AROUND`] of `at`: each thing's model and distance, nearest first.
     pub fn around(&self, at: [f32; 2]) -> Vec<(usize, f32)> {
         let mut near: Vec<(usize, f32)> = self
             .things
@@ -78,7 +77,6 @@ impl Own {
         near
     }
 
-    /// How often the zone has placed `model`.
     pub fn placed(&self, model: usize) -> u32 {
         self.placed.get(&model).copied().unwrap_or(0)
     }
@@ -102,6 +100,11 @@ impl Own {
         nearest.get(nearest.len().checked_sub(1)? / 2).copied()
     }
 
+    /// How often a thing of `model` has another thing within `reach`.
+    pub fn seen_beside(&self, model: usize, reach: Reach) -> u32 {
+        self.seen_beside.get(&model).map_or(0, |c| c.get(reach))
+    }
+
     fn pair_up(&mut self, thing: &Thing, by: i64) {
         for other in self.things.values() {
             let d = distance(thing.at, other.at);
@@ -109,36 +112,30 @@ impl Own {
                 continue;
             }
             let (a, b) = (thing.model, other.model);
-            let counts = [u32::from(d <= NEAR), 1];
+            let one = Counts {
+                near: u32::from(d <= NEAR),
+                around: 1,
+            };
             for key in [(a, b), (b, a)] {
-                let pair = self.pairs.entry(key).or_default();
-                for (c, n) in pair.iter_mut().zip(counts) {
-                    *c = add(*c, n, by);
-                }
-                if *pair == [0, 0] {
-                    self.pairs.remove(&key);
-                }
+                shift(&mut self.pairs_both_ways, key, one, by);
             }
             for model in [a, b] {
-                let sum = self.sums.entry(model).or_default();
-                for (c, n) in sum.iter_mut().zip(counts) {
-                    *c = add(*c, n, by);
-                }
-                if *sum == [0, 0] {
-                    self.sums.remove(&model);
-                }
+                shift(&mut self.seen_beside, model, one, by);
             }
         }
     }
-
-    /// How many placements `model` pairs with near (0) or around (1), itself counted from both ends.
-    pub(crate) fn sum(&self, model: usize, within: usize) -> u32 {
-        self.sums.get(&model).map_or(0, |s| s[within])
-    }
 }
 
-fn add(count: u32, n: u32, by: i64) -> u32 {
-    (i64::from(count) + by * i64::from(n)).max(0) as u32
+fn shift<K: Ord + Copy>(counts: &mut BTreeMap<K, Counts<u32>>, key: K, one: Counts<u32>, by: i64) {
+    let add = |count: u32, n: u32| (i64::from(count) + by * i64::from(n)).max(0) as u32;
+    let c = counts.entry(key).or_default();
+    *c = Counts {
+        near: add(c.near, one.near),
+        around: add(c.around, one.around),
+    };
+    if *c == Counts::default() {
+        counts.remove(&key);
+    }
 }
 
 fn take(counts: &mut BTreeMap<usize, u32>, model: usize) {

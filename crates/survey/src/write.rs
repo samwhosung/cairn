@@ -216,7 +216,8 @@ fn paged(rel: &str, title: &str, entries: Vec<Entry>) -> Vec<Page> {
 
 /// The client draws fog no farther than its far clip.
 const FAR_CLIP: f32 = 350.0;
-const MODEL_KINDS: [&str; 6] = ["tree", "shrub", "rock", "fence", "prop", "building"];
+/// Every kind of model, as [`Model::kind`] names it.
+pub const MODEL_KINDS: [&str; 6] = ["tree", "shrub", "rock", "fence", "prop", "building"];
 
 fn plan(inv: &Survey) -> Vec<Page> {
     let mut pages = Vec::new();

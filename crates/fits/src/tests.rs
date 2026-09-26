@@ -25,12 +25,23 @@ fn stand(model: usize, zone: usize, at: [f32; 2]) -> Stand {
         model,
         zone,
         at,
-        ground: Some((0, band(5.0))),
+        ground: Some((GRASS, band(5.0))),
     }
 }
 
-/// Wells with a jar a yard and a half off and a bucket ten off, a cart by a farm and a crate
-/// farther, oaks in pairs: in two zones of one map, and pines on another.
+const WELL: usize = 0;
+const JAR: usize = 1;
+const BUCKET: usize = 2;
+const CART: usize = 3;
+const CRATE: usize = 4;
+const OAK: usize = 5;
+const PINE: usize = 6;
+const FARM: usize = 7;
+const VALE: usize = 0;
+const MOOR: usize = 1;
+const COAST: usize = 2;
+const GRASS: usize = 0;
+
 fn village() -> Tables {
     let models = vec![
         model("prop", "World\\Well.mdx"),
@@ -50,15 +61,15 @@ fn village() -> Tables {
     let mut stands = Vec::new();
     for i in 0..6 {
         let x = 100.0 * i as f32;
-        stands.push(stand(0, 0, [x, 0.0]));
-        stands.push(stand(1, 0, [x + 1.5, 0.0]));
-        stands.push(stand(2, 0, [x, 10.0]));
-        stands.push(stand(7, 1, [x, 1000.0]));
-        stands.push(stand(3, 1, [x + 12.0, 1000.0]));
-        stands.push(stand(4, 1, [x + 30.0, 1000.0]));
-        stands.push(stand(5, 0, [x + 50.0, 50.0]));
-        stands.push(stand(5, 0, [x + 56.0, 50.0]));
-        stands.push(stand(6, 2, [x, 0.0]));
+        stands.push(stand(WELL, VALE, [x, 0.0]));
+        stands.push(stand(JAR, VALE, [x + 1.5, 0.0]));
+        stands.push(stand(BUCKET, VALE, [x, 10.0]));
+        stands.push(stand(FARM, MOOR, [x, 1000.0]));
+        stands.push(stand(CART, MOOR, [x + 12.0, 1000.0]));
+        stands.push(stand(CRATE, MOOR, [x + 30.0, 1000.0]));
+        stands.push(stand(OAK, VALE, [x + 50.0, 50.0]));
+        stands.push(stand(OAK, VALE, [x + 56.0, 50.0]));
+        stands.push(stand(PINE, COAST, [x, 0.0]));
     }
     Tables::count(models, vec!["Tileset\\Grass.blp".into()], zones, &stands)
 }
@@ -66,20 +77,26 @@ fn village() -> Tables {
 #[test]
 fn every_two_placements_around_each_other_on_one_map_pair_once() {
     let t = village();
-    let well_jar = t.pair(0, 1).expect("wells have jars");
+    let well_jar = t.pair(WELL, JAR).expect("wells have jars");
     assert_eq!((well_jar.near, well_jar.around), (6, 6));
-    assert_eq!(t.usual(0, 1), Some(1.5), "the jar from the well");
-    assert_eq!(t.usual(1, 2), Some(10.1), "the bucket from the jar");
-    assert_eq!(t.pair(0, 2).map(|p| (p.near, p.around)), Some((0, 6)));
-    let oaks = t.pair(5, 5).expect("oaks in pairs");
+    assert_eq!(t.usual(WELL, JAR), Some(1.5), "the jar from the well");
+    assert_eq!(t.usual(JAR, BUCKET), Some(10.1), "the bucket from the jar");
+    let bucket = t.pair(WELL, BUCKET).expect("buckets by wells");
+    assert_eq!((bucket.near, bucket.around), (0, 6));
+    let oaks = t.pair(OAK, OAK).expect("oaks in pairs");
     assert_eq!((oaks.near, oaks.around, oaks.a_to_b), (6, 6, 6.0));
-    assert!(t.pair(0, 6).is_none(), "the pine stands on another map");
-    assert!(t.pair(0, 5).is_none(), "the oaks stand 70 yd off");
-    assert_eq!(t.placed(5), 12);
-    assert_eq!((t.in_zone(0, 0), t.in_zone(1, 0)), (6, 0));
+    assert_eq!(oaks.seen(Reach::Near), 12, "each oak sees the other");
+    assert_eq!(t.seen_beside(OAK, Reach::Near), 12);
+    assert!(
+        t.pair(WELL, PINE).is_none(),
+        "the pine stands on another map"
+    );
+    assert!(t.pair(WELL, OAK).is_none(), "the oaks stand 70 yd off");
+    assert_eq!(t.placed(OAK), 12);
+    assert_eq!((t.in_zone(VALE, WELL), t.in_zone(MOOR, WELL)), (6, 0));
     assert_eq!(
         t.model("world/WELL.m2"),
-        Some(0),
+        Some(WELL),
         "any case, slash and extension"
     );
 }
@@ -90,60 +107,62 @@ fn what_stands_beside_a_spot_ranks_what_goes_with_it() {
     let own = Own::default();
     let lists = Evidence::new(&t, &own, true);
     let by_the_well = Spot {
-        zone: Some(0),
-        ground: Some((0, 0)),
-        near: vec![(0, 1.4)],
+        zone: Some(VALE),
+        ground: Some((GRASS, 0)),
+        near: vec![(WELL, 1.4)],
     };
-    let first = lists.list(&by_the_well, t.kind_of(1), 2);
-    assert_eq!(first[0].model, 1, "a jar by a well");
+    let first = lists.list(&by_the_well, t.kind_of(JAR), 2);
+    assert_eq!(first[0].model, JAR, "a jar by a well");
     let beside = first[0].beside.expect("why");
-    assert_eq!((beside.model, beside.usual), (0, Some(1.5)));
+    assert_eq!((beside.model, beside.usual), (WELL, Some(1.5)));
     let by_the_farm = Spot {
-        zone: Some(1),
+        zone: Some(MOOR),
         ground: None,
-        near: vec![(7, 12.0)],
+        near: vec![(FARM, 12.0)],
     };
-    assert_eq!(lists.list(&by_the_farm, t.kind_of(3), 1)[0].model, 3);
+    assert_eq!(lists.list(&by_the_farm, t.kind_of(CART), 1)[0].model, CART);
     let order = lists.list(&by_the_farm, None, 8);
     assert_eq!(order.len(), 8, "every kind");
 }
 
-/// Enough pairs for the zone's own to outweigh how common each model is.
-const PAIRED: usize = 40;
+const PAIRS_TO_OUTWEIGH_PRIOR: usize = 40;
 
 #[test]
 fn a_zone_of_its_own_counts_what_it_placed() {
     let t = village();
     let mut own = Own::default();
-    for i in 0..PAIRED {
+    for i in 0..PAIRS_TO_OUTWEIGH_PRIOR {
         let at = [5000.0 + 30.0 * i as f32, 0.0];
-        own.place(&format!("crate {i}"), 4, at, None);
-        own.place(&format!("pine {i}"), 6, [at[0] + 2.0, at[1]], None);
+        own.place(&format!("crate {i}"), CRATE, at, None);
+        own.place(&format!("pine {i}"), PINE, [at[0] + 2.0, at[1]], None);
     }
-    own.place("lone crate", 4, [9000.0, 0.0], None);
-    assert_eq!(own.len(), 2 * PAIRED + 1);
+    own.place("lone crate", CRATE, [9000.0, 0.0], None);
+    assert_eq!(own.len(), 2 * PAIRS_TO_OUTWEIGH_PRIOR + 1);
     let spot = Spot {
-        zone: Some(0),
+        zone: Some(VALE),
         ground: None,
         near: own.around([9003.0, 0.0]),
     };
     let borrowing = Evidence::new(&t, &own, true);
     assert_eq!(
-        borrowing.list(&spot, t.kind_of(6), 1)[0].model,
-        6,
+        borrowing.list(&spot, t.kind_of(PINE), 1)[0].model,
+        PINE,
         "the pines the zone placed, before the oaks the borrowed zone has"
     );
     let alone = Evidence::new(&t, &own, false);
     let list = alone.list(&spot, None, 3);
-    assert_eq!(list[0].model, 6, "a pine beside a crate, as the zone does");
+    assert_eq!(
+        list[0].model, PINE,
+        "a pine beside a crate, as the zone does"
+    );
     assert_eq!(list[0].beside.and_then(|b| b.usual), Some(2.0));
     let others: Vec<usize> = alone.list(&spot, None, 8).iter().map(|f| f.model).collect();
     assert_eq!(
         &others[2..],
-        [0, 1, 2, 3, 5, 7],
+        [WELL, JAR, BUCKET, CART, OAK, FARM],
         "what it never placed, in no order"
     );
-    for i in 0..PAIRED {
+    for i in 0..PAIRS_TO_OUTWEIGH_PRIOR {
         assert!(own.remove(&format!("crate {i}")));
         assert!(own.remove(&format!("pine {i}")));
     }
@@ -207,9 +226,9 @@ fn damage(path: &Path, bytes: &[u8], dir: &Path) {
         let own = Own::default();
         let lists = Evidence::new(&t, &own, true);
         let spot = Spot {
-            zone: Some(0),
-            ground: Some((0, 0)),
-            near: vec![(0, 1.0), (1, 12.0)],
+            zone: Some(VALE),
+            ground: Some((GRASS, 0)),
+            near: vec![(WELL, 1.0), (JAR, 12.0)],
         };
         let _ = lists.list(&spot, None, 20);
     }

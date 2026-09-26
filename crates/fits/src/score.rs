@@ -1,22 +1,14 @@
 use std::collections::BTreeMap;
 
-use crate::{AROUND, NEAR, Own, Tables};
+use crate::{Own, Reach, Tables};
 
-/// Half a placement of every model, so that one never placed still has a chance.
-const HALF: f64 = 0.5;
-/// How many placements a ground's own counts must reach to outweigh the model's everywhere.
-const GROUND_PRIOR: f64 = 50.0;
-/// How many neighbours a model must be seen beside before they outweigh how common each is
-/// everywhere: less, and a model placed a few times rides on a lucky pair or two.
-const PAIR_PRIOR: f64 = 500.0;
-/// More neighbours than this add no more certainty: a wood tells little more than a copse.
+const PSEUDOCOUNT: f64 = 0.5;
+const GROUND_PSEUDOCOUNT: f64 = 50.0;
+const PAIR_PSEUDOCOUNT: f64 = 500.0;
 const MOST_NEIGHBOURS: f64 = 8.0;
-/// A zone of its own's placement counts as this many of the install's.
-pub const OWN_WEIGHT: f64 = 10.0;
-/// Enough to put a model nothing has placed after every model something has.
-const UNPLACED: f64 = 1.0e6;
+const OWN_WEIGHT: f64 = 10.0;
+const UNPLACED_PENALTY: f64 = 1.0e6;
 
-/// Where a list is asked for.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Spot {
     /// The install's zone whose palette counts: the one the spot lies in, or the one a zone of its
@@ -24,16 +16,16 @@ pub struct Spot {
     pub zone: Option<usize>,
     /// The ground texture showing most there, and the slope's band.
     pub ground: Option<(usize, u8)>,
-    /// What stands within [`AROUND`], by model, with its distance.
+    /// What stands within [`crate::AROUND`]: each thing's model and distance, nearest first.
     pub near: Vec<(usize, f32)>,
 }
 
 impl Spot {
-    /// The models standing within `within` yd and how many of each, or none.
-    pub fn beside(&self, within: f32) -> Vec<(usize, u32)> {
+    /// The models standing within `reach` and how many of each, in model order.
+    pub fn beside(&self, reach: Reach) -> Vec<(usize, u32)> {
         let mut by: BTreeMap<usize, u32> = BTreeMap::new();
         for &(m, d) in &self.near {
-            if d <= within {
+            if d <= reach.yards() {
                 *by.entry(m).or_default() += 1;
             }
         }
@@ -41,12 +33,12 @@ impl Spot {
     }
 
     /// The neighbours a list weighs: those near when there are any, else those around.
-    pub fn neighbours(&self) -> (f32, Vec<(usize, u32)>) {
-        let near = self.beside(NEAR);
+    pub fn neighbours(&self) -> (Reach, Vec<(usize, u32)>) {
+        let near = self.beside(Reach::Near);
         if near.is_empty() {
-            (AROUND, self.beside(AROUND))
+            (Reach::Around, self.beside(Reach::Around))
         } else {
-            (NEAR, near)
+            (Reach::Near, near)
         }
     }
 }
@@ -65,8 +57,9 @@ pub struct Evidence<'a> {
 pub struct Fit {
     pub model: usize,
     pub score: f64,
-    /// How often the palette's zone places it, and the zone of its own.
+    /// How often the palette's zone places it.
     pub in_zone: u32,
+    /// How often the zone of its own has placed it.
     pub own: u32,
     /// How much more often it stands on the spot's ground and slope than anywhere.
     pub ground: Option<f64>,
@@ -78,7 +71,7 @@ pub struct Fit {
 pub struct Beside {
     pub model: usize,
     pub pairs: u32,
-    pub within: f32,
+    pub reach: Reach,
     /// How far from such a neighbour the model's nearest usually stands.
     pub usual: Option<f32>,
 }
@@ -90,11 +83,7 @@ impl<'a> Evidence<'a> {
         let mut placed: Vec<f64> = (0..tables.models.len())
             .map(|m| install * f64::from(tables.placed(m)))
             .collect();
-        for (&m, &n) in &own.placed {
-            if let Some(p) = placed.get_mut(m) {
-                *p += OWN_WEIGHT * f64::from(n);
-            }
-        }
+        add_own(&mut placed, own.placed.iter());
         let everywhere = smoothed(&placed);
         Self {
             tables,
@@ -105,12 +94,13 @@ impl<'a> Evidence<'a> {
         }
     }
 
-    /// Each model's share of everything placed: the list most placed first.
+    /// The log of each model's share of everything placed: the list most placed first.
     pub fn everywhere(&self) -> Vec<f64> {
         self.everywhere.iter().map(|p| p.ln()).collect()
     }
 
-    /// Each model's share of what the zone places, with the zone of its own's placements.
+    /// The log of each model's share of what the zone places, with the zone of its own's
+    /// placements; of everything placed, when neither has placed anything.
     pub fn palette(&self, zone: Option<usize>) -> Vec<f64> {
         let mut placed = vec![0.0; self.tables.models.len()];
         if let Some(list) = zone.and_then(|z| self.tables.palette.get(z)) {
@@ -140,42 +130,36 @@ impl<'a> Evidence<'a> {
         let total: f64 = on.iter().sum();
         on.iter()
             .zip(&self.everywhere)
-            .map(|(n, p)| ((n + GROUND_PRIOR * p) / (total + GROUND_PRIOR) / p).ln())
+            .map(|(n, p)| ((n + GROUND_PSEUDOCOUNT * p) / (total + GROUND_PSEUDOCOUNT) / p).ln())
             .collect()
     }
 
-    /// For each model, the log of how likely these neighbours are to stand beside it, within
-    /// [`NEAR`] or [`AROUND`], weighed as no more than eight of them.
-    pub fn beside(&self, within: f32, neighbours: &[(usize, u32)]) -> Vec<f64> {
+    /// For each model, the log of how likely these neighbours are to stand within `reach` of it,
+    /// weighed as no more than eight of them.
+    pub fn beside(&self, reach: Reach, neighbours: &[(usize, u32)]) -> Vec<f64> {
         let m = self.tables.models.len();
-        let r = usize::from(within > NEAR);
         let n: f64 = neighbours.iter().map(|&(_, k)| f64::from(k)).sum();
         if n == 0.0 {
             return vec![0.0; m];
         }
         let mut term: Vec<f64> = (0..m)
-            .map(|b| {
-                let sum = self.install * self.tables.index.sums[r][b] as f64
-                    + OWN_WEIGHT * f64::from(self.own.sum(b, r));
-                -n * (sum + PAIR_PRIOR).ln()
-            })
+            .map(|b| -n * (self.seen_beside(b, reach) + PAIR_PSEUDOCOUNT).ln())
             .collect();
         let mut with = vec![0.0; m];
         let mut touched = Vec::new();
         for &(a, k) in neighbours {
-            for &(b, i) in &self.tables.index.beside[a] {
-                let p = &self.tables.pairs[i];
-                let pairs = [p.near, p.around][r] * if a == b { 2 } else { 1 };
-                with[b] += self.install * f64::from(pairs);
-                touched.push(b);
+            for partner in &self.tables.index.partners[a] {
+                let seen = self.tables.pairs[partner.pair].seen(reach);
+                with[partner.model] += self.install * f64::from(seen);
+                touched.push(partner.model);
             }
-            for (&(_, b), c) in self.own.pairs.range((a, 0)..(a + 1, 0)) {
+            for (&(_, b), counts) in self.own.pairs_both_ways.range((a, 0)..(a + 1, 0)) {
                 if b < m {
-                    with[b] += OWN_WEIGHT * f64::from(c[r]);
+                    with[b] += OWN_WEIGHT * f64::from(counts.get(reach));
                     touched.push(b);
                 }
             }
-            let floor = PAIR_PRIOR * self.everywhere[a];
+            let floor = PAIR_PSEUDOCOUNT * self.everywhere[a];
             for &b in &touched {
                 if with[b] > 0.0 {
                     term[b] += f64::from(k) * ((with[b] + floor).ln() - floor.ln());
@@ -198,11 +182,11 @@ impl<'a> Evidence<'a> {
         if let Some(g) = spot.ground {
             add(&mut score, &self.ground(g));
         }
-        let (within, neighbours) = spot.neighbours();
-        add(&mut score, &self.beside(within, &neighbours));
+        let (reach, neighbours) = spot.neighbours();
+        add(&mut score, &self.beside(reach, &neighbours));
         for (s, placed) in score.iter_mut().zip(&self.placed) {
             if !placed {
-                *s -= UNPLACED;
+                *s -= UNPLACED_PENALTY;
             }
         }
         score
@@ -217,7 +201,7 @@ impl<'a> Evidence<'a> {
         order.sort_by(|&a, &b| score[b].total_cmp(&score[a]).then(a.cmp(&b)));
         order.truncate(top);
         let lift = spot.ground.map(|g| self.ground(g));
-        let (within, neighbours) = spot.neighbours();
+        let (reach, neighbours) = spot.neighbours();
         order
             .into_iter()
             .map(|m| Fit {
@@ -226,19 +210,15 @@ impl<'a> Evidence<'a> {
                 in_zone: spot.zone.map_or(0, |z| self.tables.in_zone(z, m)),
                 own: self.own.placed(m),
                 ground: lift.as_ref().map(|l| l[m].exp()),
-                beside: self.best_beside(m, within, &neighbours),
+                beside: self.best_beside(m, reach, &neighbours),
             })
             .collect()
     }
 
-    /// Of the neighbours, the one seen beside `m` most often for how common both are.
-    fn best_beside(&self, m: usize, within: f32, neighbours: &[(usize, u32)]) -> Option<Beside> {
-        let r = usize::from(within > NEAR);
-        let sum = |x: usize| {
-            self.install * self.tables.index.sums[r][x] as f64
-                + OWN_WEIGHT * f64::from(self.own.sum(x, r))
-        };
-        let total: f64 = (0..self.tables.models.len()).map(sum).sum();
+    fn best_beside(&self, m: usize, reach: Reach, neighbours: &[(usize, u32)]) -> Option<Beside> {
+        let total: f64 = (0..self.tables.models.len())
+            .map(|x| self.seen_beside(x, reach))
+            .sum();
         neighbours
             .iter()
             .filter_map(|&(a, _)| {
@@ -246,11 +226,20 @@ impl<'a> Evidence<'a> {
                     .tables
                     .pair(a, m)
                     .filter(|_| self.install > 0.0)
-                    .map_or(0, |p| [p.near, p.around][r] * if a == m { 2 } else { 1 });
-                let own = self.own.pairs.get(&(a, m)).map_or(0, |c| c[r]);
+                    .map_or(0, |p| p.seen(reach));
+                let own = self
+                    .own
+                    .pairs_both_ways
+                    .get(&(a, m))
+                    .map_or(0, |c| c.get(reach));
                 let seen = self.install * f64::from(install) + OWN_WEIGHT * f64::from(own);
                 (seen > 0.0).then(|| {
-                    let lift = seen * total / (sum(a) * sum(m)).max(1.0);
+                    let lift = pair_lift(
+                        seen,
+                        total,
+                        self.seen_beside(a, reach),
+                        self.seen_beside(m, reach),
+                    );
                     (lift, a, install + own)
                 })
             })
@@ -258,13 +247,22 @@ impl<'a> Evidence<'a> {
             .map(|(_, a, pairs)| Beside {
                 model: a,
                 pairs,
-                within,
+                reach,
                 usual: (self.install > 0.0)
                     .then(|| self.tables.usual(a, m))
                     .flatten()
                     .or_else(|| self.own.usual(a, m)),
             })
     }
+
+    fn seen_beside(&self, model: usize, reach: Reach) -> f64 {
+        self.install * self.tables.seen_beside(model, reach) as f64
+            + OWN_WEIGHT * f64::from(self.own.seen_beside(model, reach))
+    }
+}
+
+fn pair_lift(seen: f64, total: f64, a: f64, b: f64) -> f64 {
+    seen * total / (a * b).max(1.0)
 }
 
 fn add_own<'b>(counts: &mut [f64], own: impl Iterator<Item = (&'b usize, &'b u32)>) {
@@ -275,10 +273,9 @@ fn add_own<'b>(counts: &mut [f64], own: impl Iterator<Item = (&'b usize, &'b u32
     }
 }
 
-/// Each count's share of the whole, with half a count more of every one.
 fn smoothed(counts: &[f64]) -> Vec<f64> {
-    let total: f64 = counts.iter().sum::<f64>() + HALF * counts.len() as f64;
-    counts.iter().map(|c| (c + HALF) / total).collect()
+    let total: f64 = counts.iter().sum::<f64>() + PSEUDOCOUNT * counts.len() as f64;
+    counts.iter().map(|c| (c + PSEUDOCOUNT) / total).collect()
 }
 
 pub(crate) fn add(to: &mut [f64], more: &[f64]) {
