@@ -58,14 +58,14 @@ fn goldshire_and_crystal_lake_are_drawn_from_two_tiles() {
     let (again, _) = render(&loaded, &colors, &areas, Some(elwynn), &f, YPP).expect("draws");
     assert!(img == again, "the same map twice");
     assert_eq!(img.dimensions(), (266, 133));
-    let drawn = Doodads {
-        trees: 493,
-        shrubs: 1106,
-        rocks: 79,
-        fences: 480,
-        props: 460,
+    let in_elwynn = Doodads {
+        trees: 434,
+        shrubs: 1214,
+        rocks: 54,
+        fences: 462,
+        props: 346,
     };
-    assert_eq!(counts, drawn);
+    assert_eq!(counts, in_elwynn, "each once, not Stormwind's");
     let greyed = img
         .pixels()
         .filter(|p| p.0[0] == p.0[1] && p.0[2] > p.0[0])
@@ -80,7 +80,7 @@ fn goldshire_and_crystal_lake_are_drawn_from_two_tiles() {
         [0, 1, 2].map(|c| s[c] + u64::from(p.0[c]))
     });
     let mean = sum.map(|s| s / u64::from(img.width() * img.height()));
-    assert_eq!(mean, [86, 87, 23], "olive, in the textures' colours");
+    assert_eq!(mean, [85, 87, 23], "olive, in the textures' colours");
     let [col, row] = f.pixel(YPP, CRYSTAL_LAKE_DEEPEST);
     let [r, g, b] = img.get_pixel(col as u32, row as u32).0;
     assert!(b > g && g > r, "fourteen yards of water: {r} {g} {b}");

@@ -80,6 +80,18 @@ impl Areas {
             .min()
     }
 
+    /// The zones on `map`, lowest id first.
+    pub fn zones_on(&self, map: u32) -> Vec<u32> {
+        let mut ids: Vec<u32> = self
+            .0
+            .iter()
+            .filter(|(_, a)| a.map == map && a.parent.is_none())
+            .map(|(&id, _)| id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// The zone `area` lies in, `area` itself for a zone. `None` when an unknown area is on the
     /// way up, or no zone is within seven parents.
     pub fn top_zone(&self, area: u32) -> Option<u32> {

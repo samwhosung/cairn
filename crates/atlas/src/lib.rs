@@ -7,7 +7,7 @@ mod areas;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use image::{Rgb, RgbImage};
@@ -25,7 +25,9 @@ const RING: [u8; 3] = [255, 0, 255];
 const RING_INNER_SQ: i64 = 8 * 8;
 const RING_OUTER: i64 = 11;
 
-fn weights(alpha: Option<&[u8]>, i: usize, n: usize) -> [f32; 4] {
+/// The share of the ground each of a chunk's `n` layers covers at alpha-map texel `i`, the base
+/// first: each layer lies over the ones below it by its own alpha, as the client blends them.
+pub fn layer_weights(alpha: Option<&[u8]>, i: usize, n: usize) -> [f32; 4] {
     let Some(a) = alpha else {
         return [1.0, 0.0, 0.0, 0.0];
     };
@@ -62,8 +64,9 @@ fn surface(c: &ChunkMesh) -> Option<f32> {
         .reduce(f32::max)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
+/// What a doodad is, told by the words in its file name.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum Kind {
     Tree,
     Shrub,
     Rock,
@@ -71,42 +74,71 @@ enum Kind {
     Prop,
 }
 
-fn kind(model: &str) -> Kind {
-    let b = model
-        .rsplit(['\\', '/'])
-        .next()
-        .unwrap_or(model)
-        .to_ascii_lowercase()
-        .replace("dustwallow", "");
-    if ["tree", "canopy", "palm", "trunk", "log"]
-        .iter()
-        .any(|k| b.contains(k))
-    {
-        Kind::Tree
-    } else if [
-        "bush", "shrub", "plant", "fern", "flower", "grass", "weed", "reed", "vine", "root",
-        "mushroom", "cactus",
-    ]
-    .iter()
-    .any(|k| b.contains(k))
-    {
-        Kind::Shrub
-    } else if ["rock", "stone", "boulder", "cliff", "pebble"]
-        .iter()
-        .any(|k| b.contains(k))
-    {
-        Kind::Rock
-    } else if ["fence", "post", "wall", "rail", "gate"]
-        .iter()
-        .any(|k| b.contains(k))
-    {
-        Kind::Fence
-    } else {
-        Kind::Prop
+impl Kind {
+    pub const ALL: [Kind; 5] = [Kind::Tree, Kind::Shrub, Kind::Rock, Kind::Fence, Kind::Prop];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Tree => "tree",
+            Kind::Shrub => "shrub",
+            Kind::Rock => "rock",
+            Kind::Fence => "fence",
+            Kind::Prop => "prop",
+        }
     }
 }
 
-/// The doodads a map drew, by kind.
+/// Words that make a doodad a prop whatever else its name says: a lamp post is a lamp, a wall
+/// hanging a hanging.
+const PROP_WORDS: [&str; 21] = [
+    "lamp", "lantern", "torch", "brazier", "candle", "light", "sign", "poster", "banner",
+    "hanging", "scroll", "shield", "sword", "vial", "stove", "harness", "trail", "bones", "bed",
+    "hut", "machine",
+];
+/// The kinds a doodad's name can say, first match wins: a stone fence is a fence.
+const KIND_WORDS: [(Kind, &[&str]); 4] = [
+    (Kind::Fence, &["fence", "post", "wall", "rail", "gate"]),
+    (
+        Kind::Tree,
+        &["tree", "canopy", "palm", "trunk", "log", "pine"],
+    ),
+    (
+        Kind::Shrub,
+        &[
+            "bush", "shrub", "shurb", "plant", "fern", "flower", "grass", "weed", "reed", "vine",
+            "root", "mushroom", "cactus", "lily", "kelp", "seaweed",
+        ],
+    ),
+    (
+        Kind::Rock,
+        &[
+            "rock", "stone", "boulder", "cliff", "pebble", "stalag", "icicle", "rubble",
+        ],
+    ),
+];
+/// Names hold these, which hold a kind's word by chance.
+const NOT_WORDS: [&str; 2] = ["dustwallow", "spine"];
+
+/// The kind of the doodad at `model`, an install path, from the words in its file name.
+pub fn kind(model: &str) -> Kind {
+    let mut b = model
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    for not in NOT_WORDS {
+        b = b.replace(not, "");
+    }
+    if PROP_WORDS.iter().any(|w| b.contains(w)) {
+        return Kind::Prop;
+    }
+    KIND_WORDS
+        .iter()
+        .find(|(_, words)| words.iter().any(|w| b.contains(w)))
+        .map_or(Kind::Prop, |(kind, _)| *kind)
+}
+
+/// A zone's doodads, by kind.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Doodads {
     pub trees: usize,
@@ -266,14 +298,73 @@ pub fn render<S: BuildHasher + Sync>(
             "the map would be {w}×{h} px, and a side must be 1 to {MAX_SIDE}"
         ));
     }
-    let ground = ground(loaded, colors, areas, zone, f, ypp, (w, h));
+    let index = chunk_index(loaded);
+    let ground = ground(&index, colors, areas, zone, f, ypp, (w, h));
     let mut img = light(&ground, (w, h), ypp);
-    let drawn = marks(&mut img, loaded, f, ypp);
-    Ok((img, drawn))
+    marks(&mut img, loaded, f, ypp);
+    Ok((img, census(loaded, &index, areas, zone)))
+}
+
+type ChunkIndex<'a> = HashMap<(i64, i64), &'a ChunkMesh>;
+
+/// Every chunk of `loaded` by its column and row on the map's grid of chunks.
+fn chunk_index(loaded: &[((u32, u32), TileMesh)]) -> ChunkIndex<'_> {
+    let mut index = HashMap::new();
+    for ((tx, ty), tm) in loaded {
+        let [ox, oy] = origin(*tx, *ty);
+        for c in &tm.chunks {
+            let r = ((ox - c.positions[0][0]) / CHUNK_SIZE).round() as i64;
+            let k = ((oy - c.positions[0][1]) / CHUNK_SIZE).round() as i64;
+            index.insert((i64::from(*tx) * 16 + k, i64::from(*ty) * 16 + r), c);
+        }
+    }
+    index
+}
+
+/// The chunk under world `(wx, wy)`, and how far into it the point lies, south then east, `0..1`.
+fn chunk_at<'a>(index: &ChunkIndex<'a>, wx: f32, wy: f32) -> Option<(&'a ChunkMesh, f32, f32)> {
+    let (gxf, gyf) = (
+        (32.0 * TILE_SIZE - wy) / CHUNK_SIZE,
+        (32.0 * TILE_SIZE - wx) / CHUNK_SIZE,
+    );
+    let c = index.get(&(gxf.floor() as i64, gyf.floor() as i64))?;
+    Some((c, gyf - gyf.floor(), gxf - gxf.floor()))
+}
+
+/// The doodads standing in zone `zone`, or anywhere without one, each once though the tiles it
+/// overlaps all list it.
+fn census(
+    loaded: &[((u32, u32), TileMesh)],
+    index: &ChunkIndex<'_>,
+    areas: &Areas,
+    zone: Option<u32>,
+) -> Doodads {
+    let zone_of = |a: u32| areas.top_zone(a).unwrap_or(a);
+    let mut seen = HashSet::new();
+    let mut n = Doodads::default();
+    for (_, tm) in loaded {
+        for d in &tm.doodads {
+            let [x, y, _] = d.position;
+            let inside = zone.is_none_or(|z| {
+                chunk_at(index, x, y).is_some_and(|(c, _, _)| zone_of(c.area_id) == z)
+            });
+            if !inside || !seen.insert(d.unique_id) {
+                continue;
+            }
+            *match kind(&d.model) {
+                Kind::Tree => &mut n.trees,
+                Kind::Shrub => &mut n.shrubs,
+                Kind::Rock => &mut n.rocks,
+                Kind::Fence => &mut n.fences,
+                Kind::Prop => &mut n.props,
+            } += 1;
+        }
+    }
+    n
 }
 
 fn ground<S: BuildHasher + Sync>(
-    loaded: &[((u32, u32), TileMesh)],
+    index: &ChunkIndex<'_>,
     colors: &HashMap<String, [f32; 3], S>,
     areas: &Areas,
     zone: Option<u32>,
@@ -283,15 +374,6 @@ fn ground<S: BuildHasher + Sync>(
 ) -> Vec<Ground> {
     let zone_of = |a: u32| areas.top_zone(a).unwrap_or(a);
     let [wx_max, wy_max] = f.corner();
-    let mut index: HashMap<(i64, i64), &ChunkMesh> = HashMap::new();
-    for ((tx, ty), tm) in loaded {
-        let [ox, oy] = origin(*tx, *ty);
-        for c in &tm.chunks {
-            let r = ((ox - c.positions[0][0]) / CHUNK_SIZE).round() as i64;
-            let k = ((oy - c.positions[0][1]) / CHUNK_SIZE).round() as i64;
-            index.insert((i64::from(*tx) * 16 + k, i64::from(*ty) * 16 + r), c);
-        }
-    }
     let rows: Vec<Vec<Ground>> = (0..h)
         .into_par_iter()
         .map(|r| {
@@ -299,17 +381,12 @@ fn ground<S: BuildHasher + Sync>(
                 .map(|k| {
                     let wx = wx_max - (r as f32 + 0.5) * ypp;
                     let wy = wy_max - (k as f32 + 0.5) * ypp;
-                    let (gxf, gyf) = (
-                        (32.0 * TILE_SIZE - wy) / CHUNK_SIZE,
-                        (32.0 * TILE_SIZE - wx) / CHUNK_SIZE,
-                    );
-                    let Some(c) = index.get(&(gxf.floor() as i64, gyf.floor() as i64)) else {
+                    let Some((c, fr, fk)) = chunk_at(index, wx, wy) else {
                         return NO_GROUND;
                     };
-                    let (fr, fk) = (gyf - gyf.floor(), gxf - gxf.floor());
                     let n = c.layer_textures.len().min(4);
                     let ti = ((fr * 64.0) as usize).min(63) * AM + ((fk * 64.0) as usize).min(63);
-                    let wt = weights(c.alpha_map.as_deref(), ti, n);
+                    let wt = layer_weights(c.alpha_map.as_deref(), ti, n);
                     let mut rgb = if n == 0 { [0.4; 3] } else { [0.0; 3] };
                     for (l, t) in c.layer_textures.iter().take(n).enumerate() {
                         let lc = colors.get(t).copied().unwrap_or([0.5, 0.5, 0.5]);
@@ -371,8 +448,7 @@ fn light(ground: &[Ground], (w, h): (usize, usize), ypp: f32) -> RgbImage {
     img
 }
 
-fn marks(img: &mut RgbImage, loaded: &[((u32, u32), TileMesh)], f: &Frame, ypp: f32) -> Doodads {
-    let mut drawn = Doodads::default();
+fn marks(img: &mut RgbImage, loaded: &[((u32, u32), TileMesh)], f: &Frame, ypp: f32) {
     for ((tx, ty), tm) in loaded {
         if *tx < f.x0 || *tx > f.x1 || *ty < f.y0 || *ty > f.y1 {
             continue;
@@ -381,22 +457,13 @@ fn marks(img: &mut RgbImage, loaded: &[((u32, u32), TileMesh)], f: &Frame, ypp: 
             let [k, r] = f
                 .pixel(ypp, [d.position[0], d.position[1]])
                 .map(|v| v as i64);
-            let (col, rad, count) = match kind(&d.model) {
-                Kind::Tree => (
-                    [20u8, 70, 25],
-                    (2.5 * d.scale / ypp).max(1.0),
-                    &mut drawn.trees,
-                ),
-                Kind::Shrub => ([90, 150, 60], (1.0 / ypp).max(0.5), &mut drawn.shrubs),
-                Kind::Rock => (
-                    [150, 150, 150],
-                    (1.5 * d.scale / ypp).max(0.7),
-                    &mut drawn.rocks,
-                ),
-                Kind::Fence => ([110, 70, 30], 0.7, &mut drawn.fences),
-                Kind::Prop => ([230, 170, 40], 0.8, &mut drawn.props),
+            let (col, rad) = match kind(&d.model) {
+                Kind::Tree => ([20u8, 70, 25], (2.5 * d.scale / ypp).max(1.0)),
+                Kind::Shrub => ([90, 150, 60], (1.0 / ypp).max(0.5)),
+                Kind::Rock => ([150, 150, 150], (1.5 * d.scale / ypp).max(0.7)),
+                Kind::Fence => ([110, 70, 30], 0.7),
+                Kind::Prop => ([230, 170, 40], 0.8),
             };
-            *count += 1;
             dot(img, k, r, rad, col);
         }
         for m in &tm.wmos {
@@ -417,7 +484,6 @@ fn marks(img: &mut RgbImage, loaded: &[((u32, u32), TileMesh)], f: &Frame, ypp: 
             }
         }
     }
-    drawn
 }
 
 /// Rings world `(x, y)` on a picture of `f` drawn at `ypp` yards a pixel. False when the point is

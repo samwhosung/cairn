@@ -121,19 +121,19 @@ fn a_map_drawn_whole_dims_nothing_and_frames_every_tile() {
 
 #[test]
 fn doodads_are_dots_by_kind_and_buildings_are_squares() {
-    let doodad = |model: &str, [x, y]: [f32; 2]| Doodad {
+    let doodad = |model: &str, [x, y]: [f32; 2], unique_id: u32| Doodad {
         model: model.into(),
         position: [x, y, 0.0],
         rotation: [0.0; 3],
         scale: 1.0,
-        unique_id: 0,
+        unique_id,
     };
     let chunks = (0..16)
         .flat_map(|r| (0..16).map(move |c| chunk(r, c, ZONE)))
         .collect();
     let doodads = vec![
-        doodad("A\\OakTree.mdx", south_east_of_corner(100.5, 100.5)),
-        doodad("A\\Barrel.mdx", south_east_of_corner(200.5, 100.5)),
+        doodad("A\\OakTree.mdx", south_east_of_corner(100.5, 100.5), 1),
+        doodad("A\\Barrel.mdx", south_east_of_corner(200.5, 100.5), 2),
     ];
     let [x, y] = south_east_of_corner(300.5, 300.5);
     let wmos = vec![WmoInstance {
@@ -159,6 +159,31 @@ fn doodads_are_dots_by_kind_and_buildings_are_squares() {
         [200, 30, 30],
         "a square, not a block"
     );
+}
+
+#[test]
+fn the_census_counts_each_doodad_once_and_only_in_the_zone() {
+    let chunks = (0..16)
+        .flat_map(|r| (0..16).map(move |c| chunk(r, c, if c < 8 { ZONE } else { ELSEWHERE })))
+        .collect();
+    let tree = |[x, y]: [f32; 2], unique_id: u32| Doodad {
+        model: "A\\OakTree.mdx".into(),
+        position: [x, y, 0.0],
+        rotation: [0.0; 3],
+        scale: 1.0,
+        unique_id,
+    };
+    let (here, there) = (
+        south_east_of_corner(100.5, 10.5),
+        south_east_of_corner(100.5, 400.5),
+    );
+    let listed = vec![tree(here, 1), tree(here, 1), tree(there, 2)];
+    let (_, counts) = draw(tile(chunks, listed, Vec::new()), 4.0);
+    let one_tree = Doodads {
+        trees: 1,
+        ..Doodads::default()
+    };
+    assert_eq!(counts, one_tree, "listed twice, and one elsewhere");
 }
 
 #[test]
@@ -208,19 +233,19 @@ fn a_mark_rings_its_point_when_it_is_on_the_map() {
 fn layers_cover_the_ones_below_by_their_alpha() {
     let near = |w: [f32; 4], want: [f32; 4]| w.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6);
     let texel = |a: [u8; 3]| [a[0], a[1], a[2], 255];
-    assert!(near(weights(None, 0, 1), [1.0, 0.0, 0.0, 0.0]));
+    assert!(near(layer_weights(None, 0, 1), [1.0, 0.0, 0.0, 0.0]));
     assert!(near(
-        weights(Some(&texel([255, 0, 0])), 0, 2),
+        layer_weights(Some(&texel([255, 0, 0])), 0, 2),
         [0.0, 1.0, 0.0, 0.0]
     ));
     assert!(
         near(
-            weights(Some(&texel([0, 255, 0])), 0, 2),
+            layer_weights(Some(&texel([0, 255, 0])), 0, 2),
             [1.0, 0.0, 0.0, 0.0]
         ),
         "a third layer's alpha is ignored under two layers"
     );
-    let w = weights(Some(&texel([51, 102, 204])), 0, 4);
+    let w = layer_weights(Some(&texel([51, 102, 204])), 0, 4);
     assert!(near(w, [0.096, 0.024, 0.08, 0.8]));
 }
 
@@ -233,6 +258,14 @@ fn a_model_is_sorted_by_the_words_in_its_file_name() {
         ("A\\B\\WoodenFence.mdx", Kind::Fence),
         ("A\\B\\DustwallowBarrel.mdx", Kind::Prop),
         ("Trees\\Barrel.mdx", Kind::Prop),
+        ("A\\ElwynnPine01.mdx", Kind::Tree),
+        ("A\\BlastedLandsSpine01.mdx", Kind::Prop),
+        ("A\\LampPost.mdx", Kind::Prop),
+        ("A\\HumanSignPost01.mdx", Kind::Prop),
+        ("A\\ElwynnStoneFence.mdx", Kind::Fence),
+        ("A\\LochModanShurb05.mdx", Kind::Shrub),
+        ("A\\Stalagtite01.mdl", Kind::Rock),
+        ("A\\InnBedCanopy.mdx", Kind::Prop),
     ] {
         assert_eq!(kind(model), want, "{model}");
     }

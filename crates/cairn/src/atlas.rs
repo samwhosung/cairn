@@ -181,8 +181,8 @@ fn draw(
     let [x, y] = frame.corner();
     Ok(format!(
         "cairn: {drawn}, tiles {}..={} by {}..={}, {}x{} px at {} yd/px, north up, the top-left \
-         corner at world {x:.1},{y:.1}\ncairn: {} trees, {} shrubs, {} rocks, {} fences and \
-         walls, {} props; wrote {}",
+         corner at world {x:.1},{y:.1}\ncairn: standing in it, each once: {} trees, {} shrubs, \
+         {} rocks, {} fences and walls, {} props; wrote {}",
         frame.x0,
         frame.x1,
         frame.y0,
