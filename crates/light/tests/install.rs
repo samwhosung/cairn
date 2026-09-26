@@ -141,6 +141,44 @@ fn magma_slime_and_ghosts_take_their_own_profiles() {
 }
 
 #[test]
+fn a_light_alone_is_the_blend_where_nothing_is_over_it() {
+    let Some(cat) = catalog() else { return };
+    let goldshire_under_no_sphere = [-9439.1, 71.2, 68.0];
+    let duskwood_deep_in_its_own = [-10640.0, -880.0, 50.0];
+    let azeroth = cat
+        .light_at(EASTERN_KINGDOMS, goldshire_under_no_sphere)
+        .expect("a light");
+    for s in [Submersion::Dry, Submersion::Water, Submersion::Magma] {
+        let alone = cat.sample_light(azeroth, NOON, false, s, false);
+        let blend = cat.sample(
+            EASTERN_KINGDOMS,
+            goldshire_under_no_sphere,
+            NOON,
+            false,
+            s,
+            false,
+        );
+        assert_eq!(format!("{alone:?}"), format!("{blend:?}"), "{s:?}");
+    }
+    let own = cat
+        .light_at(EASTERN_KINGDOMS, duskwood_deep_in_its_own)
+        .expect("a light");
+    assert_ne!(own, azeroth);
+    let dusk = cat.sample_light(own, NOON, false, Submersion::Dry, false);
+    let blend = dry(cat, EASTERN_KINGDOMS, duskwood_deep_in_its_own, NOON);
+    assert_eq!(rgb(dusk.fog_color), rgb(blend.fog_color));
+    let noon = cat.sample_light(azeroth, NOON, false, Submersion::Dry, false);
+    assert_ne!(rgb(dusk.fog_color), rgb(noon.fog_color));
+    assert_eq!(
+        format!(
+            "{:?}",
+            cat.sample_light(0, NOON, false, Submersion::Dry, false)
+        ),
+        format!("{:?}", Atmosphere::DEFAULT)
+    );
+}
+
+#[test]
 fn storms_bring_the_fog_to_the_eye() {
     let Some(cat) = catalog() else { return };
     let pos = [-9000.0, 400.0, 90.0];

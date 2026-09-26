@@ -88,19 +88,11 @@ impl LightCatalog {
         submersion: Submersion,
         ghost: bool,
     ) -> Atmosphere {
-        if let Some(p) = submersion.fixed_param()
-            && self.has_bands(p)
-        {
-            return self.sample_param(p, time);
+        if let Some(fixed) = self.fixed(submersion, time) {
+            return fixed;
         }
         let slot = weather_slot(ghost, stormy, submersion.is_water());
-        let atmo_of = |l: &Light| -> Option<Atmosphere> {
-            let param = match l.params[slot] {
-                0 => l.params[SLOT_CLEAR],
-                p => p,
-            };
-            (param >= 1).then(|| self.sample_param(param, time))
-        };
+        let atmo_of = |l: &Light| self.profile(l, slot, time);
 
         let map_has_no_light = !self.lights.iter().any(|l| l.map == map);
         let mut acc = self
@@ -143,18 +135,49 @@ impl LightCatalog {
         time: u32,
         stormy: bool,
     ) -> Atmosphere {
-        let Some(light) = self.pick_light(map, pos) else {
-            return Atmosphere::DEFAULT;
-        };
         let slot = if stormy { SLOT_STORM } else { SLOT_CLEAR };
-        let param = match light.params[slot] {
-            0 => light.params[SLOT_CLEAR],
+        self.pick_light(map, pos)
+            .and_then(|light| self.profile(light, slot, time))
+            .unwrap_or(Atmosphere::DEFAULT)
+    }
+
+    /// The atmosphere of `Light.dbc` record `light` alone, at full weight wherever the camera is,
+    /// in the profile [`Self::sample`] picks for the weather.
+    pub fn sample_light(
+        &self,
+        light: u32,
+        time: u32,
+        stormy: bool,
+        submersion: Submersion,
+        ghost: bool,
+    ) -> Atmosphere {
+        if let Some(fixed) = self.fixed(submersion, time) {
+            return fixed;
+        }
+        let slot = weather_slot(ghost, stormy, submersion.is_water());
+        self.lights
+            .iter()
+            .find(|l| l.id == light)
+            .and_then(|l| self.profile(l, slot, time))
+            .unwrap_or(Atmosphere::DEFAULT)
+    }
+
+    /// The `Light.dbc` id of the light [`Self::sample_smallest_sphere`] samples at `pos` on `map`.
+    pub fn light_at(&self, map: u32, pos: [f32; 3]) -> Option<u32> {
+        self.pick_light(map, pos).map(|l| l.id)
+    }
+
+    fn fixed(&self, submersion: Submersion, time: u32) -> Option<Atmosphere> {
+        let p = submersion.fixed_param()?;
+        self.has_bands(p).then(|| self.sample_param(p, time))
+    }
+
+    fn profile(&self, l: &Light, slot: usize, time: u32) -> Option<Atmosphere> {
+        let param = match l.params[slot] {
+            0 => l.params[SLOT_CLEAR],
             p => p,
         };
-        if param < 1 {
-            return Atmosphere::DEFAULT;
-        }
-        self.sample_param(param, time)
+        (param >= 1).then(|| self.sample_param(param, time))
     }
 
     /// `LightParams` record `p` at `time`, or `None` when the chain has no bands for it.
