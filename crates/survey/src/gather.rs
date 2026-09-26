@@ -57,7 +57,7 @@ struct Placed<'a> {
     unique_id: u32,
     model: &'a str,
     position: [f32; 3],
-    heading: f32,
+    rotation: [f32; 3],
     scale: f32,
     doodad_set: u16,
 }
@@ -66,6 +66,8 @@ struct Standing {
     model: String,
     zone: ZoneId,
     position: [f32; 3],
+    rotation: [f32; 3],
+    scale: f32,
     ground: Option<String>,
     slope: Option<f32>,
 }
@@ -101,7 +103,7 @@ pub(crate) fn survey(chain: &Chain) -> Result<Survey, String> {
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
-                p.rotation[1],
+                p.rotation,
                 p.scale,
                 0,
             )
@@ -128,7 +130,7 @@ fn buildings<'a>(tiles: &'a [TileSummary], maps: &'a [MapTiles], areas: &Areas) 
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
-                p.rotation[1],
+                p.rotation,
                 1.0,
                 set,
             )
@@ -143,7 +145,7 @@ fn buildings<'a>(tiles: &'a [TileSummary], maps: &'a [MapTiles], areas: &Areas) 
                 unique_id: WHOLE_MAP_BUILDING_ID,
                 model: &g.model,
                 position: g.position,
-                heading: g.rotation[1],
+                rotation: g.rotation,
                 scale: 1.0,
                 doodad_set: g.doodad_set,
             });
@@ -212,6 +214,8 @@ impl Gathering<'_> {
             model: key(p.model),
             zone,
             position: p.position,
+            rotation: p.rotation,
+            scale: p.scale,
             ground: p.here.and_then(|h| h.texture.as_deref()).map(key),
             slope: p.here.and_then(|h| h.slope),
         });
@@ -326,6 +330,8 @@ fn placements(
             model: model_index[s.model.as_str()],
             zone: zone_index[&s.zone],
             position: s.position,
+            rotation: s.rotation,
+            scale: s.scale,
             ground: s
                 .ground
                 .as_deref()
@@ -390,7 +396,15 @@ fn paint(
     }
 }
 
-type Listing<'a> = (Option<&'a Underfoot>, u32, &'a str, [f32; 3], f32, f32, u16);
+type Listing<'a> = (
+    Option<&'a Underfoot>,
+    u32,
+    &'a str,
+    [f32; 3],
+    [f32; 3],
+    f32,
+    u16,
+);
 
 /// A tile lists every placement that overlaps it, and an id is unique on its map.
 fn each_once<'a, I>(
@@ -402,7 +416,7 @@ where
 {
     let mut by_id: BTreeMap<(usize, u32), Placed<'a>> = BTreeMap::new();
     for tile in tiles {
-        for (here, unique_id, model, position, heading, scale, doodad_set) in listed(tile) {
+        for (here, unique_id, model, position, rotation, scale, doodad_set) in listed(tile) {
             let area = here.map(|h| h.area);
             let placed = Placed {
                 map: tile.map,
@@ -411,7 +425,7 @@ where
                 unique_id,
                 model,
                 position,
-                heading,
+                rotation,
                 scale,
                 doodad_set,
             };
@@ -449,7 +463,7 @@ impl ModelAcc {
         let example = Example {
             map_directory: maps[p.map].directory.clone(),
             position: p.position,
-            heading: p.heading,
+            heading: p.rotation[1],
             scale: p.scale,
             building: building.map(str::to_owned),
         };

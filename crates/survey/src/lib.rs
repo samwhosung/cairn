@@ -35,14 +35,17 @@ pub struct Survey {
     pub placements: Vec<Placement>,
 }
 
-/// A doodad or building on a map's ground, in world coordinates: x north, y west, z up. `ground`
-/// is the texture that shows most under it and `slope` its cell's, in degrees. Neither is known for
-/// a map's whole-map building, and `ground` isn't on a chunk painted nothing.
+/// A doodad or building on a map's ground, in world coordinates: x north, y west, z up, turned by
+/// the angles the map stores, in degrees, the second about the up axis. `ground` is the texture
+/// that shows most under it and `slope` its cell's, in degrees. Neither is known for a map's
+/// whole-map building, and `ground` isn't on a chunk painted nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placement {
     pub model: usize,
     pub zone: usize,
     pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: f32,
     pub ground: Option<usize>,
     pub slope: Option<f32>,
 }

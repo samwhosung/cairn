@@ -38,7 +38,7 @@ fn once(tiles: &[TileSummary]) -> Vec<(usize, u32, Option<u32>, &str)> {
                 p.unique_id,
                 p.model.as_str(),
                 p.position,
-                p.rotation[1],
+                p.rotation,
                 p.scale,
                 0,
             )
