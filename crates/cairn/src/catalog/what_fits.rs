@@ -1,3 +1,4 @@
+mod around;
 mod replay;
 
 use std::collections::BTreeMap;
@@ -6,11 +7,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bevy::app::AppExit;
-use fits::{Evidence, Fit, MODEL_KINDS, Own, Spot, Tables};
-use terrain::TileMesh;
-use world::{CurrentMap, Install};
+use fits::{Fit, MODEL_KINDS, Spot, Tables};
+use world::CurrentMap;
 
 use crate::zone::Zone;
+pub(crate) use around::{Found, Surroundings};
 
 const DEFAULT_DIR: &str = "catalog";
 const DEFAULT_MAP: &str = "Azeroth";
@@ -166,13 +167,24 @@ fn run(asked: &Asked) -> Result<String, String> {
     })?;
     let read_in = reading.elapsed();
     let borrows = asked.borrows.as_ref();
-    let found = match &asked.what {
+    let unopened = |_| "the install would not open".to_owned();
+    let (mut around, at) = match &asked.what {
         What::Replay { history } => return replay::run(&tables, history, borrows),
-        What::Install { at, map } => on_the_install(&tables, *at, map)?,
-        What::OwnZone { at, root } => in_a_zone_of_its_own(&tables, *at, root, borrows)?,
+        What::Install { at, map } => {
+            let install = crate::install(None).map_err(unopened)?;
+            let map = CurrentMap::find(&install.0, map)?;
+            (Surroundings::on_the_install(install, &map)?, *at)
+        }
+        What::OwnZone { at, root } => {
+            let zone = Zone::read(root)?;
+            let install = crate::install(Some(root)).map_err(unopened)?;
+            let around = Surroundings::of_a_zone_of_its_own(&tables, &install, &zone, borrows)?;
+            (around, *at)
+        }
     };
+    let found = around.find(&tables, at)?;
     let ranking = Instant::now();
-    let evidence = Evidence::new(&tables, &found.own, found.install);
+    let evidence = around.evidence(&tables);
     let list = evidence.list(&found.spot, asked.kind, asked.top);
     let ranked_in = ranking.elapsed();
     let mut out = found.header.clone();
@@ -206,192 +218,6 @@ fn run(asked: &Asked) -> Result<String, String> {
         read_in.as_secs_f64() * 1000.0
     );
     Ok(out)
-}
-
-struct Found {
-    spot: Spot,
-    own: Own,
-    install: bool,
-    header: String,
-    sheet_place: String,
-}
-
-fn on_the_install(tables: &Tables, at: [f32; 2], map: &str) -> Result<Found, String> {
-    let install = crate::install(None).map_err(|_| "the install would not open".to_owned())?;
-    let chain = &install.0;
-    let map = CurrentMap::find(chain, map)?;
-    let tiles = tiles_around(&install, &map.directory, at);
-    let here = underfoot(&tiles, at)
-        .ok_or_else(|| format!("{},{} has no ground on {}", at[0], at[1], map.directory))?;
-    let areas = atlas::Areas::load(chain)?;
-    let zone = tables.zone(map.id, areas.top_zone(here.area).unwrap_or(0));
-    let mut near = Vec::new();
-    let mut unknown = 0;
-    for s in each_once(&tiles).values() {
-        let d = (s.at[0] - at[0]).hypot(s.at[1] - at[1]);
-        if d > fits::AROUND {
-            continue;
-        }
-        match tables.model(s.model) {
-            Some(m) => near.push((m, d)),
-            None => unknown += 1,
-        }
-    }
-    near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
-    let spot = Spot {
-        zone,
-        ground: ground_here(tables, &here),
-        near,
-    };
-    let sheet_place = zone
-        .map_or("no zone", |z| tables.zones[z].name.as_str())
-        .to_owned();
-    let place = format!("{},{} on {}, in {sheet_place}", at[0], at[1], map.directory);
-    Ok(Found {
-        header: header(tables, &place, &here, &spot, unknown),
-        spot,
-        own: Own::default(),
-        install: true,
-        sheet_place,
-    })
-}
-
-fn in_a_zone_of_its_own(
-    tables: &Tables,
-    at: [f32; 2],
-    root: &Path,
-    borrows: Option<&Borrows>,
-) -> Result<Found, String> {
-    let zone = Zone::read(root)?;
-    let install =
-        crate::install(Some(root)).map_err(|_| "the install would not open".to_owned())?;
-    let tiles = atlas::load_map(&install.0, &zone.directory);
-    if tiles.is_empty() {
-        return Err(format!("no tile of {} reads", zone.directory));
-    }
-    let Placed { own, unknown } = placed_in(tables, &tiles);
-    let borrowed = match borrows {
-        Some(Borrows::Nothing) => None,
-        Some(Borrows::Zone(name)) => Some(name.as_str()),
-        None => Some(zone.borrows.as_str()),
-    };
-    let palette = borrowed
-        .map(|name| {
-            tables
-                .zone_named(name)
-                .ok_or_else(|| format!("the catalog has no zone named {name}"))
-        })
-        .transpose()?;
-    let here = underfoot(&tiles, at)
-        .ok_or_else(|| format!("{},{} is off {}'s ground", at[0], at[1], zone.directory))?;
-    let spot = Spot {
-        zone: palette,
-        ground: ground_here(tables, &here),
-        near: own.around(at),
-    };
-    let sheet_place = palette.map_or_else(
-        || format!("{}, by its own placements alone", zone.directory),
-        |z| format!("{}, borrowing {}", zone.directory, tables.zones[z].name),
-    );
-    let place = format!(
-        "{},{} in {sheet_place}, a zone of its own with {} things",
-        at[0],
-        at[1],
-        own.len()
-    );
-    Ok(Found {
-        header: header(tables, &place, &here, &spot, unknown),
-        spot,
-        own,
-        install: palette.is_some(),
-        sheet_place,
-    })
-}
-
-fn underfoot(tiles: &[((u32, u32), TileMesh)], at: [f32; 2]) -> Option<survey::Underfoot> {
-    let tile = wdt::world_to_tile(at[0], at[1]);
-    let (_, mesh) = tiles.iter().find(|(t, _)| *t == tile)?;
-    survey::underfoot(&mesh.chunks, tile, [at[0], at[1], 0.0])
-}
-
-struct Placed {
-    own: Own,
-    unknown: usize,
-}
-
-fn placed_in(tables: &Tables, tiles: &[((u32, u32), TileMesh)]) -> Placed {
-    let mut own = Own::default();
-    let mut unknown = 0;
-    for (id, s) in each_once(tiles) {
-        match tables.model(s.model) {
-            Some(m) => {
-                let ground = s.under.as_ref().and_then(|u| ground_here(tables, u));
-                own.place(&id, m, s.at, ground);
-            }
-            None => unknown += 1,
-        }
-    }
-    Placed { own, unknown }
-}
-
-fn ground_here(tables: &Tables, here: &survey::Underfoot) -> Option<(usize, u8)> {
-    let texture = tables.ground_texture(here.texture.as_deref()?)?;
-    Some((texture, fits::band(here.slope?)))
-}
-
-fn tiles_around(install: &Install, directory: &str, at: [f32; 2]) -> Vec<((u32, u32), TileMesh)> {
-    let reach = fits::AROUND;
-    let mut wanted: Vec<(u32, u32)> = [-reach, reach]
-        .iter()
-        .flat_map(|dx| [-reach, reach].map(|dy| wdt::world_to_tile(at[0] + dx, at[1] + dy)))
-        .collect();
-    wanted.sort_unstable();
-    wanted.dedup();
-    wanted
-        .into_iter()
-        .filter_map(|(x, y)| {
-            let mesh = terrain::load_tile_mesh(&install.0, directory, x, y).ok()?;
-            Some(((x, y), mesh))
-        })
-        .collect()
-}
-
-struct Standing<'a> {
-    model: &'a str,
-    at: [f32; 2],
-    under: Option<survey::Underfoot>,
-}
-
-fn each_once(tiles: &[((u32, u32), TileMesh)]) -> BTreeMap<String, Standing<'_>> {
-    let mut by_id: BTreeMap<String, Standing<'_>> = BTreeMap::new();
-    for (tile, mesh) in tiles {
-        for (id, model, p) in placed_on(mesh) {
-            let under = survey::underfoot(&mesh.chunks, *tile, p);
-            if by_id.get(&id).is_none_or(|s| s.under.is_none()) {
-                let at = [p[0], p[1]];
-                by_id.insert(id, Standing { model, at, under });
-            }
-        }
-    }
-    by_id
-}
-
-fn placed_on(mesh: &TileMesh) -> impl Iterator<Item = (String, &str, [f32; 3])> {
-    let doodads = mesh.doodads.iter().map(|d| {
-        (
-            format!("doodad {}", d.unique_id),
-            d.model.as_str(),
-            d.position,
-        )
-    });
-    let buildings = mesh.wmos.iter().map(|w| {
-        (
-            format!("building {}", w.unique_id),
-            w.model.as_str(),
-            w.position,
-        )
-    });
-    doodads.chain(buildings)
 }
 
 fn header(
@@ -432,7 +258,7 @@ fn header(
     said
 }
 
-fn why(tables: &Tables, spot: &Spot, f: &Fit) -> String {
+pub(crate) fn why(tables: &Tables, spot: &Spot, f: &Fit) -> String {
     let mut parts = Vec::new();
     if f.own > 0 {
         parts.push(format!("this zone has {}", f.own));
@@ -491,7 +317,7 @@ fn times(n: u32) -> String {
     }
 }
 
-fn stem(path: &str) -> &str {
+pub(crate) fn stem(path: &str) -> &str {
     let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
     name.rsplit_once('.').map_or(name, |(s, _)| s)
 }
