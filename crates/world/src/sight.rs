@@ -11,6 +11,8 @@ use model::{ALPHA_KEY_REF, Coverage, CoverageReader, RenderSubmesh};
 use mpq::Chain;
 use terrain::{CHUNK_SIZE, ChunkMesh};
 
+pub mod frame;
+
 use crate::adt::AdtTile;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
 use crate::source::{Install, MPQ_SOURCE};

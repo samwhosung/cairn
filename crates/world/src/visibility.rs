@@ -73,6 +73,19 @@ pub(crate) fn probe_bits(slot: u16) -> u32 {
     INTERIOR_FOG_BIT | (u32::from(slot) << PROBE_SHIFT) | alpha_bits(1.0)
 }
 
+/// A sight index goes in the shade and probe bits, which light, and the fog and highlight bits.
+const SIGHT_LOW_BITS: u32 = 13;
+const SIGHT_HIGH_SHIFT: u32 = 30;
+/// How many placements a sight frame can tell apart.
+pub(crate) const SIGHT_INDICES: u32 = 1 << (SIGHT_LOW_BITS + 2);
+
+/// A batch's tag for its sight twin: the batch's fade and rig, and the index of its placement.
+pub(crate) fn with_sight_index(tag: u32, index: u32) -> u32 {
+    let low = (index & ((1 << SIGHT_LOW_BITS) - 1)) << PROBE_SHIFT;
+    let high = (index >> SIGHT_LOW_BITS) << SIGHT_HIGH_SHIFT;
+    (tag & (ALPHA_MASK | RIG_MASK)) | low | high
+}
+
 pub(crate) fn with_alpha(tag: u32, alpha: f32) -> u32 {
     (tag & !ALPHA_MASK) | alpha_bits(alpha)
 }
@@ -262,6 +275,20 @@ mod tests {
         assert_eq!(doodad_fade_alpha(0.5, 50.5), 0.0);
         assert!((doodad_fade_alpha(2.0, 114.5) - 0.5).abs() < 1e-6);
         assert!((doodad_fade_alpha(7.0, 182.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_sight_twin_keeps_its_batchs_fade_and_rig_and_carries_its_placements_index() {
+        let batch = INTERIOR_FOG_BIT | 0x0015_0000 | (6660 << PROBE_SHIFT) | alpha_bits(0.5);
+        for index in [0, 1, 2, 8191, 8192, SIGHT_INDICES - 1] {
+            let twin = with_sight_index(batch, index);
+            assert_eq!(
+                twin & (ALPHA_MASK | RIG_MASK),
+                batch & (ALPHA_MASK | RIG_MASK)
+            );
+            let read = ((twin >> PROBE_SHIFT) & 0x1fff) | ((twin >> 30) << 13);
+            assert_eq!(read, index, "as the shader reads it back");
+        }
     }
 
     #[test]

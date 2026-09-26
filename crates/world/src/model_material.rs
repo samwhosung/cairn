@@ -42,6 +42,7 @@ const TWIN_CUTOUT: u16 = 1 << 10;
 const FAR_SIDE: u16 = 1 << 11;
 const ENV_MAP: u16 = 1 << 12;
 const SKY_DEPTH: u16 = 1 << 13;
+const SIGHT: u16 = 1 << 14;
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +56,7 @@ pub struct ModelKey {
     depth_prime: bool,
     sky_depth: bool,
     far_side: bool,
+    sight: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
@@ -70,6 +72,7 @@ impl From<&ModelExtension> for ModelKey {
             depth_prime: markers & DEPTH_PRIME != 0,
             sky_depth: markers & SKY_DEPTH != 0,
             far_side: markers & FAR_SIDE != 0,
+            sight: markers & SIGHT != 0,
         }
     }
 }
@@ -193,6 +196,16 @@ impl MaterialExtension for ModelExtension {
             target.write_mask = ColorWrites::empty();
             if let Some(ds) = descriptor.depth_stencil.as_mut() {
                 ds.depth_write_enabled = true;
+            }
+        }
+        if key.sight {
+            target.blend = None;
+            target.write_mask = ColorWrites::ALL;
+            if let Some(ds) = descriptor.depth_stencil.as_mut() {
+                ds.depth_write_enabled = true;
+            }
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("WOW_SIGHT".into());
             }
         }
         Ok(())
@@ -420,6 +433,14 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
             light: light.clone(),
         },
     }
+}
+
+/// The material drawing a batch as it covers the frame, in the colour of the placement its tag
+/// names, depth written whatever it blends.
+pub(crate) fn sight_twin_of(drawn: &ModelMaterial) -> ModelMaterial {
+    let mut sight = drawn.clone();
+    sight.extension.clutter_fade.z = f32::from(sight.extension.clutter_fade.z as u16 | SIGHT);
+    sight
 }
 
 pub(crate) fn far_twin_of(near: &ModelMaterial) -> ModelMaterial {

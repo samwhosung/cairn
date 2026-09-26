@@ -186,5 +186,9 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
         tuned = mix(wow_light.fog_color.xyz, tuned, factor);
     }
 
+#ifdef WOW_SIGHT
+    // The sRGB bytes 6, 2 and 2 the model shader writes for the ground's index.
+    tuned = vec3<f32>(6.0, 2.0, 2.0) / (255.0 * 12.92);
+#endif
     return vec4<f32>(tuned, 1.0);
 }

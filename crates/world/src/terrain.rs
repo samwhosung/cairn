@@ -1,7 +1,12 @@
 use bevy::asset::embedded_asset;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{
+    ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Buffer, Face};
+use bevy::render::render_resource::{
+    AsBindGroup, Buffer, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+};
 use bevy::shader::ShaderRef;
 
 use crate::adt::AdtTile;
@@ -11,6 +16,7 @@ pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 
 /// One sampler, the layer array's, serves all three arrays: the shader declares only one.
 #[derive(Asset, AsBindGroup, Clone, TypePath)]
+#[bind_group_data(TerrainKey)]
 pub struct TerrainExtension {
     #[texture(100, dimension = "2d_array", visibility(fragment))]
     #[sampler(105, visibility(fragment))]
@@ -19,10 +25,24 @@ pub struct TerrainExtension {
     pub alpha_array: Handle<Image>,
     #[texture(110, dimension = "2d_array", visibility(fragment))]
     pub shadow_array: Handle<Image>,
+    /// `x` how many times a ground layer repeats across a chunk; `w` 1 for a sight frame's ground.
     #[uniform(106)]
     pub params: Vec4,
     #[storage(90, read_only, buffer)]
     pub light: Buffer,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TerrainKey {
+    sight: bool,
+}
+
+impl From<&TerrainExtension> for TerrainKey {
+    fn from(e: &TerrainExtension) -> Self {
+        Self {
+            sight: e.params.w > 0.5,
+        }
+    }
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -33,6 +53,20 @@ impl MaterialExtension for TerrainExtension {
     fn fragment_shader() -> ShaderRef {
         "embedded://world/terrain.wgsl".into()
     }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if key.bind_group_data.sight
+            && let Some(fragment) = descriptor.fragment.as_mut()
+        {
+            fragment.shader_defs.push("WOW_SIGHT".into());
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct TerrainMaterialPlugin;
@@ -42,6 +76,13 @@ impl Plugin for TerrainMaterialPlugin {
         embedded_asset!(app, "terrain.wgsl");
         app.add_plugins(OrderedMaterialPlugin::<TerrainMaterial>::default());
     }
+}
+
+/// A tile's ground as a sight frame draws it, where the tile draws it.
+pub(crate) fn sight_twin_of(drawn: &TerrainMaterial) -> TerrainMaterial {
+    let mut sight = drawn.clone();
+    sight.extension.params.w = 1.0;
+    sight
 }
 
 /// Back faces culled, as the client culls terrain.

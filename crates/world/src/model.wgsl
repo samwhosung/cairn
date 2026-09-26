@@ -341,6 +341,21 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
     return out;
 }
 
+#ifdef WOW_SIGHT
+// A blended batch covers a pixel where it gives at least half its colour; one that adds or
+// multiplies covers none, since what lies behind it still shows.
+const SIGHT_MIN_ALPHA: f32 = 0.5;
+
+// The placement's index, from the tag's shade and fog bits, as three sRGB bytes of 6, 6 and 3
+// bits, each 4n + 2, so a byte a rounding off still reads.
+fn sight_colour(tag: u32) -> vec3<f32> {
+    let index = ((tag >> 6u) & 0x1fffu) | ((tag >> 30u) << 13u);
+    let code = vec3<u32>(index & 63u, (index >> 6u) & 63u, index >> 12u);
+    let s = (vec3<f32>(code) * 4.0 + 2.0) / 255.0;
+    return select(pow((s + 0.055) / 1.055, vec3<f32>(2.4)), s / 12.92, s <= vec3<f32>(0.04045));
+}
+#endif
+
 fn env_map_uv(p_view: vec3<f32>, n_view: vec3<f32>) -> vec2<f32> {
     let refl = normalize(p_view - 2.0 * dot(p_view, n_view) * n_view);
     return refl.xy * 0.5 + vec2<f32>(0.5, 0.5);
@@ -446,6 +461,13 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     }
     let faded_alpha = base_color.a * obj_fade;
     let base = alpha_discard(pbr_input.material, base_color);
+#ifdef WOW_SIGHT
+    let lights_or_shades = has_marker(ADDITIVE_BIT) || has_marker(MODULATE_BIT)
+        || has_marker(MODULATE_2X_BIT);
+    if (lights_or_shades || (!has_marker(OPAQUE_INTENT_BIT) && faded_alpha < SIGHT_MIN_ALPHA)) {
+        discard;
+    }
+#endif
 
     let L = -normalize(wow_light.light_sun.xyz);
     let n_m2 = wow_normalize(pbr_input.world_normal);
@@ -614,5 +636,8 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         out_rgb = mix(identity, out_rgb, obj_fade);
     }
     out.color = vec4<f32>(out_rgb, select(faded_alpha, 1.0, opaque_intent));
+#ifdef WOW_SIGHT
+    out.color = vec4<f32>(sight_colour(raw_tag), 1.0);
+#endif
     return out;
 }
