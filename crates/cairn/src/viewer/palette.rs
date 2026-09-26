@@ -27,6 +27,7 @@ pub enum Ask {
     Width(f32),
     Follow(bool),
     Pick(usize),
+    Scroll(usize),
     List { out: PathBuf, top: usize },
     Await { name: String, within: Duration },
     Frames(u32),
@@ -36,7 +37,7 @@ pub struct Asking {
     ask: Ask,
     asked: Instant,
     applied: bool,
-    frames: Vec<Duration>,
+    frames: Vec<(Duration, Duration)>,
     last: Option<Instant>,
 }
 
@@ -50,6 +51,14 @@ impl Asking {
             last: None,
         }
     }
+}
+
+/// A place in the grid, counted from 1.
+fn place(n: &str, what: &str) -> Result<usize, String> {
+    n.parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("palette {what} wants a place from 1, not {n}"))
 }
 
 pub fn parse(said: &[&str]) -> Result<Ask, String> {
@@ -72,12 +81,8 @@ pub fn parse(said: &[&str]) -> Result<Ask, String> {
         ["width", px] => Ask::Width(number(px, "width")?),
         ["follow", "on"] => Ask::Follow(true),
         ["follow", "off"] => Ask::Follow(false),
-        ["pick", n] => Ask::Pick(
-            n.parse::<usize>()
-                .ok()
-                .filter(|n| *n > 0)
-                .ok_or_else(|| format!("palette pick wants a place from 1, not {n}"))?,
-        ),
+        ["pick", n] => Ask::Pick(place(n, "pick")?),
+        ["scroll", n] => Ask::Scroll(place(n, "scroll")?),
         ["list", out] | ["list", out, "--top", _] => {
             let top = match said {
                 [_, _, _, n] => n
@@ -105,7 +110,7 @@ pub fn parse(said: &[&str]) -> Result<Ask, String> {
         _ => {
             return Err("palette takes open, close, tab NAME, search WORDS, order \
                         fits|plain|listed, size PX, width PX, follow on|off, pick N, \
-                        list FILE [--top N], await NAME or frames N"
+                        scroll N, list FILE [--top N], await NAME or frames N"
                 .into());
         }
     })
@@ -158,7 +163,7 @@ pub(super) fn answer(
         Ask::Frames(n) => {
             let now = Instant::now();
             if let Some(last) = asking.last.replace(now) {
-                asking.frames.push(now - last);
+                asking.frames.push((now - last, palette.pass));
             }
             (asking.frames.len() >= *n as usize).then(|| Ok(frames(&asking.frames)))
         }
@@ -185,7 +190,8 @@ pub(super) fn answer(
             } else {
                 format!("{said}; {state}")
             };
-            say(&format!("ok {said}"));
+            let took = asking.asked.elapsed().as_secs_f64();
+            say(&format!("ok {said}; shown {took:.3} s after asked"));
         }
         Err(e) => say(&format!("error: {e}")),
     }
@@ -216,6 +222,7 @@ fn apply(ask: &Ask, palette: &mut Palette) -> Result<(), String> {
         Ask::Size(side) => palette.side = side.clamp(*SIDES.start(), *SIDES.end()),
         Ask::Width(width) => palette.width = width.clamp(*WIDTHS.start(), *WIDTHS.end()),
         Ask::Follow(follows) => palette.follows = *follows,
+        Ask::Scroll(n) => palette.scroll_to = Some(n - 1),
         Ask::Say | Ask::Pick(_) | Ask::List { .. } | Ask::Await { .. } | Ask::Frames(_) => {}
     }
     Ok(())
@@ -274,11 +281,15 @@ fn list(palette: &mut Palette, out: &std::path::Path, top: usize) -> Result<Stri
     ))
 }
 
-fn frames(took: &[Duration]) -> String {
-    let each = took.iter().sum::<Duration>().as_secs_f64() * 1000.0 / took.len() as f64;
-    let most = took.iter().max().copied().unwrap_or_default().as_secs_f64() * 1000.0;
+/// Each frame's time and the panel's pass in it.
+fn frames(took: &[(Duration, Duration)]) -> String {
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    let n = took.len() as f64;
+    let each = took.iter().map(|t| ms(t.0)).sum::<f64>() / n;
+    let most = took.iter().map(|t| ms(t.0)).fold(0.0, f64::max);
+    let pass = took.iter().map(|t| ms(t.1)).sum::<f64>() / n;
     format!(
-        "{} frames, {each:.2} ms each, the slowest {most:.2} ms",
+        "{} frames, {each:.2} ms each, the slowest {most:.2} ms, the panel's pass {pass:.3} ms each",
         took.len()
     )
 }
@@ -310,6 +321,14 @@ fn state(
     if !palette.search.is_empty() {
         let _ = write!(said, " for \"{}\"", palette.search);
     }
+    let unknown = palette.unknown();
+    if !unknown.is_empty() {
+        let _ = write!(
+            said,
+            "; its list names {} not in the catalog",
+            unknown.join(", ")
+        );
+    }
     if let (Some(ranked), Some(catalog)) = (&palette.ranked, palette.catalog()) {
         let zone = ranked
             .found
@@ -325,7 +344,7 @@ fn state(
         );
     }
     if let Some(trouble) = &palette.trouble {
-        let _ = write!(said, "; the spot: {trouble}");
+        let _ = write!(said, "; {trouble}");
     }
     let (held, bytes) = pictures.held();
     let _ = write!(

@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy_egui::EguiContexts;
@@ -108,6 +109,7 @@ pub fn draw(
         return Ok(());
     }
     if !palette.open {
+        palette.pass = Duration::ZERO;
         return Ok(());
     }
     let closing =
@@ -116,6 +118,7 @@ pub fn draw(
         palette.open = false;
         return Ok(());
     }
+    let began = Instant::now();
     pictures.at_side((palette.side * ctx.pixels_per_point()).round() as u32);
     let frame = egui::Frame::new().fill(PANEL).inner_margin(8.0);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
@@ -125,6 +128,7 @@ pub fn draw(
         grid(ui, palette, &mut pictures, &mut armed);
     });
     palette.drawn = Some(palette.key());
+    palette.pass = began.elapsed();
     Ok(())
 }
 
@@ -171,7 +175,7 @@ fn spot_line(palette: &Palette) -> (String, Color32) {
         return (said, DIM);
     };
     if let Some(trouble) = &palette.trouble {
-        return (format!("the spot: {trouble}"), TROUBLE);
+        return (trouble.clone(), TROUBLE);
     }
     let Some(ranked) = &palette.ranked else {
         return ("looking for the spot the camera looks at".to_owned(), DIM);
@@ -249,30 +253,35 @@ fn grid(ui: &mut egui::Ui, palette: &mut Palette, pictures: &mut Pictures, armed
         return;
     };
     let shown = palette.shown();
-    ui.label(
-        RichText::new(format!("{} shown", shown.len()))
-            .color(DIM)
-            .small(),
-    );
+    let mut said = format!("{} shown", shown.len());
+    let unknown = palette.unknown();
+    if let Some(first) = unknown.first() {
+        let _ = write!(
+            said,
+            "; {} of the list's lines name nothing in the catalog, as {first}",
+            unknown.len()
+        );
+    }
+    ui.label(RichText::new(said).color(DIM).small());
     let side = palette.side;
     let columns = ((ui.available_width() + GAP) / (side + GAP))
         .floor()
         .max(1.0) as usize;
     let rows = shown.len().div_ceil(columns);
-    egui::ScrollArea::vertical().auto_shrink(false).show_rows(
-        ui,
-        side + NAME,
-        rows,
-        |ui, range| {
-            for row in range {
-                ui.horizontal(|ui| {
-                    for &item in shown.iter().skip(row * columns).take(columns) {
-                        cell(ui, &catalog, item, palette, pictures, armed);
-                    }
-                });
-            }
-        },
-    );
+    let mut scroll = egui::ScrollArea::vertical().auto_shrink(false);
+    if let Some(n) = palette.scroll_to.take() {
+        let row = (n / columns) as f32;
+        scroll = scroll.vertical_scroll_offset(row * (side + NAME + ui.spacing().item_spacing.y));
+    }
+    scroll.show_rows(ui, side + NAME, rows, |ui, range| {
+        for row in range {
+            ui.horizontal(|ui| {
+                for &item in shown.iter().skip(row * columns).take(columns) {
+                    cell(ui, &catalog, item, palette, pictures, armed);
+                }
+            });
+        }
+    });
 }
 
 fn cell(

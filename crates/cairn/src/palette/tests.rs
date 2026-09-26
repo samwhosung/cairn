@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use fits::{Spot, Stand, Tables};
 
-use super::catalog::{Catalog, GROUND, Item, words};
+use super::catalog::{Catalog, GROUND, Match, words};
 use super::lists::{self, Lists};
 use super::pictures::decode;
 use super::rank::ground_order;
@@ -58,7 +58,7 @@ const MODELS: [ModelRow; 4] = [
         STREETLAMP,
         "4.2 yd tall, 1.0 x 1.0 across",
         "96",
-        "Stormwind City 90, Elwynn Forest 6",
+        "Stormwind City 90, Un'Goro Crater 6",
     ),
     (
         "tree",
@@ -245,22 +245,32 @@ fn the_plain_order_is_the_most_placed_first_then_by_path() {
 }
 
 #[test]
-fn a_search_finds_every_word_in_a_path_a_kind_or_a_zone() {
+fn a_search_finds_every_word_in_a_name_a_path_a_kind_or_a_zone_s_whole_word() {
     let dir = a_catalog("search");
     let c = Catalog::read(&dir).expect("the catalog");
-    let found = |search: &str| -> Vec<&str> {
+    let found = |search: &str| -> Vec<(&str, Match)> {
         let words = words(search);
         c.items
             .iter()
-            .filter(|i| i.matches(&words))
-            .map(Item::name)
+            .filter_map(|i| Some((i.name(), i.found(&words)?)))
             .collect()
     };
-    assert_eq!(found("barrel"), ["BARREL01"]);
-    assert_eq!(found("elwynn trees"), ["ELWYNNTREEMID01"]);
-    assert_eq!(found("duskwood tree"), ["DUSKWOODTREE01"]);
-    assert_eq!(found("westfall"), ["BARREL01", "ElwynnGrassBase"]);
-    assert_eq!(found("elwynn road"), ["ElwynnCobblestoneBase"]);
+    assert_eq!(found("barrel"), [("BARREL01", Match::Name)]);
+    assert_eq!(found("elwynn trees"), [("ELWYNNTREEMID01", Match::Path)]);
+    assert_eq!(found("duskwood tree"), [("DUSKWOODTREE01", Match::Name)]);
+    assert_eq!(
+        found("westfall"),
+        [("BARREL01", Match::Zone), ("ElwynnGrassBase", Match::Zone)]
+    );
+    assert_eq!(
+        found("elwynn road"),
+        [("ElwynnCobblestoneBase", Match::Path)]
+    );
+    assert!(
+        found("crate").is_empty(),
+        "a zone's name counts by whole words"
+    );
+    assert_eq!(found("crater"), [("STREETLAMP01", Match::Zone)]);
     assert!(found("barrel duskwood").is_empty());
     assert_eq!(found("").len(), 7, "no words find everything");
     std::fs::remove_dir_all(dir).ok();

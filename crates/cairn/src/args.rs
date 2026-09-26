@@ -145,12 +145,13 @@ VIEWING, the viewer's commands; yards and degrees:
          where it is the nearest thing drawn: a see-through part where at least half of it
          shows, and never a part that only lights or shades what lies behind
   palette [open | close | tab TAB | search WORDS | order fits|plain|listed | size PX | width PX
-          | follow on|off | pick N | list FILE [--top N] | await NAME | frames N]
+          | follow on|off | pick N | scroll N | list FILE [--top N] | await NAME | frames N]
          show and ask the palette as the window does (PALETTE below): TAB is all, a kind, ground,
-         recent or a list's name, and PX points; pick arms the Nth thing shown; list writes the
-         first N shown (20 by default) as `cairn catalog fits` lists them, the spot first; await
-         waits up to 10 s for the list NAME to show; frames runs N frames and says how long they
-         took. Each answers once the panel shows what was asked, saying what it shows
+         recent or a list's name, and PX points; pick arms the Nth thing shown, and scroll brings
+         it to the grid's top row; list writes the first N shown (20 by default) as `cairn catalog
+         fits` lists them, the spot first; await waits up to 10 s for the list NAME to show;
+         frames runs N frames and says how long they and the panel's pass took. Each answers once
+         the panel shows what was asked, saying what it shows
   quit                  or the end of the input
 
 LOOK, the character walked as: --race human|orc|dwarf|nightelf|undead|tauren|gnome|troll

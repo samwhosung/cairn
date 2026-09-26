@@ -47,6 +47,7 @@ pub const SIDES: std::ops::RangeInclusive<f32> = 48.0..=192.0;
 const WIDTH: f32 = 440.0;
 pub const WIDTHS: std::ops::RangeInclusive<f32> = 240.0..=1200.0;
 const RECENT: usize = 32;
+const MET_NOTHING: &str = "the camera looks at no ground, so the lists are the last spot's";
 /// How far the camera moves, or turns, before the spot is looked for again.
 const MOVED_YD: f32 = 0.5;
 const TURNED_COS: f32 = 0.999_96;
@@ -85,6 +86,10 @@ pub struct Palette {
     looked: Option<Look>,
     pub lists: Option<Lists>,
     pub trouble: Option<String>,
+    /// The place in the grid of the thing to bring to its top row.
+    pub scroll_to: Option<usize>,
+    /// How long the panel's last pass took to lay out.
+    pub pass: Duration,
     fonts: Option<Result<bevy_egui::egui::FontDefinitions, String>>,
     fonts_set: bool,
     news: u64,
@@ -224,6 +229,8 @@ impl Palette {
             looked: None,
             lists: None,
             trouble: None,
+            scroll_to: None,
+            pass: Duration::ZERO,
             fonts: None,
             fonts_set: false,
             news: 0,
@@ -338,10 +345,12 @@ impl Palette {
                 None => catalog.plain(Some(*k)),
             },
         };
-        order
+        let mut found: Vec<(catalog::Match, usize)> = order
             .into_iter()
-            .filter(|&i| catalog.items[i].matches(&words))
-            .collect()
+            .filter_map(|i| Some((catalog.items[i].found(&words)?, i)))
+            .collect();
+        found.sort_by_key(|&(how, _)| how);
+        found.into_iter().map(|(_, i)| i).collect()
     }
 
     fn listed(&self, catalog: &Catalog, name: &str, ranked: Option<&Ranked>) -> Vec<usize> {
@@ -385,6 +394,21 @@ impl Palette {
             .map(|(_, said)| said.as_str())
     }
 
+    /// The lines of the named list shown that name nothing in the catalog.
+    pub fn unknown(&self) -> Vec<&str> {
+        let (Tab::List(name), Some(catalog)) = (&self.tab, self.catalog()) else {
+            return Vec::new();
+        };
+        let Some(list) = self.lists.as_ref().and_then(|l| l.all.get(name)) else {
+            return Vec::new();
+        };
+        list.lines
+            .iter()
+            .filter(|(path, _)| catalog.find(path).is_none())
+            .map(|(path, _)| path.as_str())
+            .collect()
+    }
+
     /// Whether the palette shows all it was asked to: its catalog read, its spot's lists made for
     /// where the camera stands, and its grid drawn with them.
     fn settled(&self, pictures: &Pictures, camera: Option<&GlobalTransform>) -> bool {
@@ -401,6 +425,7 @@ impl Palette {
         !reading
             && !ranking
             && looked_here
+            && self.scroll_to.is_none()
             && self.fonts_set
             && self.drawn.as_ref() == Some(&self.key())
             && pictures.settled()
@@ -506,7 +531,7 @@ fn take_in(mut palette: ResMut<'_, Palette>) {
                 palette.trouble = None;
                 palette.news += 1;
             }
-            Ok(None) => {}
+            Ok(None) => palette.trouble = Some(MET_NOTHING.to_owned()),
             Err(e) => palette.trouble = Some(e),
         }
     }

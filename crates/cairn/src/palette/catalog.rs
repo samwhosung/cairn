@@ -34,7 +34,28 @@ pub struct Item {
     pub beside: Vec<(String, f64)>,
     /// What a ground texture's name says it is, as the catalog puts it: grass, road, rock...
     pub ground: String,
-    words: String,
+    words: Words,
+}
+
+/// What a search is matched against, lowercase.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Words {
+    name: String,
+    /// Its whole path, and its kind as a word.
+    said: String,
+    /// The words of the names of the zones that place it.
+    zones: Vec<String>,
+}
+
+/// How a search matched a thing, the closest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Match {
+    /// Every word is in its file's name.
+    Name,
+    /// Every word is in its path or its kind.
+    Path,
+    /// Some word only names a zone that places it.
+    Zone,
 }
 
 /// The catalog as the palette shows it: every model, then every ground texture.
@@ -124,23 +145,42 @@ impl Item {
         what_fits::stem(&self.path)
     }
 
-    /// Whether every word of a search is in its path, its kind or a zone that places it.
-    pub fn matches(&self, words: &[String]) -> bool {
-        words.iter().all(|w| self.words.contains(w.as_str()))
+    /// Whether a search finds it, and how: each word inside its name or path, its kind, or a whole
+    /// word of the name of a zone that places it.
+    pub fn found(&self, words: &[String]) -> Option<Match> {
+        let w = &self.words;
+        if words.iter().all(|word| w.name.contains(word.as_str())) {
+            return Some(Match::Name);
+        }
+        if words.iter().all(|word| w.said.contains(word.as_str())) {
+            return Some(Match::Path);
+        }
+        let zone = |word: &str| w.zones.iter().any(|z| z == word);
+        words
+            .iter()
+            .all(|word| w.said.contains(word.as_str()) || zone(word))
+            .then_some(Match::Zone)
     }
 
     fn with_words(mut self) -> Self {
         let kind = KINDS[self.kind];
-        let mut words = format!(
+        let said = format!(
             "{} {kind} {kind}s {}",
             self.path.to_ascii_lowercase(),
             self.ground
         );
-        for (zone, _) in &self.zones {
-            words.push_str(" | ");
-            words.push_str(&zone.to_ascii_lowercase());
-        }
-        self.words = words.replace('\\', "/");
+        let zones = self
+            .zones
+            .iter()
+            .flat_map(|(zone, _)| zone.split([' ', '\'', '-']))
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        self.words = Words {
+            name: self.name().to_ascii_lowercase(),
+            said: said.replace('\\', "/"),
+            zones,
+        };
         self
     }
 }
@@ -192,7 +232,7 @@ fn model(f: &[&str]) -> Option<Item> {
         zones: listed(zones, count_of),
         beside: Vec::new(),
         ground: String::new(),
-        words: String::new(),
+        words: Words::default(),
     })
 }
 
@@ -211,7 +251,7 @@ fn ground(f: &[&str]) -> Option<Item> {
         zones: listed(zones, share_of),
         beside: listed(beside, share_of),
         ground: kind.to_owned(),
-        words: String::new(),
+        words: Words::default(),
     })
 }
 

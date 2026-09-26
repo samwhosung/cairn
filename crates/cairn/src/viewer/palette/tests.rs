@@ -15,6 +15,7 @@ fn the_palette_is_asked_in_words() {
     assert_eq!(parse(&["size", "64"]), Ok(Ask::Size(64.0)));
     assert_eq!(parse(&["follow", "off"]), Ok(Ask::Follow(false)));
     assert_eq!(parse(&["pick", "3"]), Ok(Ask::Pick(3)));
+    assert_eq!(parse(&["scroll", "400"]), Ok(Ask::Scroll(400)));
     assert_eq!(
         parse(&["list", "a.txt"]),
         Ok(Ask::List {
@@ -32,6 +33,7 @@ fn the_palette_is_asked_in_words() {
     assert_eq!(parse(&["frames", "30"]), Ok(Ask::Frames(30)));
     for wrong in [
         &["pick", "0"][..],
+        &["scroll", "0"],
         &["size", "-1"],
         &["order", "best"],
         &["list", "a.txt", "--top", "0"],
