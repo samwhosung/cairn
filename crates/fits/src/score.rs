@@ -195,30 +195,45 @@ impl<'a> Evidence<'a> {
     /// The first `top` models of `kind`, or of every kind, for `spot`, each with why it is there.
     pub fn list(&self, spot: &Spot, kind: Option<usize>, top: usize) -> Vec<Fit> {
         let score = self.scores(spot);
+        let mut order = self.ranked(&score, kind);
+        order.truncate(top);
+        let why = self.explain(spot);
+        order.into_iter().map(|m| why.fit(m, score[m])).collect()
+    }
+
+    /// Every model of `kind`, or of every kind, in the order a list takes by `score`: the highest
+    /// first, and on a tie the earlier model.
+    pub fn ranked(&self, score: &[f64], kind: Option<usize>) -> Vec<usize> {
         let mut order: Vec<usize> = (0..score.len())
             .filter(|&m| kind.is_none_or(|k| self.tables.kind_of(m) == Some(k)))
             .collect();
         order.sort_by(|&a, &b| score[b].total_cmp(&score[a]).then(a.cmp(&b)));
-        order.truncate(top);
-        let lift = spot.ground.map(|g| self.ground(g));
-        let (reach, neighbours) = spot.neighbours();
         order
-            .into_iter()
-            .map(|m| Fit {
-                model: m,
-                score: score[m],
-                in_zone: spot.zone.map_or(0, |z| self.tables.in_zone(z, m)),
-                own: self.own.placed(m),
-                ground: lift.as_ref().map(|l| l[m].exp()),
-                beside: self.best_beside(m, reach, &neighbours),
-            })
-            .collect()
     }
 
-    fn best_beside(&self, m: usize, reach: Reach, neighbours: &[(usize, u32)]) -> Option<Beside> {
-        let total: f64 = (0..self.tables.models.len())
+    /// What says why any model stands where it does on the lists for `spot`.
+    pub fn explain(&'a self, spot: &'a Spot) -> Why<'a> {
+        let (reach, neighbours) = spot.neighbours();
+        let seen_beside = (0..self.tables.models.len())
             .map(|x| self.seen_beside(x, reach))
             .sum();
+        Why {
+            evidence: self,
+            spot,
+            lift: spot.ground.map(|g| self.ground(g)),
+            reach,
+            neighbours,
+            seen_beside,
+        }
+    }
+
+    fn best_beside(
+        &self,
+        m: usize,
+        reach: Reach,
+        neighbours: &[(usize, u32)],
+        total: f64,
+    ) -> Option<Beside> {
         neighbours
             .iter()
             .filter_map(|&(a, _)| {
@@ -258,6 +273,31 @@ impl<'a> Evidence<'a> {
     fn seen_beside(&self, model: usize, reach: Reach) -> f64 {
         self.install * self.tables.seen_beside(model, reach) as f64
             + OWN_WEIGHT * f64::from(self.own.seen_beside(model, reach))
+    }
+}
+
+/// Why each model stands where it does on the lists for one spot.
+pub struct Why<'a> {
+    evidence: &'a Evidence<'a>,
+    spot: &'a Spot,
+    lift: Option<Vec<f64>>,
+    reach: Reach,
+    neighbours: Vec<(usize, u32)>,
+    seen_beside: f64,
+}
+
+impl Why<'_> {
+    /// `m` on a list with its `score`, and why.
+    pub fn fit(&self, m: usize, score: f64) -> Fit {
+        let e = self.evidence;
+        Fit {
+            model: m,
+            score,
+            in_zone: self.spot.zone.map_or(0, |z| e.tables.in_zone(z, m)),
+            own: e.own.placed(m),
+            ground: self.lift.as_ref().map(|l| l[m].exp()),
+            beside: e.best_beside(m, self.reach, &self.neighbours, self.seen_beside),
+        }
     }
 }
 

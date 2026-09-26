@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 pub use files::{FILES, read, write};
 pub use own::Own;
-pub use score::{Beside, Evidence, Fit, Spot};
+pub use score::{Beside, Evidence, Fit, Spot, Why};
 pub use survey::MODEL_KINDS;
 pub use tally::{HEADER, Tally, shuffled};
 
