@@ -8,6 +8,9 @@
     mesh_view_bindings::view,
     mesh_functions,
 }
+#ifdef WOW_SIGHT
+#import world::sight::sight_colour
+#endif
 
 struct WowFragOut {
     @location(0) color: vec4<f32>,
@@ -342,17 +345,12 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
 }
 
 #ifdef WOW_SIGHT
-// A blended batch covers a pixel where it gives at least half its colour; one that adds or
-// multiplies covers none, since what lies behind it still shows.
 const SIGHT_MIN_ALPHA: f32 = 0.5;
 
-// The placement's index, from the tag's shade and fog bits, as three sRGB bytes of 6, 6 and 3
-// bits, each 4n + 2, so a byte a rounding off still reads.
-fn sight_colour(tag: u32) -> vec3<f32> {
-    let index = ((tag >> 6u) & 0x1fffu) | ((tag >> 30u) << 13u);
-    let code = vec3<u32>(index & 63u, (index >> 6u) & 63u, index >> 12u);
-    let s = (vec3<f32>(code) * 4.0 + 2.0) / 255.0;
-    return select(pow((s + 0.055) / 1.055, vec3<f32>(2.4)), s / 12.92, s <= vec3<f32>(0.04045));
+fn sight_index(tag: u32) -> u32 {
+    let low = (tag >> TAG_SHADE_SHIFT) & TAG_PROBE_MASK;
+    let high = tag >> countTrailingZeros(TAG_INTERIOR_FOG);
+    return low | (high << countOneBits(TAG_PROBE_MASK));
 }
 #endif
 
@@ -637,7 +635,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     }
     out.color = vec4<f32>(out_rgb, select(faded_alpha, 1.0, opaque_intent));
 #ifdef WOW_SIGHT
-    out.color = vec4<f32>(sight_colour(raw_tag), 1.0);
+    out.color = vec4<f32>(sight_colour(sight_index(raw_tag)), 1.0);
 #endif
     return out;
 }

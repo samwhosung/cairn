@@ -73,17 +73,14 @@ pub(crate) fn probe_bits(slot: u16) -> u32 {
     INTERIOR_FOG_BIT | (u32::from(slot) << PROBE_SHIFT) | alpha_bits(1.0)
 }
 
-/// A sight index goes in the shade and probe bits, which light, and the fog and highlight bits.
-const SIGHT_LOW_BITS: u32 = 13;
-const SIGHT_HIGH_SHIFT: u32 = 30;
-/// How many placements a sight frame can tell apart.
-pub(crate) const SIGHT_INDICES: u32 = 1 << (SIGHT_LOW_BITS + 2);
+const SIGHT_LOW_BITS: u32 = SHADE_OR_PROBE_MASK.count_ones();
+const SIGHT_HIGH_SHIFT: u32 = INTERIOR_FOG_BIT.trailing_zeros();
+pub(crate) const SIGHT_INDICES: u32 = 1 << (SIGHT_LOW_BITS + 32 - SIGHT_HIGH_SHIFT);
 
-/// A batch's tag for its sight twin: the batch's fade and rig, and the index of its placement.
-pub(crate) fn with_sight_index(tag: u32, index: u32) -> u32 {
-    let low = (index & ((1 << SIGHT_LOW_BITS) - 1)) << PROBE_SHIFT;
+pub(crate) fn sight_tag(batch_tag: u32, index: u32) -> u32 {
+    let low = (index << PROBE_SHIFT) & SHADE_OR_PROBE_MASK;
     let high = (index >> SIGHT_LOW_BITS) << SIGHT_HIGH_SHIFT;
-    (tag & (ALPHA_MASK | RIG_MASK)) | low | high
+    (batch_tag & (ALPHA_MASK | RIG_MASK)) | low | high
 }
 
 pub(crate) fn with_alpha(tag: u32, alpha: f32) -> u32 {
@@ -228,14 +225,11 @@ pub(crate) fn apply_model_visibility(
     }
 }
 
-/// The render layer a left-out placement's batches go to, which no camera draws: they stay visible,
-/// so they go on animating as if seen.
-const LEFT_OUT_LAYER: usize = 30;
+const UNDRAWN_LAYER: usize = 30;
 
 #[derive(Component)]
 pub(crate) struct LeftOutPart;
 
-/// Moves the batches of the placements [`LeftOut`] names out of the world camera's layer, and back.
 pub(crate) fn leave_out(
     mut commands: Commands<'_, '_>,
     left_out: Res<'_, LeftOut>,
@@ -253,7 +247,7 @@ pub(crate) fn leave_out(
         if wanted && !out {
             commands
                 .entity(part)
-                .insert((LeftOutPart, RenderLayers::layer(LEFT_OUT_LAYER)));
+                .insert((LeftOutPart, RenderLayers::layer(UNDRAWN_LAYER)));
         } else if out && !wanted {
             commands
                 .entity(part)
@@ -280,8 +274,9 @@ mod tests {
     #[test]
     fn a_sight_twin_keeps_its_batchs_fade_and_rig_and_carries_its_placements_index() {
         let batch = INTERIOR_FOG_BIT | 0x0015_0000 | (6660 << PROBE_SHIFT) | alpha_bits(0.5);
+        assert_eq!(SIGHT_INDICES, 1 << 15);
         for index in [0, 1, 2, 8191, 8192, SIGHT_INDICES - 1] {
-            let twin = with_sight_index(batch, index);
+            let twin = sight_tag(batch, index);
             assert_eq!(
                 twin & (ALPHA_MASK | RIG_MASK),
                 batch & (ALPHA_MASK | RIG_MASK)
@@ -289,6 +284,44 @@ mod tests {
             let read = ((twin >> PROBE_SHIFT) & 0x1fff) | ((twin >> 30) << 13);
             assert_eq!(read, index, "as the shader reads it back");
         }
+    }
+
+    #[test]
+    fn a_left_out_placement_leaves_the_world_cameras_layer_and_keeps_its_visibility() {
+        use std::sync::Arc;
+
+        use crate::sight::{Meetable, Seen};
+
+        let mut app = App::new();
+        app.init_resource::<LeftOut>()
+            .add_systems(Update, leave_out);
+        let part = app
+            .world_mut()
+            .spawn((
+                Meetable {
+                    geometry: Arc::new(model::RenderSubmesh::default()),
+                    seen: Seen::Doodad {
+                        file: Arc::from("world/x.m2"),
+                        unique_id: 7,
+                    },
+                },
+                Visibility::Inherited,
+            ))
+            .id();
+        let layers = |app: &App| app.world().get::<RenderLayers>(part).cloned();
+        app.update();
+        assert_eq!(layers(&app), None);
+        app.world_mut().resource_mut::<LeftOut>().0.insert(7);
+        app.update();
+        assert_eq!(layers(&app), Some(RenderLayers::layer(UNDRAWN_LAYER)));
+        assert_eq!(
+            app.world().get::<Visibility>(part),
+            Some(&Visibility::Inherited),
+            "still drawn to the world's own systems, so it goes on animating"
+        );
+        app.world_mut().resource_mut::<LeftOut>().0.clear();
+        app.update();
+        assert_eq!(layers(&app), None);
     }
 
     #[test]

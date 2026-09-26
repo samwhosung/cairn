@@ -7,10 +7,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, Buffer, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::shader::ShaderRef;
+use bevy::shader::{ShaderDefVal, ShaderRef};
 
 use crate::adt::AdtTile;
 use crate::draw_order::OrderedMaterialPlugin;
+use crate::sight::frame::SIGHT_GROUND;
 
 pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 
@@ -25,11 +26,11 @@ pub struct TerrainExtension {
     pub alpha_array: Handle<Image>,
     #[texture(110, dimension = "2d_array", visibility(fragment))]
     pub shadow_array: Handle<Image>,
-    /// `x` how many times a ground layer repeats across a chunk; `w` 1 for a sight frame's ground.
     #[uniform(106)]
     pub params: Vec4,
     #[storage(90, read_only, buffer)]
     pub light: Buffer,
+    pub sight: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,9 +40,7 @@ pub struct TerrainKey {
 
 impl From<&TerrainExtension> for TerrainKey {
     fn from(e: &TerrainExtension) -> Self {
-        Self {
-            sight: e.params.w > 0.5,
-        }
+        Self { sight: e.sight }
     }
 }
 
@@ -64,6 +63,8 @@ impl MaterialExtension for TerrainExtension {
             && let Some(fragment) = descriptor.fragment.as_mut()
         {
             fragment.shader_defs.push("WOW_SIGHT".into());
+            let ground = ShaderDefVal::UInt("WOW_SIGHT_GROUND".into(), SIGHT_GROUND);
+            fragment.shader_defs.push(ground);
         }
         Ok(())
     }
@@ -78,10 +79,9 @@ impl Plugin for TerrainMaterialPlugin {
     }
 }
 
-/// A tile's ground as a sight frame draws it, where the tile draws it.
 pub(crate) fn sight_twin_of(drawn: &TerrainMaterial) -> TerrainMaterial {
     let mut sight = drawn.clone();
-    sight.extension.params.w = 1.0;
+    sight.extension.sight = true;
     sight
 }
 
@@ -101,6 +101,7 @@ pub(crate) fn terrain_material(tile: &AdtTile, light: &Buffer) -> TerrainMateria
             shadow_array: tile.shadow_array.clone(),
             params: Vec4::new(terrain::LAYER_REPEATS_PER_CHUNK, 0.0, 0.0, 0.0),
             light: light.clone(),
+            sight: false,
         },
     }
 }

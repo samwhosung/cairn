@@ -371,7 +371,6 @@ fn triangle_hit(d: Vec3, from_origin: [Vec3; 3], two_sided: bool) -> Option<Hit>
     })
 }
 
-/// How far `p` lies outside the box, 0 within it.
 fn box_gap(p: Vec3, lo: Vec3, hi: Vec3) -> f32 {
     (lo - p).max(p - hi).max(Vec3::ZERO).length()
 }

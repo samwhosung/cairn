@@ -17,11 +17,11 @@ use crate::LeftOut;
 use crate::model_material::{ModelMaterial, sight_twin_of};
 use crate::terrain::{self, TerrainMaterial};
 use crate::view::{FOV_Y, NEARCLIP, PROJECTION_FAR};
-use crate::visibility::{SIGHT_INDICES, with_sight_index};
+use crate::visibility::{SIGHT_INDICES, sight_tag};
 
 /// The render layer the sight camera and the batches' sight twins share.
 pub const SIGHT_LAYER: usize = 31;
-const GROUND: u32 = 1;
+pub(crate) const SIGHT_GROUND: u32 = 1;
 const FIRST_PLACEMENT: u32 = 2;
 
 /// Keeps a sight twin beside every model batch and every terrain tile, which follows its batch
@@ -66,8 +66,9 @@ pub enum Shown<'a> {
 pub struct SightIndex(Vec<Placed>);
 
 impl SightIndex {
-    /// Placements by index, the first after the ground's.
-    pub fn of(placements: Vec<Placed>) -> Self {
+    /// Placements by index in the order of their unique ids, the first after the ground's.
+    pub fn of(mut placements: Vec<Placed>) -> Self {
+        placements.sort_by_key(|p| p.unique_id);
         Self(placements)
     }
 
@@ -77,12 +78,12 @@ impl SightIndex {
             .0
             .binary_search_by_key(&unique_id, |p| p.unique_id)
             .ok()?;
-        Some(colour(FIRST_PLACEMENT + at as u32))
+        Some(sight_colour(FIRST_PLACEMENT + at as u32))
     }
 
     /// The sRGB bytes a sight frame gives the ground.
     pub fn ground_colour() -> [u8; 3] {
-        colour(GROUND)
+        sight_colour(SIGHT_GROUND)
     }
 
     /// What the pixel of a sight frame whose sRGB bytes are `rgb` shows.
@@ -90,7 +91,7 @@ impl SightIndex {
         let [a, b, c] = rgb.map(|byte| u32::from(byte) / 4);
         match a | b << 6 | c << 12 {
             0 => Some(Shown::Nothing),
-            GROUND => Some(Shown::Ground),
+            SIGHT_GROUND => Some(Shown::Ground),
             index => self
                 .0
                 .get((index - FIRST_PLACEMENT) as usize)
@@ -99,8 +100,7 @@ impl SightIndex {
     }
 }
 
-/// An index's bytes as the shader writes them: 6, 6 and 3 bits, each byte 4n + 2.
-fn colour(index: u32) -> [u8; 3] {
+fn sight_colour(index: u32) -> [u8; 3] {
     [index & 63, (index >> 6) & 63, index >> 12].map(|code| (code * 4 + 2) as u8)
 }
 
@@ -191,7 +191,6 @@ fn twin_new_batches(
 }
 
 impl SightMaterials {
-    /// The sight material of a batch's material, made again when the batch's has moved on.
     fn twin(
         &mut self,
         materials: &mut Assets<ModelMaterial>,
@@ -281,7 +280,7 @@ fn follow_batches(
         if mesh.0 != drawn_mesh.0 {
             mesh.0 = drawn_mesh.0.clone();
         }
-        let sighted = MeshTag(with_sight_index(drawn_tag.0, i));
+        let sighted = MeshTag(sight_tag(drawn_tag.0, i));
         if *tag != sighted {
             *tag = sighted;
         }
@@ -331,20 +330,21 @@ mod tests {
         }
     }
 
-    /// The sRGB bytes the shader writes for an index, one off either way as a rounding may leave
-    /// them.
-    fn written(index: u32, off: i32) -> [u8; 3] {
-        colour(index).map(|byte| (i32::from(byte) + off) as u8)
+    fn rounded_by(off: i32, index: u32) -> [u8; 3] {
+        sight_colour(index).map(|byte| (i32::from(byte) + off) as u8)
     }
 
     #[test]
     fn a_pixel_names_the_sky_the_ground_or_its_placement_whatever_a_rounding_did() {
         let index = SightIndex::of((0..5000).map(placed).collect());
         for off in [-1, 0, 1] {
-            assert_eq!(index.shown(written(0, off)), Some(Shown::Nothing));
-            assert_eq!(index.shown(written(GROUND, off)), Some(Shown::Ground));
+            assert_eq!(index.shown(rounded_by(off, 0)), Some(Shown::Nothing));
+            assert_eq!(
+                index.shown(rounded_by(off, SIGHT_GROUND)),
+                Some(Shown::Ground)
+            );
             for i in [0u32, 1, 63, 64, 4095, 4096, 4999] {
-                let at = written(i + FIRST_PLACEMENT, off);
+                let at = rounded_by(off, i + FIRST_PLACEMENT);
                 assert_eq!(
                     index.shown(at),
                     Some(Shown::Placed(&placed(i))),
@@ -352,8 +352,11 @@ mod tests {
                 );
             }
         }
-        assert_eq!(index.shown(written(5000 + FIRST_PLACEMENT, 0)), None);
-        assert_eq!(index.colour(4096), Some(colour(4096 + FIRST_PLACEMENT)));
+        assert_eq!(index.shown(rounded_by(0, 5000 + FIRST_PLACEMENT)), None);
+        assert_eq!(
+            index.colour(4096),
+            Some(sight_colour(4096 + FIRST_PLACEMENT))
+        );
         assert_eq!(index.colour(5000), None);
     }
 }

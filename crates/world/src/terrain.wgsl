@@ -9,6 +9,9 @@
     view_transformations::position_world_to_clip,
     mesh_view_bindings::view,
 }
+#ifdef WOW_SIGHT
+#import world::sight::sight_colour
+#endif
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var layer_array: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var alpha_array: texture_2d_array<f32>;
@@ -187,8 +190,7 @@ fn fragment(in: TerrainVsOut) -> @location(0) vec4<f32> {
     }
 
 #ifdef WOW_SIGHT
-    // The sRGB bytes 6, 2 and 2 the model shader writes for the ground's index.
-    tuned = vec3<f32>(6.0, 2.0, 2.0) / (255.0 * 12.92);
+    tuned = sight_colour(#{WOW_SIGHT_GROUND}u);
 #endif
     return vec4<f32>(tuned, 1.0);
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU16;
 
-use bevy::asset::{AssetId, UntypedAssetId, embedded_asset};
+use bevy::asset::{AssetId, UntypedAssetId, embedded_asset, load_embedded_asset};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
@@ -214,10 +214,18 @@ impl MaterialExtension for ModelExtension {
 
 pub(crate) struct ModelMaterialPlugin;
 
+/// The import both the model's and the terrain's shaders name for a sight frame: named in a
+/// shader, an import must be loaded for any of its pipelines to build.
+#[derive(Resource)]
+struct SightShader(#[allow(dead_code)] Handle<Shader>);
+
 impl Plugin for ModelMaterialPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "model.wgsl");
+        embedded_asset!(app, "sight.wgsl");
+        let sight = load_embedded_asset!(app, "sight.wgsl");
         app.add_plugins(OrderedMaterialPlugin::<ModelMaterial>::default())
+            .insert_resource(SightShader(sight))
             .init_resource::<ModelMaterials>();
     }
 }
@@ -435,8 +443,6 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
     }
 }
 
-/// The material drawing a batch as it covers the frame, in the colour of the placement its tag
-/// names, depth written whatever it blends.
 pub(crate) fn sight_twin_of(drawn: &ModelMaterial) -> ModelMaterial {
     let mut sight = drawn.clone();
     sight.extension.clutter_fade.z = f32::from(sight.extension.clutter_fade.z as u16 | SIGHT);
