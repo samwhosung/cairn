@@ -20,13 +20,15 @@ const INK: [u8; 3] = [232, 232, 232];
 const DIM: [u8; 3] = [170, 176, 184];
 const NUMBER_SCALE: u32 = 2;
 
-pub(crate) struct Cell {
-    pub(crate) picture: PathBuf,
-    pub(crate) name: String,
-    pub(crate) facts: String,
+/// A picture on a page, numbered, with a name under it and a line of facts under that.
+pub struct Cell {
+    pub picture: PathBuf,
+    pub name: String,
+    pub facts: String,
 }
 
-pub(crate) fn draw(title: &str, first: usize, cells: &[Cell], out: &Path) -> Result<(), String> {
+/// Draws `cells` five to a row under `title`, numbered from `first`, into the PNG `out`.
+pub fn draw(title: &str, first: usize, cells: &[Cell], out: &Path) -> Result<(), String> {
     let width = GUTTER + COLUMNS * (CELL + GUTTER);
     let rows = (cells.len() as u32).div_ceil(COLUMNS).max(1);
     let height = TITLE + rows * (CELL + LABEL + GUTTER);

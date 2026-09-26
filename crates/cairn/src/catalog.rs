@@ -1,4 +1,5 @@
 mod studio;
+mod what_fits;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,9 @@ pub struct Order {
 }
 
 pub fn main(argv: &[String]) -> AppExit {
+    if argv.first().is_some_and(|arg| arg == "fits") {
+        return what_fits::main(&argv[1..]);
+    }
     let order = match parse(argv.iter().cloned()) {
         Ok(order) => order,
         Err(e) => {
@@ -89,6 +93,11 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
         sounds: SoundTables::load(install)?,
     };
     let text = survey::write(&inv, chain, &order.dir, &lookups)?;
+    let counting = Instant::now();
+    let tables = fits::write(&order.dir.join(what_fits::TABLES), || {
+        fits::Tables::of(&inv)
+    })?;
+    let counted_in = counting.elapsed();
     let missing = survey::pictures_missing(&inv, &order.dir);
     let to_draw: Vec<Sitter> = missing
         .iter()
@@ -117,6 +126,7 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
     let mut said = format!(
         "cairn: {} models ({buildings} buildings), {} ground textures and {} zones read in {:.1} s\n\
          cairn: text, swatches and skies: wrote {}, kept {}\n\
+         cairn: what fits where: wrote {tables} of {} tables in {:.1} s\n\
          cairn: drew {} pictures in {:.1} s; {still} still to draw",
         inv.models.len(),
         inv.grounds.len(),
@@ -124,6 +134,8 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
         read_in.as_secs_f32(),
         text.wrote,
         text.kept,
+        fits::FILES.len(),
+        counted_in.as_secs_f32(),
         drawn.len(),
         drawn_in.as_secs_f32(),
     );

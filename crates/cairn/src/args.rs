@@ -57,7 +57,21 @@ usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no
          each, a file of detail and a picture of each thing, each zone's sky, and pages of
          pictures by kind and by zone; DIR/README.txt says how to use it. A run writes only
          what is missing, drawing the models on the GPU and then the pages; --draw N draws
-         at most N models and leaves the pages to a run without it
+         at most N models and leaves the pages to a run without it. It also writes into
+         DIR/fits what the maps place together, which the next command ranks by
+       cairn catalog fits [DIR] --at X,Y [--map MAP | --zone DIR [--borrows ZONE|none]]
+                          [--kind KIND] [--top N] [--sheet FILE.png]
+         list the models that fit the spot at world X,Y, the first N (20 by default), of one
+         KIND (tree, shrub, rock, fence, prop or building) or of every kind, each with why:
+         how often the spot's zone places it, the neighbour within 8 yd (20 when none is
+         nearer) it stands beside most often and how far from it, and how much more often it
+         stands on the spot's ground and slope. A zone of its own counts what it has placed,
+         and starts from the zone it borrows; with --borrows none, it counts only what it has
+         placed. --sheet draws the list's pictures from the catalog in DIR
+       cairn catalog fits [DIR] --replay FILE --borrows ZONE|none
+         replay a zone's history, one change a line (`place ID X,Y PATH`, `move ID X,Y`,
+         `remove ID ...`), ranking every model before each placement from what the zone held
+         then, and say where each list order put the model placed
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's

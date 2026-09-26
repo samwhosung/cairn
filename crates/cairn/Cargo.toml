@@ -15,6 +15,7 @@ avian3d.workspace = true
 bevy.workspace = true
 catalog = { path = "../catalog" }
 dbc = { path = "../dbc" }
+fits = { path = "../fits" }
 light = { path = "../light" }
 protocol = { path = "../protocol" }
 server = { path = "../server" }

@@ -17,7 +17,7 @@ use atlas::Doodads;
 use mpq::Chain;
 
 pub use gather::model_bounds as bounds;
-pub use pages::PICTURE_SIDE;
+pub use pages::{Cell, PICTURE_SIDE, draw as draw_page};
 pub use picture::{save_averaged, write_atomically};
 pub use scan::{Underfoot, underfoot};
 pub use text::ZoneSound;

@@ -369,6 +369,9 @@ What is here
                kind/   models by kind, most placed first: tree, shrub, rock, fence, prop, building
                ground/ ground textures by kind, most painted first
                zone/   a zone's models by kind and its ground, most first
+  fits/        what the maps place together, which `cairn catalog fits` ranks models by: each
+               zone's palette, what stands on each ground and slope, and which models stand
+               within 8 and 20 yd of which, how often and how far apart
 
 Searching: every .tsv is tab-separated, a header first, a row a thing. A row names every zone its
 thing is placed in, and zone names hold words too (Silverpine Forest holds pine), so match the
