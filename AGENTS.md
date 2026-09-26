@@ -53,7 +53,8 @@ a check fails.
 - No game data and no binary files in the tree, untracked files included.
 - Comments say only what the code can't, briefly. No block comments. No comment points at a
   document: the code has to stand on its own. No file refers to a decision record, a private repo
-  or a path on someone's machine.
+  or a path on someone's machine. The private names it refuses are listed outside the repo, in
+  `~/.config/cairn/private-names` or the file `$CAIRN_PRIVATE_NAMES` names.
 - Every crate root opens with a `//!` line saying what the crate is for, and every crate has a
   `description`; the crate list in README.md is generated from them (`cargo xtask map`).
 - Rust files stay under 800 lines.

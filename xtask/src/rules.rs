@@ -1,6 +1,6 @@
 //! The repo's own rules: what the standard linters don't check.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
@@ -42,10 +42,6 @@ static REFS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
             "a numbered reference in parentheses",
         ),
         (r"\bQ\d{1,3}\b", "a lab question id"),
-        (
-            r"(?i)\b(?:drydock|cairn-ops|benilla-ops|wow-5875-re|wow-re)\b",
-            "a reference to a private repo",
-        ),
         (r"/Users/|~/dev\b", "a path on a maintainer's machine"),
         (r"\b[WS]\d{1,2}[a-z]?\b", "a lab milestone name"),
     ]
@@ -53,6 +49,29 @@ static REFS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     .map(|(p, why)| (Regex::new(p).expect("valid pattern"), why))
     .collect()
 });
+
+static PRIVATE_NAMES: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    let named = std::env::var_os("CAIRN_PRIVATE_NAMES").map(PathBuf::from);
+    let path = named.clone().or_else(|| {
+        std::env::var_os("HOME").map(|home| Path::new(&home).join(".config/cairn/private-names"))
+    })?;
+    match std::fs::read_to_string(&path) {
+        Ok(list) => names_pattern(&list),
+        Err(e) if named.is_some() => panic!("CAIRN_PRIVATE_NAMES: {}: {e}", path.display()),
+        Err(_) => None,
+    }
+});
+
+fn names_pattern(list: &str) -> Option<Regex> {
+    let names: Vec<String> = list
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .filter(|name| !name.is_empty())
+        .map(regex::escape)
+        .collect();
+    (!names.is_empty())
+        .then(|| Regex::new(&format!(r"(?i)\b(?:{})\b", names.join("|"))).expect("escaped names"))
+}
 
 static CONVENTIONAL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -131,7 +150,8 @@ fn assets(file: &str, bytes: &[u8], out: &mut Vec<String>) -> bool {
 }
 
 fn refs(file: &str, line: usize, text: &str, out: &mut Vec<String>) {
-    for (re, why) in REFS.iter() {
+    let private = PRIVATE_NAMES.iter().map(|re| (re, "a private name"));
+    for (re, why) in REFS.iter().map(|(re, why)| (re, *why)).chain(private) {
         if let Some(m) = re.find(text) {
             out.push(format!(
                 "{file}:{line}: `{}` is {why}; say it in the code or drop it",
@@ -400,14 +420,18 @@ mod tests {
     }
 
     #[test]
-    fn private_names_paths_and_milestones_fail() {
-        for comment in [
-            "// cairn-ops",
-            "// /Users/me/x",
-            "// ~/dev/x",
-            "// W6's",
-            "// S1b",
-        ] {
+    fn a_listed_name_is_found_whole_in_any_case() {
+        let re = names_pattern("# a note\nsecret-lab\n\nother # and a note\n").expect("names");
+        assert!(re.is_match("see Secret-Lab here"));
+        assert!(re.is_match("other"));
+        assert!(!re.is_match("secret-labs"));
+        assert!(!re.is_match("a note"));
+        assert!(names_pattern("# only a note\n\n").is_none());
+    }
+
+    #[test]
+    fn paths_and_milestones_fail() {
+        for comment in ["// /Users/me/x", "// ~/dev/x", "// W6's", "// S1b"] {
             assert_eq!(
                 rust_problems(&format!("let a = 1; {comment}\n")).len(),
                 1,
