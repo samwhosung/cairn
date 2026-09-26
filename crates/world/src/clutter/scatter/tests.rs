@@ -8,8 +8,6 @@ const CELL: f32 = CHUNK_SIZE / 8.0;
 const GRASS: u32 = 7;
 const BARE: u32 = 8;
 
-/// A chunk of `tile` at `index`, its ground rising `slope` yards a yard east, with one layer of
-/// ground effect `effect`.
 fn chunk(tile: (u32, u32), index: (u32, u32), slope: f32, effect: u32) -> ChunkMesh {
     let x0 = (32.0 - tile.1 as f32) * terrain::TILE_SIZE - index.1 as f32 * CHUNK_SIZE;
     let y0 = (32.0 - tile.0 as f32) * terrain::TILE_SIZE - index.0 as f32 * CHUNK_SIZE;

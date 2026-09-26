@@ -10,11 +10,11 @@ use super::*;
 #[test]
 fn the_corner_reaches_farther_on_a_wider_view() {
     let fov = PerspectiveProjection::default().fov;
-    let wide = corner_reach(fov, 16.0 / 9.0);
-    let ultrawide = corner_reach(fov, 21.0 / 9.0);
+    let wide = corner_distance_per_depth(fov, 16.0 / 9.0);
+    let ultrawide = corner_distance_per_depth(fov, 21.0 / 9.0);
     assert!((wide - 1.309).abs() < 0.01, "16:9 reach {wide}");
     assert!((ultrawide - 1.451).abs() < 0.01, "21:9 reach {ultrawide}");
-    assert!((corner_reach(0.0, 0.0) - 1.0).abs() < 1e-6);
+    assert!((corner_distance_per_depth(0.0, 0.0) - 1.0).abs() < 1e-6);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn the_ground_test_never_drops_a_chunk_its_box_would_take() {
                 let wow = [cx + x as f32 * 7.0, cy + z as f32 * 7.0, y];
                 let eye = wow_to_bevy(wow);
                 let across = footprint_distance_squared(eye, &chunk);
-                let boxed = box_distance_squared(eye, bounds(&chunk));
+                let boxed = box_distance_squared(eye, clutter_box(&chunk));
                 assert!(across <= boxed + 1e-2, "{wow:?}: {across} over {boxed}");
             }
         }
@@ -110,8 +110,8 @@ fn a_batch_merges_once_for_every_tuft() {
             yaw,
             scale: 1.0,
         },
-        tint: SHADOWED,
-        ground: [0.0, 1.0, 0.0],
+        tint: SHADOWED_TINT,
+        ground_normal: [0.0, 1.0, 0.0],
     };
     let (mesh, aabb) = merged(&batch, &[tuft(0.0, 0.0), tuft(5.0, 1.0)]).expect("a mesh");
     assert_eq!(mesh.count_vertices(), 6);
@@ -126,7 +126,7 @@ fn a_batch_merges_once_for_every_tuft() {
     assert!(
         colors
             .iter()
-            .all(|c| c[..3] == [SHADOWED; 3] && c[3] == 1.0)
+            .all(|c| c[..3] == [SHADOWED_TINT; 3] && c[3] == 1.0)
     );
     assert!(aabb.min().y >= 9.99 && aabb.max().y <= 11.01);
     assert!(merged(&RenderSubmesh::default(), &[tuft(0.0, 0.0)]).is_none());
@@ -144,7 +144,7 @@ fn goldshire_scatters_models_and_textures_the_install_holds() {
     let tufts: Vec<Tuft> = tile
         .chunks
         .iter()
-        .flat_map(|c| scatter::scatter(c, (31, 49), &effects, CELLS_PER_CHUNK))
+        .flat_map(|c| scatter::scatter(c, (31, 49), &effects, CELL_DRAWS_PER_CHUNK))
         .collect();
     assert!(tufts.len() > 10_000, "{} tufts", tufts.len());
     let models: BTreeSet<&str> = tufts.iter().map(|t| &*t.model).collect();

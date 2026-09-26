@@ -94,7 +94,7 @@ fn not_found(path: &Path) -> AssetReaderError {
 }
 
 /// Whether a texture repeats along u and along v; an axis that does not repeat clamps to its edge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Repeat {
     pub u: bool,
     pub v: bool,

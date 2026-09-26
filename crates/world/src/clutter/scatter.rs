@@ -3,16 +3,13 @@ use std::f32::consts::PI;
 use std::sync::Arc;
 
 use mpq::Chain;
-use terrain::ChunkMesh;
+use terrain::{ChunkMesh, VERTICES, cell_vertices, is_hole};
 
 use crate::dbc_table::{read_table, str_at, u32_at};
 
 /// A doodad names `ElwGra01.mdl`; the file is that stem's `.m2` here, left out of the listfiles.
 const DETAIL_DIR: &str = "World\\NoDXT\\Detail\\";
 const NO_DOODAD: u32 = u32::MAX;
-const VERTICES: usize = 145;
-const ROW_STRIDE: usize = 17;
-/// A cell's density when its effect gives none.
 const DEFAULT_DENSITY: u32 = 8;
 
 /// The permutation of 0..=255 the client's ground-clutter randomizer mixes.
@@ -36,20 +33,17 @@ const NOISE: [u8; 256] = [
     0x96, 0xd1, 0x64, 0x26, 0xd7, 0x45, 0xcc, 0x4f, 0xc8, 0xb0, 0xe9, 0xb5, 0x00, 0xd6, 0x31, 0xea,
 ];
 
-/// A `GroundEffectTexture` row that places something: its four slots' models, in slot order and
-/// repeats kept, since the pattern weights them, and how many doodads a cell takes.
 struct GroundEffect {
     doodads: [Option<Arc<str>>; 4],
     density: u32,
 }
 
-/// The ground effects by `GroundEffectTexture` id, read from the install's two tables.
 pub(crate) struct Effects(HashMap<u32, GroundEffect>);
 
 impl Effects {
-    /// A slot names a `GroundEffectDoodad` row by its second column, not by its id.
     pub(crate) fn read(chain: &Chain) -> Result<Self, String> {
         let rs = read_table(chain, "DBFilesClient\\GroundEffectDoodad.dbc", 3, &[2])?;
+        // A slot names a `GroundEffectDoodad` row by its second column, not by its id.
         let models: HashMap<u32, Arc<str>> = rs
             .records()
             .iter()
@@ -68,7 +62,7 @@ impl Effects {
                     .flatten()
             });
             if doodads.iter().any(Option::is_some) {
-                let density = u32_at(r, 5).unwrap_or(0);
+                let density = u32_at(r, 5).filter(|&d| d != 0).unwrap_or(DEFAULT_DENSITY);
                 effects.insert(id, GroundEffect { doodads, density });
             }
         }
@@ -82,48 +76,46 @@ fn detail_model(name: &str) -> Option<Arc<str>> {
     (!name.is_empty()).then(|| format!("{DETAIL_DIR}{stem}.m2").into())
 }
 
-/// One doodad of ground clutter, standing upright on the ground.
 pub(crate) struct Tuft {
     pub(crate) model: Arc<str>,
-    /// World coordinates.
+    /// World coordinates: x north, y west, z up.
     pub(crate) position: [f32; 3],
-    /// Radians about the up axis.
     pub(crate) yaw: f32,
     pub(crate) scale: f32,
 }
 
-/// The client's ground clutter on `chunk` of `tile`: `cells` draws of a cell, repeats kept, then
-/// in each drawn cell its density of doodads from the effect of the cell's predominant layer, all
-/// from one stream seeded by where the chunk is on the map. Holes and the cells marked bare get
-/// none.
+/// A chunk's column and row among all of its map's chunks.
+pub(crate) fn map_chunk((tile_x, tile_y): (u32, u32), chunk: &ChunkMesh) -> (u32, u32) {
+    (tile_x * 16 + chunk.index_x, tile_y * 16 + chunk.index_y)
+}
+
+/// The tufts the client places on `chunk` of `tile`.
 #[allow(
     clippy::manual_midpoint,
     reason = "the client's own sum-then-halve rounding"
 )]
 pub(crate) fn scatter(
     chunk: &ChunkMesh,
-    (tile_x, tile_y): (u32, u32),
+    tile: (u32, u32),
     effects: &Effects,
-    cells: u32,
+    cell_draws: u32,
 ) -> Vec<Tuft> {
     if chunk.positions.len() < VERTICES {
         return Vec::new();
     }
-    let global_x = tile_x * 16 + chunk.index_x;
-    let global_y = tile_y * 16 + chunk.index_y;
-    let mut rng = Randomizer::new((global_y << 16) | (global_x & 0xFFFF));
-    let drawn: Vec<(usize, usize)> = (0..cells)
+    let (x, y) = map_chunk(tile, chunk);
+    let mut rng = Randomizer::new((y << 16) | (x & 0xFFFF));
+    let drawn: Vec<(u32, u32)> = (0..cell_draws)
         .map(|_| {
-            let col = (rng.next() & 7) as usize;
-            let row = (rng.next() & 7) as usize;
+            let col = rng.next() & 7;
+            let row = rng.next() & 7;
             (row, col)
         })
         .collect();
     let mut out = Vec::new();
     for (list_index, &(row, col)) in drawn.iter().enumerate() {
-        let k = row * 8 + col;
-        let hole = chunk.holes & (1 << ((row >> 1) * 4 + (col >> 1))) != 0;
-        if chunk.no_effect_doodad[k] || hole {
+        let k = (row * 8 + col) as usize;
+        if chunk.no_effect_doodad[k] || is_hole(chunk.holes, row, col) {
             continue;
         }
         let Some(effect) = chunk
@@ -133,21 +125,8 @@ pub(crate) fn scatter(
         else {
             continue;
         };
-        let density = if effect.density == 0 {
-            DEFAULT_DENSITY
-        } else {
-            effect.density
-        };
-        let tl = row * ROW_STRIDE + col;
-        let at = |i: usize| chunk.positions[i];
-        let cell = [
-            at(tl),
-            at(tl + 1),
-            at(tl + ROW_STRIDE),
-            at(tl + ROW_STRIDE + 1),
-            at(tl + 9),
-        ];
-        for n in 0..density as usize {
+        let cell = cell_vertices(row, col).map(|i| chunk.positions[i as usize]);
+        for n in 0..effect.density as usize {
             let (rx, ry) = (rng.signed_unit(), rng.signed_unit());
             let Some(model) = &effect.doodads[(n + list_index) & 3] else {
                 continue;
@@ -165,19 +144,23 @@ pub(crate) fn scatter(
     out
 }
 
-/// The point `(fx, fy)` of a cell, east and south in `0..=1`, on the four triangles the ground
-/// draws about the cell's centre: `[tl, tr, bl, br, centre]`.
-fn fan_point(fx: f32, fy: f32, [tl, tr, bl, br, ctr]: [[f32; 3]; 5]) -> [f32; 3] {
-    let (u, v, w, a, b) = if fx + fy <= 1.0 {
-        if fy <= fx {
-            (2.0 * fy, 1.0 - fx - fy, fx - fy, tl, tr)
+fn fan_point(east: f32, south: f32, [tl, tr, bl, br, ctr]: [[f32; 3]; 5]) -> [f32; 3] {
+    let (u, v, w, a, b) = if east + south <= 1.0 {
+        if south <= east {
+            (2.0 * south, 1.0 - east - south, east - south, tl, tr)
         } else {
-            (2.0 * fx, fy - fx, 1.0 - fx - fy, bl, tl)
+            (2.0 * east, south - east, 1.0 - east - south, bl, tl)
         }
-    } else if fy >= fx {
-        (2.0 * (1.0 - fy), fx + fy - 1.0, fy - fx, br, bl)
+    } else if south >= east {
+        (
+            2.0 * (1.0 - south),
+            east + south - 1.0,
+            south - east,
+            br,
+            bl,
+        )
     } else {
-        (2.0 * (1.0 - fx), fx - fy, fx + fy - 1.0, tr, br)
+        (2.0 * (1.0 - east), east - south, east + south - 1.0, tr, br)
     };
     std::array::from_fn(|i| u * ctr[i] + v * a[i] + w * b[i])
 }
@@ -198,7 +181,8 @@ impl Randomizer {
     }
 
     fn next(&mut self) -> u32 {
-        // Below zero, a lane's index wraps by the lane's own constant, never past 251.
+        // The client wraps a lane below zero by the lane's own constant, not 256, so no lane
+        // passes 251 and its four noise bytes stay in the table.
         let lane = |byte: u32, sub: u32, wrap: u32| {
             let b = byte & 0xFF;
             if b < sub { b + wrap - sub } else { b - sub }
@@ -215,7 +199,6 @@ impl Randomizer {
         self.source
     }
 
-    /// The draw's mantissa as a float in `(0, 1]` when its top bit is set, else in `[-1, 0)`.
     fn signed_unit(&mut self) -> f32 {
         let u = self.next();
         let f = f32::from_bits((u & 0x007F_FFFF) | 0x3F80_0000);

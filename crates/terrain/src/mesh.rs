@@ -15,7 +15,8 @@ pub(crate) const CELL_SIZE: f32 = CHUNK_SIZE / 8.0;
 /// How many times a layer texture repeats across one chunk: once per cell.
 pub const LAYER_REPEATS_PER_CHUNK: f32 = 8.0;
 
-pub(crate) const VERTICES: usize = 145;
+/// Entries in a chunk's vertex arrays: the 9×9 outer grid and the 8×8 cell centres.
+pub const VERTICES: usize = 145;
 const ROW_STRIDE: u32 = 17;
 const MAP_CENTER: f32 = 32.0 * TILE_SIZE;
 const MAP_CENTER_F64: f64 = 32.0 * 1600.0 / 3.0;
@@ -293,12 +294,13 @@ fn shadow_texels(mcsh: &McshChunk) -> Vec<u8> {
     out
 }
 
-pub(crate) fn is_hole(holes: u16, row: u32, col: u32) -> bool {
+/// Whether cell `(row, col)` of a chunk with these hole bits is a hole.
+pub fn is_hole(holes: u16, row: u32, col: u32) -> bool {
     holes & (1u16 << ((row >> 1) * 4 + (col >> 1))) != 0
 }
 
 /// Cell `(row, col)`'s corners and centre: `[tl, tr, bl, br, ctr]`.
-pub(crate) fn cell_vertices(row: u32, col: u32) -> [u32; 5] {
+pub fn cell_vertices(row: u32, col: u32) -> [u32; 5] {
     let tl = row * ROW_STRIDE + col;
     let bl = tl + ROW_STRIDE;
     [tl, tl + 1, bl, bl + 1, row * ROW_STRIDE + 9 + col]

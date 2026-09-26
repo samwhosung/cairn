@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Buffer;
 use model::RenderSubmesh;
 use mpq::Chain;
-use terrain::{CHUNK_SIZE, ChunkMesh, TILE_SIZE};
+use terrain::{CHUNK_SIZE, ChunkMesh, TILE_SIZE, VERTICES};
 
 use crate::adt::AdtTile;
 use crate::coords::{bevy_to_wow, wow_to_bevy};
@@ -26,26 +26,18 @@ use crate::stream::Streamer;
 use crate::texture::blp_image;
 use crate::view::WorldCamera;
 use crate::{Install, Residency};
-use scatter::{Effects, Tuft};
+use scatter::{Effects, Tuft, map_chunk};
 
-/// Cells a chunk draws, with repeats: the client's options at Medium, the nearest of their stops
-/// to the density a fresh install detects that is no sparser.
-const CELLS_PER_CHUNK: u32 = 32;
+/// Cell draws per chunk, repeats included: the client's ground clutter at its options' Medium.
+const CELL_DRAWS_PER_CHUNK: u32 = 32;
 /// The view depth the client's ground clutter has faded out by.
 const FADE_FAR: f32 = 70.0;
-/// Yards past the fade's reach where a chunk is built, so none of it shows before it is.
 const BUILD_MARGIN: f32 = 8.0;
-/// Yards between building and tearing down, so a chunk on the edge does not flip.
 const HYSTERESIS: f32 = 6.0;
-/// How far a tuft reaches above the ground.
-const TUFT_HEIGHT: f32 = 3.0;
-/// Most chunks built in a frame, so arriving in a dense place spreads over a few.
-const BUILDS_PER_FRAME: usize = 8;
-/// A tuft in the ground's baked shadow is this grey.
-const SHADOWED: f32 = 192.0 / 255.0;
-const VERTICES: usize = 145;
+const TALLEST_TUFT: f32 = 3.0;
+const MESHED_CHUNKS_PER_FRAME: usize = 8;
+const SHADOWED_TINT: f32 = 192.0 / 255.0;
 
-/// The ground effects; absent, and no clutter, when the install's tables do not read.
 #[derive(Resource)]
 pub(crate) struct GroundEffects(Effects);
 
@@ -56,13 +48,11 @@ pub(crate) fn load_effects(mut commands: Commands<'_, '_>, install: Res<'_, Inst
     }
 }
 
-/// The chunks whose clutter is built, by their place on the map, and what it is built from: each
-/// model and texture read once.
 #[derive(Resource, Default)]
 pub(crate) struct Clutter {
     built: BTreeMap<(u32, u32), Built>,
     models: HashMap<Arc<str>, Arc<[RenderSubmesh]>>,
-    textures: HashMap<(String, bool, bool), Option<Handle<Image>>>,
+    textures: HashMap<(String, Repeat), Option<Handle<Image>>>,
     materials: HashMap<Option<AssetId<Image>>, Handle<ModelMaterial>>,
 }
 
@@ -79,9 +69,6 @@ struct Wanted<'a> {
     bounds: (Vec3, Vec3),
 }
 
-/// Builds each chunk's clutter once its box comes within reach of the fade, nearest first, and
-/// tears it down past that, where the fade has left nothing. The reach is along the frustum's
-/// corner, since the fade is by view depth.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_clutter(
     mut commands: Commands<'_, '_>,
@@ -109,7 +96,7 @@ pub(crate) fn stream_clutter(
         Projection::Perspective(p) => p,
         _ => &fallback,
     };
-    let reach = FADE_FAR * corner_reach(view.fov, view.aspect_ratio);
+    let reach = FADE_FAR * corner_distance_per_depth(view.fov, view.aspect_ratio);
     let build = square(reach + BUILD_MARGIN);
     let drop = square(reach + BUILD_MARGIN + HYSTERESIS);
     let eye = camera.translation;
@@ -126,14 +113,14 @@ pub(crate) fn stream_clutter(
     let mut wanted = Vec::new();
     for (tile, handle) in streamer.arrived() {
         for chunk in adts.get(handle).into_iter().flat_map(|a| &a.chunks) {
-            let key = (tile.0 * 16 + chunk.index_x, tile.1 * 16 + chunk.index_y);
+            let key = map_chunk(tile, chunk);
             if chunk.positions.len() < VERTICES
                 || footprint_distance_squared(eye, chunk) > build
                 || clutter.built.contains_key(&key)
             {
                 continue;
             }
-            let bounds = bounds(chunk);
+            let bounds = clutter_box(chunk);
             let distance_squared = box_distance_squared(eye, bounds);
             if distance_squared <= build {
                 wanted.push(Wanted {
@@ -163,11 +150,11 @@ pub(crate) fn stream_clutter(
     };
     let (mut spent, mut left) = (0, 0);
     for w in wanted {
-        if spent == BUILDS_PER_FRAME {
+        if spent == MESHED_CHUNKS_PER_FRAME {
             left += 1;
             continue;
         }
-        let tufts = scatter::scatter(w.chunk, w.tile, &effects.0, CELLS_PER_CHUNK);
+        let tufts = scatter::scatter(w.chunk, w.tile, &effects.0, CELL_DRAWS_PER_CHUNK);
         let parts = builder.chunk(&mut clutter, w.chunk, tufts);
         spent += usize::from(!parts.is_empty());
         clutter.built.insert(
@@ -194,23 +181,21 @@ struct Builder<'a, 'w, 's> {
 struct Shaded {
     tuft: Tuft,
     tint: f32,
-    ground: [f32; 3],
+    ground_normal: [f32; 3],
 }
 
 impl Builder<'_, '_, '_> {
-    /// One mesh for each batch of each model, with every one of its tufts in it: the tuft's place,
-    /// the ground's shadow and the ground's normal baked into its vertices.
     fn chunk(&mut self, clutter: &mut Clutter, chunk: &ChunkMesh, tufts: Vec<Tuft>) -> Vec<Entity> {
         let mut by_model: BTreeMap<Arc<str>, Vec<Shaded>> = BTreeMap::new();
         for tuft in tufts {
             let shadowed = chunk.mcsh_shadowed_at(tuft.position) == Some(true);
-            let ground = wow_to_bevy(ground_normal(chunk, tuft.position)).to_array();
+            let ground_normal = wow_to_bevy(ground_normal(chunk, tuft.position)).to_array();
             by_model
                 .entry(tuft.model.clone())
                 .or_default()
                 .push(Shaded {
-                    tint: if shadowed { SHADOWED } else { 1.0 },
-                    ground,
+                    tint: if shadowed { SHADOWED_TINT } else { 1.0 },
+                    ground_normal,
                     tuft,
                 });
         }
@@ -263,7 +248,7 @@ impl Builder<'_, '_, '_> {
     ) -> Option<Handle<Image>> {
         clutter
             .textures
-            .entry((path.to_ascii_lowercase(), repeat.u, repeat.v))
+            .entry((path.to_ascii_lowercase(), repeat))
             .or_insert_with(|| {
                 let bytes = self.chain.read(path).ok()?;
                 let blp = blp::decode_native(&bytes).ok()?;
@@ -290,7 +275,7 @@ fn merged(batch: &RenderSubmesh, tufts: &[Shaded]) -> Option<(Mesh, Aabb)> {
         for (p, uv) in batch.positions.iter().zip(&batch.uvs) {
             positions.push((turn * (wow_to_bevy(*p) * s.tuft.scale) + origin).to_array());
             uvs.push(*uv);
-            normals.push(s.ground);
+            normals.push(s.ground_normal);
             colors.push([s.tint, s.tint, s.tint, 1.0]);
         }
         indices.extend(batch.indices.iter().map(|i| base + i));
@@ -308,8 +293,6 @@ fn merged(batch: &RenderSubmesh, tufts: &[Shaded]) -> Option<(Mesh, Aabb)> {
     Some((mesh, aabb))
 }
 
-/// The ground's normal under a point: the chunk's at the nearest vertex of its outer grid, or up
-/// when it has none.
 fn ground_normal(chunk: &ChunkMesh, at: [f32; 3]) -> [f32; 3] {
     let Some(nw) = chunk
         .positions
@@ -325,19 +308,17 @@ fn ground_normal(chunk: &ChunkMesh, at: [f32; 3]) -> [f32; 3] {
     chunk.normals[row * 17 + col]
 }
 
-/// The chunk's ground, raised by a tuft's height.
-fn bounds(chunk: &ChunkMesh) -> (Vec3, Vec3) {
+fn clutter_box(chunk: &ChunkMesh) -> (Vec3, Vec3) {
     let (mut lo, mut hi) = (Vec3::MAX, Vec3::MIN);
     for &p in &chunk.positions {
         let v = wow_to_bevy(p);
         lo = lo.min(v);
         hi = hi.max(v);
     }
-    hi.y += TUFT_HEIGHT;
+    hi.y += TALLEST_TUFT;
     (lo, hi)
 }
 
-/// The squared distance across the ground to the chunk's square, never more than to its box.
 fn footprint_distance_squared(eye: Vec3, chunk: &ChunkMesh) -> f32 {
     let [x, y, _] = bevy_to_wow(eye);
     let [x0, y0, _] = chunk.positions[0];
@@ -349,8 +330,7 @@ fn box_distance_squared(p: Vec3, (lo, hi): (Vec3, Vec3)) -> f32 {
     (lo - p).max(p - hi).max(Vec3::ZERO).length_squared()
 }
 
-/// How much farther than the view depth the frustum's corner reaches.
-fn corner_reach(fov_y: f32, aspect: f32) -> f32 {
+fn corner_distance_per_depth(fov_y: f32, aspect: f32) -> f32 {
     let tan_v = ops::tan(fov_y * 0.5);
     let tan_h = tan_v * aspect;
     (1.0 + tan_v * tan_v + tan_h * tan_h).sqrt()

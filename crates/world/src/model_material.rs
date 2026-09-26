@@ -29,8 +29,7 @@ const BATCH_ORDER_SORT_CAP: f32 = 0.9;
 /// A depth-prime twin sorts this many yards ahead of its model's colour batches, so a fading body
 /// primes its whole depth before any of it blends.
 const DEPTH_PRIME_SORT_BIAS: f32 = -8.0;
-/// Ground clutter's fade by view depth starts at this share of where it ends.
-const CLUTTER_FADE_START: f32 = 0.75;
+const CLUTTER_FADE_START_SHARE: f32 = 0.75;
 
 const NO_DEPTH_WRITE: u16 = 1;
 const NO_DEPTH_TEST: u16 = 1 << 1;
@@ -498,8 +497,7 @@ fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
 }
 
 /// Ground clutter as the client draws it: both faces, writing depth, cut out and blended, faded
-/// out by view depth up to `fade_far`. It sorts on a rung of its own, since which draws come
-/// before a blended one is part of its picture.
+/// out by view depth up to `fade_far`.
 pub(crate) fn clutter_material(
     texture: Option<Handle<Image>>,
     fade_far: f32,
@@ -516,7 +514,7 @@ pub(crate) fn clutter_material(
             ..StandardMaterial::default()
         },
         extension: ModelExtension {
-            clutter_fade: Vec4::new(fade_far * CLUTTER_FADE_START, fade_far, 0.0, 1.0),
+            clutter_fade: Vec4::new(fade_far * CLUTTER_FADE_START_SHARE, fade_far, 0.0, 1.0),
             model_flags: Vec4::ZERO,
             sun_scale: Vec4::new(GroundShade::Entity.selector(), 0.0, 0.0, 0.0),
             tint: Vec4::ONE,
