@@ -7,7 +7,8 @@ use terrain::{ChunkMesh, VERTICES, cell_vertices, is_hole};
 
 use crate::dbc_table::{read_table, str_at, u32_at};
 
-/// A doodad names `ElwGra01.mdl`; the file is that stem's `.m2` here, left out of the listfiles.
+/// A `GroundEffectDoodad` row names a model such as `ElwGra01.mdl`; the install holds it as that
+/// stem's `.m2` in this directory, which no listfile names.
 const DETAIL_DIR: &str = "World\\NoDXT\\Detail\\";
 const NO_DOODAD: u32 = u32::MAX;
 const DEFAULT_DENSITY: u32 = 8;
@@ -84,13 +85,12 @@ pub(crate) struct Tuft {
     pub(crate) scale: f32,
 }
 
-/// A chunk's column and row among all of its map's chunks.
-pub(crate) fn map_chunk((tile_x, tile_y): (u32, u32), chunk: &ChunkMesh) -> (u32, u32) {
+pub(crate) fn chunk_on_map((tile_x, tile_y): (u32, u32), chunk: &ChunkMesh) -> (u32, u32) {
     (tile_x * 16 + chunk.index_x, tile_y * 16 + chunk.index_y)
 }
 
 /// The tufts the client places on `chunk` of `tile`.
-#[allow(
+#[expect(
     clippy::manual_midpoint,
     reason = "the client's own sum-then-halve rounding"
 )]
@@ -98,14 +98,14 @@ pub(crate) fn scatter(
     chunk: &ChunkMesh,
     tile: (u32, u32),
     effects: &Effects,
-    cell_draws: u32,
+    cell_picks: u32,
 ) -> Vec<Tuft> {
     if chunk.positions.len() < VERTICES {
         return Vec::new();
     }
-    let (x, y) = map_chunk(tile, chunk);
+    let (x, y) = chunk_on_map(tile, chunk);
     let mut rng = Randomizer::new((y << 16) | (x & 0xFFFF));
-    let drawn: Vec<(u32, u32)> = (0..cell_draws)
+    let picked: Vec<(u32, u32)> = (0..cell_picks)
         .map(|_| {
             let col = rng.next() & 7;
             let row = rng.next() & 7;
@@ -113,7 +113,7 @@ pub(crate) fn scatter(
         })
         .collect();
     let mut out = Vec::new();
-    for (list_index, &(row, col)) in drawn.iter().enumerate() {
+    for (list_index, &(row, col)) in picked.iter().enumerate() {
         let k = (row * 8 + col) as usize;
         if chunk.no_effect_doodad[k] || is_hole(chunk.holes, row, col) {
             continue;

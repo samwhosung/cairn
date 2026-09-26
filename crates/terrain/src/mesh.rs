@@ -299,7 +299,7 @@ pub fn is_hole(holes: u16, row: u32, col: u32) -> bool {
     holes & (1u16 << ((row >> 1) * 4 + (col >> 1))) != 0
 }
 
-/// Cell `(row, col)`'s corners and centre: `[tl, tr, bl, br, ctr]`.
+/// Indices of cell `(row, col)`'s corners and centre in the vertex arrays: `[tl, tr, bl, br, ctr]`.
 pub fn cell_vertices(row: u32, col: u32) -> [u32; 5] {
     let tl = row * ROW_STRIDE + col;
     let bl = tl + ROW_STRIDE;

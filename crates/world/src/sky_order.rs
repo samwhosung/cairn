@@ -14,7 +14,6 @@ pub(crate) const SKYBOX_SORT_RUNG: f32 = -6.0e4;
 /// transparent: a unit's shadow first, the footprints over it.
 pub(crate) const SHADOW_SORT_RUNG: f32 = -5.2e4;
 pub(crate) const FOOTPRINT_SORT_RUNG: f32 = -5.0e4;
-/// Ground clutter's depth, laid before any of its colour.
 pub(crate) const CLUTTER_DEPTH_SORT_RUNG: f32 = -4.69e4;
 /// Ground clutter blends over the ground and its decals, and the water over the clutter under it.
 pub(crate) const CLUTTER_SORT_RUNG: f32 = -4.38e4;

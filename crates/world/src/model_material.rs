@@ -497,8 +497,8 @@ fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
 }
 
 /// Ground clutter's two draws of each mesh: its depth alone first, then its colour, blended but
-/// writing no depth. On an Apple GPU a draw that both blends and writes depth settles overlapping
-/// fragments differently from frame to frame; this way only the nearest tuft at a pixel blends.
+/// writing no depth, so only the nearest tuft at a pixel blends. Drawn once, blending and writing
+/// depth, overlapping tufts came out differently from frame to frame on an Apple GPU.
 pub(crate) fn clutter_materials(
     texture: Option<Handle<Image>>,
     fade_far: f32,

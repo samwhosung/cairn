@@ -144,7 +144,7 @@ fn goldshire_scatters_models_and_textures_the_install_holds() {
     let tufts: Vec<Tuft> = tile
         .chunks
         .iter()
-        .flat_map(|c| scatter::scatter(c, (31, 49), &effects, CELL_DRAWS_PER_CHUNK))
+        .flat_map(|c| scatter::scatter(c, (31, 49), &effects, CELL_PICKS_PER_CHUNK))
         .collect();
     assert!(tufts.len() > 10_000, "{} tufts", tufts.len());
     let models: BTreeSet<&str> = tufts.iter().map(|t| &*t.model).collect();

@@ -239,8 +239,8 @@ impl TimeOfDay {
 
 /// Whether everything around the camera has arrived: every terrain tile the far clip reaches is
 /// drawn or known to be missing, every model it places is drawn with its textures, the ground
-/// clutter near it is built, the horizon ring is up, and a painted sky a building shows is built
-/// or known to be missing.
+/// clutter near the camera is built, the horizon ring is up, and a painted sky a building shows
+/// is built or known to be missing.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Resource, Default, Debug)]
 pub struct Residency {

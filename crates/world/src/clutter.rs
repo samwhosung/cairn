@@ -26,10 +26,10 @@ use crate::stream::Streamer;
 use crate::texture::blp_image;
 use crate::view::WorldCamera;
 use crate::{Install, Residency};
-use scatter::{Effects, Tuft, map_chunk};
+use scatter::{Effects, Tuft, chunk_on_map};
 
-/// Cell draws per chunk, repeats included: the client's ground clutter at its options' Medium.
-const CELL_DRAWS_PER_CHUNK: u32 = 32;
+/// The client's count at its Medium ground clutter setting; a cell can be picked more than once.
+const CELL_PICKS_PER_CHUNK: u32 = 32;
 /// The view depth the client's ground clutter has faded out by.
 const FADE_FAR: f32 = 70.0;
 const BUILD_MARGIN: f32 = 8.0;
@@ -113,7 +113,7 @@ pub(crate) fn stream_clutter(
     let mut wanted = Vec::new();
     for (tile, handle) in streamer.arrived() {
         for chunk in adts.get(handle).into_iter().flat_map(|a| &a.chunks) {
-            let key = map_chunk(tile, chunk);
+            let key = chunk_on_map(tile, chunk);
             if chunk.positions.len() < VERTICES
                 || footprint_distance_squared(eye, chunk) > build
                 || clutter.built.contains_key(&key)
@@ -154,7 +154,7 @@ pub(crate) fn stream_clutter(
             left += 1;
             continue;
         }
-        let tufts = scatter::scatter(w.chunk, w.tile, &effects.0, CELL_DRAWS_PER_CHUNK);
+        let tufts = scatter::scatter(w.chunk, w.tile, &effects.0, CELL_PICKS_PER_CHUNK);
         let parts = builder.chunk(&mut clutter, w.chunk, tufts);
         spent += usize::from(!parts.is_empty());
         clutter.built.insert(
