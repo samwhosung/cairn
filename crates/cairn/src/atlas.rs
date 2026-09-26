@@ -120,10 +120,10 @@ fn draw(order: &Order, install: &Install) -> Result<String, String> {
         None => CurrentMap::find(chain, &areas.get(zone).map_or(0, |a| a.map).to_string())?,
     };
     let loaded = atlas::load_map(chain, &map.directory);
-    let frame = atlas::frame(&loaded, &areas, zone)
+    let frame = atlas::frame(&loaded, &areas, Some(zone))
         .map_err(|_| format!("{} has no terrain on {}", order.zone, map.directory))?;
     let colors = atlas::texture_colors(chain, &loaded);
-    let (mut img, n) = atlas::render(&loaded, &colors, &areas, zone, &frame, order.yards)?;
+    let (mut img, n) = atlas::render(&loaded, &colors, &areas, Some(zone), &frame, order.yards)?;
     for &point in &order.marks {
         if !atlas::mark(&mut img, &frame, order.yards, point) {
             eprintln!("cairn: the mark {},{} is off the map", point[0], point[1]);

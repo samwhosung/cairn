@@ -45,7 +45,7 @@ fn goldshire_and_crystal_lake_are_drawn_from_two_tiles() {
             )
         })
         .into();
-    let f = frame(&loaded, &areas, elwynn).expect("Elwynn is on the tiles");
+    let f = frame(&loaded, &areas, Some(elwynn)).expect("Elwynn is on the tiles");
     assert_eq!((f.x0, f.x1, f.y0, f.y1), (31, 32, 49, 49));
     let named: BTreeSet<&String> = loaded
         .iter()
@@ -54,8 +54,8 @@ fn goldshire_and_crystal_lake_are_drawn_from_two_tiles() {
     let colors = texture_colors(&chain, &loaded);
     assert_eq!(colors.len(), named.len(), "every texture decodes");
 
-    let (mut img, counts) = render(&loaded, &colors, &areas, elwynn, &f, YPP).expect("draws");
-    let (again, _) = render(&loaded, &colors, &areas, elwynn, &f, YPP).expect("draws");
+    let (mut img, counts) = render(&loaded, &colors, &areas, Some(elwynn), &f, YPP).expect("draws");
+    let (again, _) = render(&loaded, &colors, &areas, Some(elwynn), &f, YPP).expect("draws");
     assert!(img == again, "the same map twice");
     assert_eq!(img.dimensions(), (266, 133));
     let drawn = Doodads {

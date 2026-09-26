@@ -69,8 +69,8 @@ fn tile(chunks: Vec<ChunkMesh>, doodads: Vec<Doodad>, wmos: Vec<WmoInstance>) ->
 fn draw(t: TileMesh, ypp: f32) -> (RgbImage, Doodads) {
     let loaded = vec![(TILE, t)];
     let colors = HashMap::from([("red".to_owned(), [1.0, 0.0, 0.0])]);
-    let f = frame(&loaded, &areas(), ZONE).expect("the zone is on the tile");
-    render(&loaded, &colors, &areas(), ZONE, &f, ypp).expect("draws")
+    let f = frame(&loaded, &areas(), Some(ZONE)).expect("the zone is on the tile");
+    render(&loaded, &colors, &areas(), Some(ZONE), &f, ypp).expect("draws")
 }
 
 #[test]
@@ -93,6 +93,30 @@ fn a_chunk_is_drawn_in_its_texture_under_the_light_and_dimmed_outside_the_zone()
         "half-tinted by six yards of water"
     );
     assert_eq!(img.get_pixel(0, 2).0, [0, 0, 0], "no chunk");
+}
+
+#[test]
+fn a_map_drawn_whole_dims_nothing_and_frames_every_tile() {
+    let chunks = || vec![chunk(0, 0, ZONE), chunk(0, 1, ELSEWHERE)];
+    let other = (TILE.0 + 1, TILE.1);
+    let loaded = vec![
+        (TILE, tile(chunks(), Vec::new(), Vec::new())),
+        (
+            other,
+            tile(vec![chunk(0, 16, ELSEWHERE)], Vec::new(), Vec::new()),
+        ),
+    ];
+    let colors = HashMap::from([("red".to_owned(), [1.0, 0.0, 0.0])]);
+    let ypp = CHUNK_SIZE / 2.0;
+    let whole = frame(&loaded, &areas(), None).expect("the map has terrain");
+    assert_eq!((whole.x0, whole.x1, whole.y0, whole.y1), (32, 33, 32, 32));
+    let (img, _) = render(&loaded, &colors, &areas(), None, &whole, ypp).expect("draws");
+    assert_eq!(img.get_pixel(2, 0).0, [232, 0, 0], "in its colour");
+    assert_eq!(img.get_pixel(32, 0).0, [232, 0, 0], "the next tile too");
+    let zone = frame(&loaded, &areas(), Some(ZONE)).expect("the zone");
+    let (img, _) = render(&loaded, &colors, &areas(), Some(ZONE), &zone, ypp).expect("draws");
+    assert_eq!(img.get_pixel(2, 0).0, [34, 34, 38], "a zone dims the rest");
+    assert!(frame(&[], &areas(), None).is_err());
 }
 
 #[test]
@@ -140,15 +164,15 @@ fn doodads_are_dots_by_kind_and_buildings_are_squares() {
 #[test]
 fn a_map_too_large_or_too_small_is_refused() {
     let loaded = vec![(TILE, tile(vec![chunk(0, 0, ZONE)], Vec::new(), Vec::new()))];
-    let f = frame(&loaded, &areas(), ZONE).expect("the zone is on the tile");
+    let f = frame(&loaded, &areas(), Some(ZONE)).expect("the zone is on the tile");
     let colors = HashMap::new();
     for ypp in [0.05, 2000.0, 0.0, -1.0, f32::NAN] {
         assert!(
-            render(&loaded, &colors, &areas(), ZONE, &f, ypp).is_err(),
+            render(&loaded, &colors, &areas(), Some(ZONE), &f, ypp).is_err(),
             "{ypp}"
         );
     }
-    assert!(frame(&loaded, &areas(), ELSEWHERE).is_err());
+    assert!(frame(&loaded, &areas(), Some(ELSEWHERE)).is_err());
 }
 
 #[test]

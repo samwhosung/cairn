@@ -131,7 +131,8 @@ const NO_GROUND: Ground = Ground {
     inside: false,
 };
 
-/// The tiles a zone covers on a map: the bounding box of every tile holding one of its chunks.
+/// The tiles a zone covers on a map: the bounding box of every tile holding one of its chunks, or
+/// of every tile of a map drawn whole.
 pub struct Frame {
     pub x0: u32,
     pub x1: u32,
@@ -160,20 +161,24 @@ fn origin(tx: u32, ty: u32) -> [f32; 2] {
     ]
 }
 
-/// The frame of zone `zone_id` among `loaded`; an error when none of them holds the zone.
+/// The frame of zone `zone` among `loaded`, or of all of them without one; an error when none of
+/// them holds the zone.
 pub fn frame(
     loaded: &[((u32, u32), TileMesh)],
     areas: &Areas,
-    zone_id: u32,
+    zone: Option<u32>,
 ) -> Result<Frame, String> {
     let zone_of = |a: u32| areas.top_zone(a).unwrap_or(a);
     let hit: Vec<(u32, u32)> = loaded
         .iter()
-        .filter(|(_, t)| t.chunks.iter().any(|c| zone_of(c.area_id) == zone_id))
+        .filter(|(_, t)| zone.is_none_or(|z| t.chunks.iter().any(|c| zone_of(c.area_id) == z)))
         .map(|(k, _)| *k)
         .collect();
     if hit.is_empty() {
-        return Err(format!("area {zone_id} has no terrain on this map"));
+        return Err(match zone {
+            Some(zone) => format!("area {zone} has no terrain on this map"),
+            None => "the map has no terrain".into(),
+        });
     }
     Ok(Frame {
         x0: hit.iter().map(|t| t.0).min().unwrap_or(0),
@@ -244,12 +249,12 @@ pub fn texture_colors(
         .collect()
 }
 
-/// Draws the frame at `ypp` yards a pixel.
+/// Draws the frame at `ypp` yards a pixel, dimming what lies outside zone `zone` when one is given.
 pub fn render<S: BuildHasher + Sync>(
     loaded: &[((u32, u32), TileMesh)],
     colors: &HashMap<String, [f32; 3], S>,
     areas: &Areas,
-    zone_id: u32,
+    zone: Option<u32>,
     f: &Frame,
     ypp: f32,
 ) -> Result<(RgbImage, Doodads), String> {
@@ -261,7 +266,7 @@ pub fn render<S: BuildHasher + Sync>(
             "the map would be {w}×{h} px, and a side must be 1 to {MAX_SIDE}"
         ));
     }
-    let ground = ground(loaded, colors, areas, zone_id, f, ypp, (w, h));
+    let ground = ground(loaded, colors, areas, zone, f, ypp, (w, h));
     let mut img = light(&ground, (w, h), ypp);
     let drawn = marks(&mut img, loaded, f, ypp);
     Ok((img, drawn))
@@ -271,7 +276,7 @@ fn ground<S: BuildHasher + Sync>(
     loaded: &[((u32, u32), TileMesh)],
     colors: &HashMap<String, [f32; 3], S>,
     areas: &Areas,
-    zone_id: u32,
+    zone: Option<u32>,
     f: &Frame,
     ypp: f32,
     (w, h): (usize, usize),
@@ -317,7 +322,7 @@ fn ground<S: BuildHasher + Sync>(
                         rgb,
                         z,
                         water_depth: surface(c).filter(|s| z < *s).map(|s| s - z),
-                        inside: zone_of(c.area_id) == zone_id,
+                        inside: zone.is_none_or(|z| zone_of(c.area_id) == z),
                     }
                 })
                 .collect()
