@@ -38,6 +38,20 @@ pub enum Seen {
     },
 }
 
+impl Seen {
+    /// The unique id of the placement the map's files place it under: a building's for its own
+    /// doodads.
+    pub fn placement(&self) -> Option<u32> {
+        match self {
+            Seen::Terrain { .. } => None,
+            Seen::Doodad { unique_id, .. } | Seen::Building { unique_id, .. } => Some(*unique_id),
+            Seen::Prop {
+                building_unique_id, ..
+            } => Some(*building_unique_id),
+        }
+    }
+}
+
 /// Where a ray met what is drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sighting {
@@ -48,6 +62,14 @@ pub struct Sighting {
     /// The ADT tile `(x, y)` of the map's `<map>_<x>_<y>.adt`: the terrain's own, or the one
     /// under the point.
     pub tile: (u32, u32),
+}
+
+/// What a ray meets short of a distance.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Nearer {
+    /// Each model batch met in front of the terrain, nearest first.
+    pub models: Vec<Seen>,
+    pub terrain: bool,
 }
 
 #[derive(Component, Clone)]
@@ -133,6 +155,26 @@ impl Sight<'_, '_> {
             chain: self.install.0.clone(),
         }
     }
+
+    /// The model batches drawn this frame whose boxes come within `radius` of `at`, in Bevy's
+    /// axes.
+    pub fn within(&self, at: Vec3, radius: f32) -> Vec<Seen> {
+        let mut out = Vec::new();
+        for (batch, placed, drawn, bound) in &self.batches {
+            if !drawn.get() {
+                continue;
+            }
+            let affine = placed.affine();
+            let local = affine.inverse().transform_point3(at);
+            let gap = bound.map_or(local.length(), |b| {
+                box_gap(local, b.min().into(), b.max().into())
+            });
+            if gap * affine.matrix3.x_axis.length() <= radius {
+                out.push(batch.seen.clone());
+            }
+        }
+        out
+    }
 }
 
 /// A ray cast into what was drawn, still to be followed through the model batches it enters.
@@ -181,6 +223,31 @@ impl Cast {
                 tile: tile.unwrap_or_else(|| wdt::world_to_tile(x, y)),
             }
         })
+    }
+
+    /// Every model batch the ray meets short of `distance`, as [`Cast::first`] meets them, and
+    /// whether the terrain comes first.
+    pub fn nearer(self, distance: f32) -> Nearer {
+        let mut paints = CoverageReader::new(&self.chain);
+        let terrain = self.terrain.as_ref().is_some_and(|t| t.0 < distance);
+        let limit = self
+            .terrain
+            .as_ref()
+            .map_or(self.reach, |t| t.0)
+            .min(distance);
+        let mut met: Vec<(f32, Seen)> = self
+            .by_entry
+            .iter()
+            .take_while(|c| c.enters < limit)
+            .filter_map(|c| {
+                batch_hit(c, self.origin, self.dir, limit, &mut paints).map(|t| (t, c.seen.clone()))
+            })
+            .collect();
+        met.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Nearer {
+            models: met.into_iter().map(|(_, seen)| seen).collect(),
+            terrain,
+        }
     }
 }
 
@@ -300,6 +367,11 @@ fn triangle_hit(d: Vec3, from_origin: [Vec3; 3], two_sided: bool) -> Option<Hit>
         second,
         third,
     })
+}
+
+/// How far `p` lies outside the box, 0 within it.
+fn box_gap(p: Vec3, lo: Vec3, hi: Vec3) -> f32 {
+    (lo - p).max(p - hi).max(Vec3::ZERO).length()
 }
 
 fn box_entry(o: Vec3, d: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> Option<f32> {

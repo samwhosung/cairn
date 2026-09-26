@@ -137,6 +137,7 @@ impl Plugin for WorldPlugin {
             ribbons::RibbonPlugin,
         ))
         .init_resource::<Residency>()
+        .init_resource::<LeftOut>()
         .init_resource::<stream::Streamer>()
         .init_resource::<Placements>()
         .init_resource::<models::Furnished>()
@@ -184,6 +185,7 @@ impl Plugin for WorldPlugin {
                 .after(unit::UnitSystems)
                 .in_set(EventSystems),
         )
+        .add_systems(Update, visibility::leave_out)
         .add_systems(
             PostUpdate,
             (
@@ -205,6 +207,12 @@ pub struct WorldSystems;
 /// it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EventSystems;
+
+/// Placements the world camera leaves undrawn, by the unique id the map's files place them under;
+/// a building's own doodads go with it. They go on as if seen, and what they emit, light and water,
+/// stays.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LeftOut(pub std::collections::BTreeSet<u32>);
 
 /// The game minute of the day, `0..1440`, the world is lit for.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]

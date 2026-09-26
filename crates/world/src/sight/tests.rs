@@ -169,3 +169,67 @@ fn a_batch_placed_at_twice_its_size_is_met_at_the_distance_in_the_world() {
     let met = batch_hit(&twice, from, down, 100.0, &mut paints);
     assert!(met.is_some_and(|t| (t - 10.0).abs() < 1e-5), "{met:?}");
 }
+
+#[test]
+fn a_point_lies_as_far_from_a_box_as_from_its_nearest_face_edge_or_corner() {
+    let (lo, hi) = (Vec3::ZERO, Vec3::splat(2.0));
+    assert!(box_gap(Vec3::ONE, lo, hi).abs() < 1e-6, "inside");
+    let face = box_gap(Vec3::new(5.0, 1.0, 1.0), lo, hi);
+    assert!((face - 3.0).abs() < 1e-6, "off a face: {face}");
+    let corner = box_gap(Vec3::new(-3.0, -4.0, 1.0), lo, hi);
+    assert!((corner - 5.0).abs() < 1e-6, "off an edge: {corner}");
+}
+
+#[test]
+fn a_placement_is_named_by_its_own_id_or_its_buildings() {
+    let file: Arc<str> = Arc::from("world/x.m2");
+    assert_eq!(Seen::Terrain { column: 1, row: 2 }.placement(), None);
+    let doodad = Seen::Doodad {
+        file: file.clone(),
+        unique_id: 7,
+    };
+    assert_eq!(doodad.placement(), Some(7));
+    let prop = Seen::Prop {
+        file: file.clone(),
+        building_file: file,
+        building_unique_id: 9,
+        doodad: 3,
+    };
+    assert_eq!(prop.placement(), Some(9));
+}
+
+#[test]
+fn a_ray_names_every_batch_short_of_a_distance_and_none_behind_the_ground() {
+    let at_depth = |depth: f32, unique_id: u32| {
+        let lift = Affine3A::from_translation(Vec3::new(0.0, 5.0 - depth, 0.0));
+        Candidate {
+            enters: depth - 0.5,
+            to_mesh: lift.inverse(),
+            seen: Seen::Doodad {
+                file: Arc::from("world/x.m2"),
+                unique_id,
+            },
+            ..square_facing_up_five_yards_down(ModelBlend::Opaque)
+        }
+    };
+    let cast = |terrain: Option<f32>| Cast {
+        origin: wow_to_bevy([0.5, 0.25, 0.0]),
+        dir: wow_to_bevy([0.0, 0.0, -1.0]),
+        terrain: terrain.map(|t| (t, Seen::Terrain { column: 0, row: 0 }, (0, 0))),
+        reach: 100.0,
+        by_entry: vec![at_depth(3.0, 1), at_depth(6.0, 2), at_depth(9.0, 3)],
+        chain: Arc::new(Chain::default()),
+    };
+    let ids = |nearer: Nearer| {
+        nearer
+            .models
+            .iter()
+            .filter_map(Seen::placement)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(cast(None).nearer(8.0)), [1, 2]);
+    let behind = cast(Some(5.0)).nearer(8.0);
+    assert!(behind.terrain);
+    assert_eq!(ids(behind), [1], "the ground hides the one past it");
+    assert!(!cast(Some(20.0)).nearer(8.0).terrain);
+}

@@ -1,13 +1,16 @@
 use std::num::NonZeroU16;
 
 use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
+use crate::LeftOut;
 use crate::doodad_anim::MatAnim;
 use crate::liquid::{FarSide, LiquidGrid};
 use crate::model_material::ModelMaterial;
 use crate::portal::{WmoGroupVis, WmoPortalInstance};
+use crate::sight::Meetable;
 use crate::view::{WorldCamera, nearest_depth_within_farclip};
 
 const NEVER_FADE_RADIUS: f32 = 7.0;
@@ -208,6 +211,40 @@ pub(crate) fn apply_model_visibility(
             if material.0 != *want {
                 material.0 = want.clone();
             }
+        }
+    }
+}
+
+/// The render layer a left-out placement's batches go to, which no camera draws: they stay visible,
+/// so they go on animating as if seen.
+const LEFT_OUT_LAYER: usize = 30;
+
+#[derive(Component)]
+pub(crate) struct LeftOutPart;
+
+/// Moves the batches of the placements [`LeftOut`] names out of the world camera's layer, and back.
+pub(crate) fn leave_out(
+    mut commands: Commands<'_, '_>,
+    left_out: Res<'_, LeftOut>,
+    parts: Query<'_, '_, (Entity, &Meetable, Has<LeftOutPart>)>,
+    arrived: Query<'_, '_, (), Added<Meetable>>,
+) {
+    if !left_out.is_changed() && (left_out.0.is_empty() || arrived.is_empty()) {
+        return;
+    }
+    for (part, met, out) in &parts {
+        let wanted = met
+            .seen
+            .placement()
+            .is_some_and(|id| left_out.0.contains(&id));
+        if wanted && !out {
+            commands
+                .entity(part)
+                .insert((LeftOutPart, RenderLayers::layer(LEFT_OUT_LAYER)));
+        } else if out && !wanted {
+            commands
+                .entity(part)
+                .remove::<(LeftOutPart, RenderLayers)>();
         }
     }
 }
