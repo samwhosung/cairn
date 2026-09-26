@@ -1,0 +1,18 @@
+[package]
+name = "fits"
+description = "What fits a spot: models ranked by what the install places together"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+survey = { path = "../survey" }
+
+[dev-dependencies]
+mpq = { path = "../mpq" }
+wdt = { path = "../wdt" }
+
+[lints]
+workspace = true

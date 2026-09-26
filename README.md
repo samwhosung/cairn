@@ -35,6 +35,7 @@ shots, and more.
 - [`catalog`](crates/catalog) — The games cairn can run, by name
 - [`character`](crates/character) — Characters and creatures: their looks, skins and gear
 - [`dbc`](crates/dbc) — Reads WoW 1.12.1 DBC tables
+- [`fits`](crates/fits) — What fits a spot: models ranked by what the install places together
 - [`game`](crates/game) — The API a game is written on
 - [`light`](crates/light) — Lighting: sky, fog, sun and water colour by place and time
 - [`m2`](crates/m2) — Reads WoW 1.12.1 M2 models
