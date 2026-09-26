@@ -7,6 +7,7 @@ mod fight;
 mod heard;
 mod honest;
 mod liar;
+mod moved;
 mod notes;
 mod painter;
 mod pair;
