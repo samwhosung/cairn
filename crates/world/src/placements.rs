@@ -111,8 +111,8 @@ impl Placements {
         self.by_id.is_empty()
     }
 
-    /// Places `model` at `transform` under `id`, as no tile does, until [`Self::lift`] takes it
-    /// away. `transform` takes model space to the world in Bevy's axes.
+    /// Places `model` at `transform` under `id` until [`Self::lift`] takes it away. An `id` a tile
+    /// or an earlier place still holds keeps what it has, and only counts one more holder.
     pub fn place(&mut self, id: u32, model: PlacedModel, transform: Transform) {
         self.add(id, || Placement {
             model,
