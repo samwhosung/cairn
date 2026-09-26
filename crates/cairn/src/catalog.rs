@@ -4,9 +4,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use atlas::Areas;
 use bevy::app::AppExit;
 use sound::tables::{AreaSounds, Kit, KitCatalog};
-use survey::{Model, Zone, ZoneSound};
+use survey::{Lookups, Model, Zone, ZoneSound};
 use world::Install;
 
 use studio::Sitter;
@@ -82,12 +83,12 @@ fn run(order: &Order, install: &Install, data: &Path) -> Result<String, String> 
     let inv = survey::read(chain)?;
     let read_in = started.elapsed();
     stamp_or_check(&order.dir, data)?;
-    let sounds = SoundTables::load(install)?;
-    let px_per_yard = |m: &Model| {
-        m.bounds
-            .map(|b| survey::PICTURE_SIDE as f32 / studio::frame(b).yards_across)
+    let lookups = InstallLookups {
+        install,
+        areas: Areas::load(chain)?,
+        sounds: SoundTables::load(install)?,
     };
-    let text = survey::write(&inv, chain, &order.dir, &|z| sounds.of(z), &px_per_yard)?;
+    let text = survey::write(&inv, chain, &order.dir, &lookups)?;
     let missing = survey::pictures_missing(&inv, &order.dir);
     let to_draw: Vec<Sitter> = missing
         .iter()
@@ -178,6 +179,27 @@ fn stamp_or_check(dir: &Path, data: &Path) -> Result<(), String> {
         Err(_) => survey::write_atomically(&path, |part| {
             std::fs::write(part, &want).map_err(|e| format!("{}: {e}", part.display()))
         }),
+    }
+}
+
+struct InstallLookups<'a> {
+    install: &'a Install,
+    areas: Areas,
+    sounds: SoundTables,
+}
+
+impl Lookups for InstallLookups<'_> {
+    fn zone_sound(&self, zone: &Zone) -> ZoneSound {
+        self.sounds.of(zone)
+    }
+
+    fn zone_light(&self, zone: &Zone) -> Result<Option<u32>, String> {
+        crate::zone::light_over_most_of(self.install, &self.areas, zone.area)
+    }
+
+    fn px_per_yard(&self, model: &Model) -> Option<f32> {
+        let framing = studio::frame(model.bounds?);
+        Some(survey::PICTURE_SIDE as f32 / framing.yards_across)
     }
 }
 

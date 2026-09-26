@@ -168,7 +168,11 @@ fn map_id(name: &str) -> u32 {
     fnv1a | PAST_EVERY_MAP_DBC_ID
 }
 
-fn light_over_most_of(install: &Install, areas: &Areas, zone: u32) -> Result<Option<u32>, String> {
+pub(crate) fn light_over_most_of(
+    install: &Install,
+    areas: &Areas,
+    zone: u32,
+) -> Result<Option<u32>, String> {
     let chain = &install.0;
     let map = CurrentMap::find(chain, &areas.get(zone).map_or(0, |a| a.map).to_string())?;
     let lights = LightCatalog::load(chain).map_err(|e| e.to_string())?;
