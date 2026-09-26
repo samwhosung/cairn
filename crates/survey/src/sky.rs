@@ -25,10 +25,10 @@ const CHIP_LABEL: u32 = 12;
 const PAGE: [u8; 3] = [38, 40, 44];
 const INK: [u8; 3] = [232, 232, 232];
 
-pub(crate) fn skies(catalog: &LightCatalog, map: u32, heart: [f32; 3]) -> [Atmosphere; 4] {
+pub(crate) fn skies(catalog: &LightCatalog, light: u32) -> [Atmosphere; 4] {
     HOURS.map(|(_, minute)| {
         let half_minutes = minute * 2;
-        catalog.sample(map, heart, half_minutes, STORMY, Submersion::Dry, GHOST)
+        catalog.sample_light(light, half_minutes, STORMY, Submersion::Dry, GHOST)
     })
 }
 

@@ -21,7 +21,6 @@ type ZoneId = (usize, u32);
 struct ZoneAcc {
     chunks: u32,
     tiles: Option<TileSpan>,
-    middles: Vec<[f32; 3]>,
     wet_cells: WetCells,
     places: BTreeMap<u32, u32>,
     grounds: BTreeMap<usize, f64>,
@@ -301,7 +300,6 @@ fn paint(
             y1: t.y1.max(y),
         },
     });
-    acc.middles.push(chunk.middle);
     let (sum, wet) = (&mut acc.wet_cells, chunk.wet_cells);
     sum.water += wet.water;
     sum.ocean += wet.ocean;
@@ -551,7 +549,6 @@ fn finish_zone(
     map: &MapTiles,
     areas: &Areas,
 ) -> Zone {
-    let heart = heart(&acc.middles);
     let mut places: Vec<(String, u32)> = acc
         .places
         .iter()
@@ -578,7 +575,6 @@ fn finish_zone(
         key,
         chunks: acc.chunks,
         tiles: acc.tiles,
-        heart,
         wet_cells: acc.wet_cells,
         places,
         grounds,
@@ -586,21 +582,6 @@ fn finish_zone(
         doodads: acc.doodads,
         buildings: acc.buildings,
     }
-}
-
-fn heart(middles: &[[f32; 3]]) -> Option<[f32; 3]> {
-    if middles.is_empty() {
-        return None;
-    }
-    let n = middles.len() as f64;
-    let mx = middles.iter().map(|m| f64::from(m[0])).sum::<f64>() / n;
-    let my = middles.iter().map(|m| f64::from(m[1])).sum::<f64>() / n;
-    let d = |m: &[f32; 3]| (f64::from(m[0]) - mx).powi(2) + (f64::from(m[1]) - my).powi(2);
-    middles.iter().copied().min_by(|a, b| {
-        d(a).total_cmp(&d(b))
-            .then(b[0].total_cmp(&a[0]))
-            .then(b[1].total_cmp(&a[1]))
-    })
 }
 
 fn finish_ground(acc: &GroundAcc, k: &str, zone_index: &BTreeMap<ZoneId, usize>) -> Ground {

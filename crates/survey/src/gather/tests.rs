@@ -64,20 +64,6 @@ fn a_placement_two_tiles_list_is_counted_once_from_the_tile_it_stands_on() {
     );
 }
 
-#[test]
-fn the_heart_is_the_middle_nearest_the_mean() {
-    assert_eq!(heart(&[]), None);
-    let middles = [
-        [0.0, 0.0, 1.0],
-        [10.0, 0.0, 2.0],
-        [4.0, 1.0, 3.0],
-        [20.0, 0.0, 4.0],
-    ];
-    assert_eq!(heart(&middles), Some([10.0, 0.0, 2.0]));
-    let tied = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]];
-    assert_eq!(heart(&tied), Some([1.0, 0.0, 0.0]), "the northern on a tie");
-}
-
 fn map(id: u32, directory: &str) -> MapTiles {
     MapTiles {
         id,

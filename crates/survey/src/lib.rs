@@ -20,7 +20,7 @@ pub use gather::model_bounds as bounds;
 pub use pages::PICTURE_SIDE;
 pub use picture::{save_averaged, write_atomically};
 pub use text::ZoneSound;
-pub use write::{Written, pictures_missing, write, write_pages};
+pub use write::{Lookups, Written, pictures_missing, write, write_pages};
 
 /// Everything the maps paint and place, each list sorted by key. Every list inside is most first.
 pub struct Survey {
@@ -38,8 +38,6 @@ pub struct Zone {
     pub key: String,
     pub chunks: u32,
     pub tiles: Option<TileSpan>,
-    /// The middle of the chunk nearest the middle of them all, where its sky is read.
-    pub heart: Option<[f32; 3]>,
     pub wet_cells: WetCells,
     /// Its areas, itself among them, by the chunks they cover.
     pub places: Vec<(String, u32)>,

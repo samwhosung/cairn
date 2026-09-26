@@ -52,29 +52,45 @@ fn picture_file(
     Ok(Written { wrote: 1, kept: 0 })
 }
 
+/// What the catalog is told that the maps don't hold.
+pub trait Lookups: Sync {
+    fn zone_sound(&self, zone: &Zone) -> ZoneSound;
+    /// The `Light.dbc` id a zone of one's own that borrows `zone` is lit by.
+    fn zone_light(&self, zone: &Zone) -> Result<Option<u32>, String>;
+    fn px_per_yard(&self, model: &Model) -> Option<f32>;
+}
+
 /// Writes the indexes, the detail files, the ground swatches and the zones' skies into `dir`: only
 /// the files missing there, each whole or not at all, the same survey always to the same bytes.
-/// `sounds` names a zone's music and ambience; `px_per_yard` says at what scale a model's picture
-/// is drawn.
 pub fn write(
     inv: &Survey,
     chain: &Chain,
     dir: &Path,
-    sounds: &(dyn Fn(&Zone) -> ZoneSound + Sync),
-    px_per_yard: &(dyn Fn(&Model) -> Option<f32> + Sync),
+    lookups: &dyn Lookups,
 ) -> Result<Written, String> {
-    let lights = LightCatalog::load(chain).map_err(|e| format!("the lighting tables: {e}"))?;
+    let catalog = LightCatalog::load(chain).map_err(|e| format!("the lighting tables: {e}"))?;
+    let lights: Vec<Option<u32>> = inv
+        .zones
+        .par_iter()
+        .map(|z| match z.chunks {
+            0 => Ok(None),
+            _ => lookups.zone_light(z),
+        })
+        .collect::<Result<_, String>>()?;
+    let sounds = |z: &Zone| lookups.zone_sound(z);
     let mut done = Written::default();
     done.add(text_file(dir, "README.txt", || readme(inv))?);
     done.add(text_file(dir, "models.tsv", || models_tsv(inv))?);
     done.add(text_file(dir, "ground.tsv", || ground_tsv(inv))?);
-    done.add(text_file(dir, "zones.tsv", || zones_tsv(inv, sounds))?);
+    done.add(text_file(dir, "zones.tsv", || {
+        zones_tsv(inv, &sounds, &lights)
+    })?);
     let models: Vec<Written> = inv
         .models
         .par_iter()
         .map(|m| {
             text_file(dir, &format!("models/{}.txt", m.key), || {
-                text::model_txt(inv, m, px_per_yard(m))
+                text::model_txt(inv, m, lookups.px_per_yard(m))
             })
         })
         .collect::<Result<_, _>>()?;
@@ -94,14 +110,15 @@ pub fn write(
     let zones: Vec<Written> = inv
         .zones
         .par_iter()
-        .map(|z| {
-            let skies = z.heart.map(|heart| sky::skies(&lights, z.map, heart));
-            let lines = skies.as_ref().map_or_else(Vec::new, sky_lines);
+        .zip(&lights)
+        .map(|(z, &light)| {
+            let skies = light.map(|light| (light, sky::skies(&catalog, light)));
+            let lines = skies.as_ref().map_or_else(Vec::new, |(_, s)| sky_lines(s));
             let mut w = text_file(dir, &format!("zones/{}.txt", z.key), || {
-                text::zone_txt(inv, z, &sounds(z), &lines)
+                text::zone_txt(inv, z, &sounds(z), light, &lines)
             })?;
-            if let Some(skies) = &skies {
-                let title = format!("{}: the sky at its heart", z.name);
+            if let Some((light, skies)) = &skies {
+                let title = format!("{}: its sky, Light.dbc {light}", z.name);
                 w.add(picture_file(dir, &text::sky(z), |out| {
                     sky::draw(&title, skies, out)
                 })?);

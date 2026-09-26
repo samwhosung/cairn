@@ -164,10 +164,14 @@ pub struct ZoneSound {
     pub ambience_lines: Vec<String>,
 }
 
-pub(crate) fn zones_tsv(inv: &Survey, sounds: &dyn Fn(&Zone) -> ZoneSound) -> String {
+pub(crate) fn zones_tsv(
+    inv: &Survey,
+    sounds: &dyn Fn(&Zone) -> ZoneSound,
+    lights: &[Option<u32>],
+) -> String {
     let mut out =
         String::from("zone\tmap\tchunks\twater\tmusic\tambience\tground\tmodels\tsky\tfile\n");
-    for z in &inv.zones {
+    for (z, light) in inv.zones.iter().zip(lights) {
         let sound = sounds(z);
         let ground: Vec<String> = z
             .grounds
@@ -204,7 +208,7 @@ pub(crate) fn zones_tsv(inv: &Survey, sounds: &dyn Fn(&Zone) -> ZoneSound) -> St
             sound.ambience,
             ground.join(", "),
             models.join(", "),
-            if z.heart.is_some() {
+            if light.is_some() {
                 sky(z)
             } else {
                 String::new()
@@ -356,7 +360,13 @@ pub(crate) fn ground_txt(inv: &Survey, g: usize) -> String {
     out
 }
 
-pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &[String]) -> String {
+pub(crate) fn zone_txt(
+    inv: &Survey,
+    z: &Zone,
+    sound: &ZoneSound,
+    light: Option<u32>,
+    sky: &[String],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{}", z.name);
     let _ = writeln!(
@@ -374,20 +384,18 @@ pub(crate) fn zone_txt(inv: &Survey, z: &Zone, sound: &ZoneSound, sky: &[String]
         thousands(z.chunks.into()),
         thousands(yards.round() as u64)
     );
-    if let Some([x, y, h]) = z.heart {
-        let _ = writeln!(
-            out,
-            "heart, where its sky is read: {x:.1} {y:.1} {h:.1}, the middle of the chunk nearest the middle of its ground"
-        );
-    }
     let places: Vec<String> = z
         .places
         .iter()
         .map(|(name, n)| format!("{name} {}", thousands((*n).into())))
         .collect();
     let _ = writeln!(out, "places, by chunks: {}", places.join(", "));
-    if z.heart.is_some() {
-        let _ = writeln!(out, "sky: {}-sky.png", z.key);
+    if let Some(light) = light {
+        let _ = writeln!(
+            out,
+            "sky: {}-sky.png, of Light.dbc {light}, the light most of its dry ground stands in, which lights a zone of one's own that borrows {}",
+            z.key, z.name
+        );
         for line in sky {
             let _ = writeln!(out, "  {line}");
         }

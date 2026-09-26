@@ -4,7 +4,7 @@ use atlas::layer_weights;
 use dbc::{DbcParser, FieldType, Schema, SchemaField, Value};
 use mpq::Chain;
 use rayon::prelude::*;
-use terrain::{ALPHA_MAP_SIZE, CHUNK_SIZE, ChunkMesh, Doodad, LiquidKind, WmoInstance};
+use terrain::{ALPHA_MAP_SIZE, ChunkMesh, Doodad, LiquidKind, WmoInstance};
 use wdt::{GlobalWmo, WdtReader};
 
 use crate::WetCells;
@@ -12,8 +12,6 @@ use crate::WetCells;
 const MAP_DBC: &str = "DBFilesClient\\Map.dbc";
 const MAP_FIELDS: usize = 42;
 pub(crate) const TEXELS_PER_CHUNK: usize = (ALPHA_MAP_SIZE * ALPHA_MAP_SIZE) as usize;
-const OUTER_ROW: usize = 17;
-const OUTER_VERTICES: usize = 81;
 
 pub(crate) struct MapTiles {
     pub(crate) id: u32,
@@ -24,7 +22,6 @@ pub(crate) struct MapTiles {
 
 pub(crate) struct ChunkSummary {
     pub(crate) area: u32,
-    pub(crate) middle: [f32; 3],
     pub(crate) paint: Vec<Paint>,
     pub(crate) wet_cells: WetCells,
 }
@@ -166,12 +163,8 @@ fn chunk(c: &ChunkMesh) -> ChunkSummary {
             LiquidKind::Slime => wet_cells.slime += wet,
         }
     }
-    let [x, y, _] = c.positions[0];
-    let outer = (0..9).flat_map(|r| (0..9).map(move |k| r * OUTER_ROW + k));
-    let z = outer.map(|i| c.positions[i][2]).sum::<f32>() / OUTER_VERTICES as f32;
     ChunkSummary {
         area: c.area_id,
-        middle: [x - CHUNK_SIZE / 2.0, y - CHUNK_SIZE / 2.0, z],
         paint,
         wet_cells,
     }
