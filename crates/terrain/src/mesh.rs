@@ -71,7 +71,7 @@ pub struct ChunkMesh {
 }
 
 /// A placed M2 doodad.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Doodad {
     /// The model path as the ADT names it, ending `.mdx`.
     pub model: String,
@@ -85,7 +85,7 @@ pub struct Doodad {
 }
 
 /// A placed WMO.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WmoInstance {
     /// The root WMO path.
     pub model: String,
@@ -144,7 +144,7 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh, Error> {
                 model: root.models.get(d.name_id as usize)?.clone(),
                 position: placement_to_world(d.position),
                 rotation: d.rotation,
-                scale: f32::from(d.scale) / 1024.0,
+                scale: f32::from(d.scale) / DOODAD_SCALE_STEPS,
                 unique_id: d.unique_id,
             })
         })
@@ -170,9 +170,17 @@ pub fn adt_to_tile_mesh(adt_bytes: &[u8]) -> Result<TileMesh, Error> {
     })
 }
 
+/// An MDDF entry holds a doodad's scale as a count of these in 16 bits.
+pub const DOODAD_SCALE_STEPS: f32 = 1024.0;
+
 /// Placements are stored as distances from the map's north-west corner, axes permuted.
-fn placement_to_world(p: [f32; 3]) -> [f32; 3] {
+pub fn placement_to_world(p: [f32; 3]) -> [f32; 3] {
     [MAP_CENTER - p[2], MAP_CENTER - p[0], p[1]]
+}
+
+/// A world position as a placement stores it: the inverse of [`placement_to_world`].
+pub fn world_to_placement(p: [f32; 3]) -> [f32; 3] {
+    [MAP_CENTER - p[1], p[2], MAP_CENTER - p[0]]
 }
 
 fn chunk_mesh(root: &RootAdt, mcnk: &McnkChunk) -> Option<ChunkMesh> {
@@ -304,4 +312,30 @@ pub fn cell_vertices(row: u32, col: u32) -> [u32; 5] {
     let tl = row * ROW_STRIDE + col;
     let bl = tl + ROW_STRIDE;
     [tl, tl + 1, bl, bl + 1, row * ROW_STRIDE + 9 + col]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stored_placement_goes_to_the_world_and_back_to_the_last_bit() {
+        for stored in [
+            [17_096.32_f32, 41.5, 17_310.04],
+            [9_000.0, -3.25, 30_000.5],
+            [MAP_CENTER, 0.0, MAP_CENTER],
+        ] {
+            let back = world_to_placement(placement_to_world(stored));
+            assert_eq!(
+                back.map(f32::to_bits),
+                stored.map(f32::to_bits),
+                "{stored:?}"
+            );
+        }
+        let centre = placement_to_world([MAP_CENTER, 7.0, MAP_CENTER]);
+        assert_eq!(
+            centre.map(f32::to_bits),
+            [0.0_f32, 0.0, 7.0].map(f32::to_bits)
+        );
+    }
 }
