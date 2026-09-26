@@ -170,10 +170,10 @@ fn spot_line(palette: &Palette) -> (String, Color32) {
     if let Some(e) = palette.failed() {
         return (e.to_owned(), TROUBLE);
     }
-    let Some(catalog) = palette.catalog() else {
+    if palette.catalog().is_none() {
         let said = format!("reading the catalog in {}", palette.dir().display());
         return (said, DIM);
-    };
+    }
     if let Some(trouble) = &palette.trouble {
         return (trouble.clone(), TROUBLE);
     }
@@ -181,10 +181,8 @@ fn spot_line(palette: &Palette) -> (String, Color32) {
         return ("looking for the spot the camera looks at".to_owned(), DIM);
     };
     let spot = &ranked.found.spot;
-    let zone = spot
-        .zone
-        .map_or("no zone", |z| catalog.tables.zones[z].name.as_str());
-    let mut said = format!("{:.1}, {:.1} in {zone}", ranked.at[0], ranked.at[1]);
+    let place = &ranked.found.sheet_place;
+    let mut said = format!("{:.1}, {:.1} in {place}", ranked.at[0], ranked.at[1]);
     if let Some(under) = &ranked.found.under {
         let _ = write!(said, ", on {}", what_fits::stem(under));
     }

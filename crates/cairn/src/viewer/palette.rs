@@ -329,15 +329,11 @@ fn state(
             unknown.join(", ")
         );
     }
-    if let (Some(ranked), Some(catalog)) = (&palette.ranked, palette.catalog()) {
-        let zone = ranked
-            .found
-            .spot
-            .zone
-            .map_or("no zone", |z| catalog.tables.zones[z].name.as_str());
+    if let Some(ranked) = &palette.ranked {
+        let place = &ranked.found.sheet_place;
         let _ = write!(
             said,
-            "; the spot {},{} in {zone}, ranked {:.1} ms after the camera settled",
+            "; the spot {},{} in {place}, ranked {:.1} ms after the camera settled",
             ranked.at[0],
             ranked.at[1],
             palette.took.unwrap_or_default().as_secs_f64() * 1000.0

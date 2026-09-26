@@ -48,6 +48,7 @@ const WIDTH: f32 = 440.0;
 pub const WIDTHS: std::ops::RangeInclusive<f32> = 240.0..=1200.0;
 const RECENT: usize = 32;
 const MET_NOTHING: &str = "the camera looks at no ground, so the lists are the last spot's";
+const MET_NOTHING_YET: &str = "the camera looks at no ground, so the most placed come first";
 /// How far the camera moves, or turns, before the spot is looked for again.
 const MOVED_YD: f32 = 0.5;
 const TURNED_COS: f32 = 0.999_96;
@@ -531,7 +532,14 @@ fn take_in(mut palette: ResMut<'_, Palette>) {
                 palette.trouble = None;
                 palette.news += 1;
             }
-            Ok(None) => palette.trouble = Some(MET_NOTHING.to_owned()),
+            Ok(None) => {
+                let said = if palette.ranked.is_some() {
+                    MET_NOTHING
+                } else {
+                    MET_NOTHING_YET
+                };
+                palette.trouble = Some(said.to_owned());
+            }
             Err(e) => palette.trouble = Some(e),
         }
     }

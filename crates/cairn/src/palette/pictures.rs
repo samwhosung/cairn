@@ -57,7 +57,8 @@ impl Pictures {
 
     /// The picture of `item`, read from `path` if it isn't held yet.
     pub fn show(&mut self, item: usize, path: impl FnOnce() -> PathBuf) -> Shown {
-        if let Some(held) = self.held.get_mut(&item) {
+        let this_side = self.side == self.wanted_side;
+        if let Some(held) = self.held.get_mut(&item).filter(|_| this_side) {
             held.shown = self.frame;
             return Shown::Picture(held.id);
         }
