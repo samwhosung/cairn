@@ -111,6 +111,21 @@ impl Placements {
         self.by_id.is_empty()
     }
 
+    /// Places `model` at `transform` under `id`, as no tile does, until [`Self::lift`] takes it
+    /// away. `transform` takes model space to the world in Bevy's axes.
+    pub fn place(&mut self, id: u32, model: PlacedModel, transform: Transform) {
+        self.add(id, || Placement {
+            model,
+            transform,
+            refs: 0,
+        });
+    }
+
+    /// Takes away what [`Self::place`] put under `id`.
+    pub fn lift(&mut self, id: u32) {
+        self.release(id);
+    }
+
     fn add(&mut self, id: u32, place: impl FnOnce() -> Placement) {
         self.by_id.entry(id).or_insert_with(place).refs += 1;
     }
@@ -256,5 +271,20 @@ mod tests {
         );
         assert_eq!(shared.transform.translation, wow_to_bevy([1.0, 2.0, 3.0]));
         assert_eq!(shared.transform.scale, Vec3::splat(1.5));
+    }
+
+    #[test]
+    fn a_model_placed_by_hand_stays_until_it_is_lifted() {
+        let mut p = Placements::default();
+        let lamp = PlacedModel::Doodad {
+            url: m2_url("World\\Lamp.mdx"),
+        };
+        let at = Transform::from_xyz(1.0, 2.0, 3.0);
+        p.place(4, lamp.clone(), at);
+        assert_eq!(p.get(4).map(|q| (&q.model, q.transform)), Some((&lamp, at)));
+        p.lift(4);
+        assert!(p.is_empty());
+        p.lift(4);
+        assert!(p.is_empty(), "lifting what is gone does nothing");
     }
 }

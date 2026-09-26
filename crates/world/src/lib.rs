@@ -72,6 +72,7 @@ pub use model::{BillboardInfo, ModelSubmesh};
 pub use placements::{
     GLOBAL_WMO_ID, PlacedModel, Placement, Placements, PropPlacement, prop_placements,
 };
+pub use portal::WholeBuildings;
 pub use source::{Install, MPQ_SOURCE, Repeat, m2_url, register_source, texture_url, wmo_url};
 pub use texture::{blp_image, rgba_image};
 pub use view::{FARCLIP, FOV_Y, NEARCLIP, PROJECTION_FAR, WorldCamera, world_camera};
@@ -146,6 +147,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<interior::CurrentAreaInterior>()
         .init_resource::<interior::CurrentArea>()
         .init_resource::<interior::WmoGeneration>()
+        .init_resource::<portal::WholeBuildings>()
         .init_resource::<portal::CameraInteriorClaim>()
         .init_resource::<portal::ExteriorWindows>()
         .add_message::<rig_events::AnimEvent>()

@@ -63,6 +63,11 @@ impl WmoPortalInstance {
     }
 }
 
+/// Every group of every building drawn, whatever its portals let the camera see, as a model viewer
+/// shows it: a dungeon, which has no outside, shows its rooms from without.
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WholeBuildings(pub bool);
+
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CameraInteriorClaim(pub Option<crate::interior::WmoRoom>);
 
@@ -153,6 +158,7 @@ pub(crate) fn compute_wmo_pvs(
     mut room: ResMut<'_, CameraRoom>,
     mut camera_claim: ResMut<'_, CameraInteriorClaim>,
     mut camera_windows: ResMut<'_, ExteriorWindows>,
+    whole: Res<'_, WholeBuildings>,
 ) {
     let Ok((cam, projection)) = camera.single() else {
         return;
@@ -169,7 +175,7 @@ pub(crate) fn compute_wmo_pvs(
         };
         let rooms = &model.rooms;
         let groups = rooms.group_nav.len();
-        if !rooms.has_portals() {
+        if whole.0 || !rooms.has_portals() {
             let (visible, fog) = (vec![true; groups], vec![false; groups]);
             if inst.visible != visible || inst.interior_fog != fog || inst.ever_flooded != visible {
                 inst.ever_flooded.clone_from(&visible);

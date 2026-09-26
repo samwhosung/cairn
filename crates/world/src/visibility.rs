@@ -245,7 +245,9 @@ mod tests {
 
         use crate::adt::AdtTile;
         use crate::liquid::{LiquidSource, WmoPool};
-        use crate::portal::{CameraInteriorClaim, ExteriorWindows, compute_wmo_pvs};
+        use crate::portal::{
+            CameraInteriorClaim, ExteriorWindows, WholeBuildings, compute_wmo_pvs,
+        };
         use crate::room::CameraRoom;
         use crate::stream::Streamer;
         use crate::wmo::{WmoGroupNav, WmoModel, WmoRooms};
@@ -258,6 +260,7 @@ mod tests {
             .init_resource::<CameraRoom>()
             .init_resource::<CameraInteriorClaim>()
             .init_resource::<ExteriorWindows>()
+            .init_resource::<WholeBuildings>()
             .init_resource::<FarSide>()
             .add_systems(Update, (compute_wmo_pvs, apply_model_visibility).chain());
         let rooms = WmoRooms {
