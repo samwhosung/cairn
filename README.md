@@ -45,6 +45,7 @@ gates enforce the rest.
 - [`protocol`](crates/protocol) — The native wire between cairn's client and server: frames, the messages each side sends, and their encoding
 - [`server`](crates/server) — The world server: a 20 Hz bulk-synchronous tick that checks and relays movement, over TCP or in-process, and keeps the world in an SQLite file
 - [`sound`](crates/sound) — World of Warcraft 1.12.1 sound as the client picks and schedules it: its sound tables, the kit player, zone music and ambience and the world's emitters, mixed by kira on the device or offline
+- [`survey`](crates/survey) — What the maps of a World of Warcraft 1.12.1 install paint and place, by zone: every ground texture, doodad and building, with where and how often, written out as text and pictures an agent can search and look through
 - [`terrain`](crates/terrain) — Meshes World of Warcraft 1.12.1 ADT terrain and liquids, and answers point queries on them
 - [`wdl`](crates/wdl) — Reads World of Warcraft 1.12.1 WDL maps: the coarse heights the horizon is drawn from
 - [`wdt`](crates/wdt) — Reads World of Warcraft 1.12.1 WDT map tables and maps world coordinates to tiles
