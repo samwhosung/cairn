@@ -12,6 +12,7 @@ mod fixture;
 mod fly;
 mod net;
 mod note;
+mod palette;
 mod player;
 mod shot;
 mod view;
@@ -68,6 +69,9 @@ fn main() -> AppExit {
     }
     if matches!(args.mode, args::Mode::Window(_)) && args.notes.is_none() {
         args.notes = server::data_dir().map(|dir| dir.join("notes"));
+    }
+    if !matches!(args.mode, args::Mode::Shot(_)) && args.lists.is_none() {
+        args.lists = server::data_dir().map(|dir| dir.join("lists"));
     }
     args.map = match args.map {
         args::Map::Install { name, patch } => args::Map::Install {

@@ -1,5 +1,5 @@
 mod studio;
-mod what_fits;
+pub(crate) mod what_fits;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use world::Install;
 
 use studio::Sitter;
 
-const DEFAULT_DIR: &str = "catalog";
+pub(crate) const DEFAULT_DIR: &str = "catalog";
 const CATALOG_VERSION: &str = "cairn catalog 1";
 
 #[derive(Debug, PartialEq)]

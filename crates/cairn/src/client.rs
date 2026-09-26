@@ -5,7 +5,7 @@ use world::{CurrentMap, Install};
 
 use crate::args::{self, Args, Mode};
 use crate::view::Aim;
-use crate::{fixture, net, note, player, shot, viewer};
+use crate::{fixture, net, note, palette, player, shot, viewer};
 
 pub fn assemble(
     app: &mut App,
@@ -18,6 +18,11 @@ pub fn assemble(
     world::register_source(app, install);
     let aim = args.aim.unwrap_or(start);
     let pose = aim.pose();
+    let palette = palette::PalettePlugin {
+        catalog: args.catalog.clone(),
+        lists: args.lists.clone(),
+        map: args.map.clone(),
+    };
     match args.mode {
         Mode::Window(joining) => {
             let look = character_look(args.look);
@@ -49,6 +54,7 @@ pub fn assemble(
                 },
                 world::hands::HandsPlugin,
                 world::hands::SightPickingPlugin,
+                palette,
             ));
             let feet = pose.target.to_array();
             net::join(app, &joining, &look, map.id, feet, pose.heading)?;
@@ -82,6 +88,7 @@ pub fn assemble(
                     age: args.world_age,
                 },
                 world::collision::CollisionPlugin,
+                palette,
             ));
         }
     }

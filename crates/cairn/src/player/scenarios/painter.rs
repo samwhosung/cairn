@@ -28,6 +28,7 @@ use super::walker::{Through, time_update};
 use crate::args;
 use crate::net::{Net, NetPlugin};
 use crate::note::NotePlugin;
+use crate::palette::PalettePlugin;
 use crate::player::camera::{CameraControl, CameraRig};
 use crate::player::flags::FALLING;
 use crate::player::state::Player;
@@ -206,6 +207,11 @@ impl Painter {
                 world::WorldPlugin,
                 NotePlugin {
                     dir: Some(PathBuf::from(&out).join("notes")),
+                    map: opened.clone(),
+                },
+                PalettePlugin {
+                    catalog: PathBuf::from(&out).join("catalog"),
+                    lists: None,
                     map: opened.clone(),
                 },
             ));

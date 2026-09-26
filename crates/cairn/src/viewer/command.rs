@@ -26,6 +26,7 @@ pub enum Command {
     },
     Shot(Ask),
     Hands(HandsAsk),
+    Palette(super::palette::Ask),
     Where,
     Quit,
 }
@@ -115,12 +116,13 @@ pub fn parse(line: &str) -> Result<Command, String> {
             })
         }
         ("shot", said) => shot(said).map(Command::Shot),
+        ("palette", said) => super::palette::parse(said).map(Command::Palette),
         ("where", []) => Ok(Command::Where),
         ("quit", []) => Ok(Command::Quit),
         (verb @ ("where" | "quit"), _) => Err(format!("{verb} takes nothing more")),
         (verb, _) => Err(format!(
             "no command {verb}: look, move, turn, orbit, shot, pick, select, pointer, ghost, add, \
-             remove, where or quit"
+             remove, palette, where or quit"
         )),
     }
 }

@@ -7,6 +7,9 @@ yanked = "deny"
 ignore = [
   # `paste`: unmaintained, no vulnerability; wgpu's Metal backend builds it through `metal`.
   "RUSTSEC-2024-0436",
+  # `ttf-parser`: unmaintained, no vulnerability; egui lays its text out through it (`ab_glyph`),
+  # and it reads only the install's own interface fonts.
+  "RUSTSEC-2026-0192",
 ]
 
 [licenses]

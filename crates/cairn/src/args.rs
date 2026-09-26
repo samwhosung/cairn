@@ -16,6 +16,7 @@ pub const USAGE: &str = "\
 usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no-glow] [--fly]
              [--mute] [LOOK] [--connect HOST:PORT | --host [PORT]] [--name NAME] [--world FILE]
              [--game NAME [--knobs FILE] [--overlay FILE]] [--notes DIR] [--patch DIR]
+             [--catalog DIR] [--lists DIR]
          walk the install at $WOW_DATA, starting where the camera looks, hearing it unless
          --mute keeps the window silent. The window serves its world to itself, and no one
          else can join it. --connect joins a running server, which places the player; --host
@@ -38,7 +39,7 @@ usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no
          the orbit around the point a yard above its feet; without a camera, a Northshire
          hillside from 5 yd south, 10 degrees up
        cairn view [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no-glow]
-                  [--age S] [--patch DIR]
+                  [--age S] [--patch DIR] [--catalog DIR] [--lists DIR]
          load the place once, age it as a shot does, then answer commands from standard
          input, one a line, each with a line on standard output: `ready` first, then `ok`
          or `error:` for each command (VIEWING below)
@@ -143,6 +144,13 @@ VIEWING, the viewer's commands; yards and degrees:
          with each pixel in the colour the list gives its placement. A model covers a pixel
          where it is the nearest thing drawn: a see-through part where at least half of it
          shows, and never a part that only lights or shades what lies behind
+  palette [open | close | tab TAB | search WORDS | order fits|plain|listed | size PX | width PX
+          | follow on|off | pick N | list FILE [--top N] | await NAME | frames N]
+         show and ask the palette as the window does (PALETTE below): TAB is all, a kind, ground,
+         recent or a list's name, and PX points; pick arms the Nth thing shown; list writes the
+         first N shown (20 by default) as `cairn catalog fits` lists them, the spot first; await
+         waits up to 10 s for the list NAME to show; frames runs N frames and says how long they
+         took. Each answers once the panel shows what was asked, saying what it shows
   quit                  or the end of the input
 
 LOOK, the character walked as: --race human|orc|dwarf|nightelf|undead|tauren|gnome|troll
@@ -164,12 +172,23 @@ window while a held button hides the pointer or it is off the window: a director
 by its time (UTC) holding frame.png, the frame with the spot ringed, and note.txt, the
 camera it was drawn from, what the spot shows, the shot that draws the view again and the
 window that walks on from where it was taken. Notes go in the user's data directory (on
-macOS ~/Library/Application Support/cairn/notes), or in --notes DIR.";
+macOS ~/Library/Application Support/cairn/notes), or in --notes DIR.
 
-const FLAGS: [&str; 29] = [
+PALETTE: Ctrl+Shift+P opens and closes a panel at the window's right of the pictures in the
+catalog `cairn catalog` wrote into --catalog DIR (catalog, as it writes it by default). It has a
+tab for each kind of model, one for ground textures and one for the things picked lately; what
+fits the spot the camera looks at first, with why on hover, or the most placed first; and a search
+by words over names, paths and zones. Each FILE.txt in --lists DIR (on macOS ~/Library/Application
+Support/cairn/lists by default) is a tab too, which shows within a second of the file being
+written: an install path a line, and after a tab what to say of it. A pick arms the thing for
+placing. While the pointer is over the panel, or its search is typed in, the world takes neither
+the mouse nor the keys.";
+
+const FLAGS: [&str; 31] = [
     "age",
     "at",
     "az",
+    "catalog",
     "connect",
     "display",
     "dist",
@@ -181,6 +200,7 @@ const FLAGS: [&str; 29] = [
     "hair",
     "hair-color",
     "knobs",
+    "lists",
     "look",
     "map",
     "name",
@@ -222,6 +242,10 @@ pub struct Args {
     pub world_age: Duration,
     pub look: Look,
     pub notes: Option<PathBuf>,
+    /// The catalog the palette shows.
+    pub catalog: PathBuf,
+    /// The folder of the palette's named lists.
+    pub lists: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,10 +399,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         None => DEFAULT_WORLD_AGE,
     };
     let look = look(&mut given, headless)?;
-    let notes = given.remove("notes").map(PathBuf::from);
-    if headless && notes.is_some() {
-        return Err("--notes is for the window".into());
-    }
+    let (notes, catalog, lists) = folders(&mut given, headless, shot)?;
     let mode = match out {
         Some(path) => {
             shot_joins_nothing(&given, host)?;
@@ -403,7 +424,28 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         world_age,
         look,
         notes,
+        catalog,
+        lists,
     })
+}
+
+/// Where the window keeps its notes, and where the palette finds its catalog, by default where
+/// `cairn catalog` writes one, and its lists.
+fn folders(
+    given: &mut BTreeMap<String, String>,
+    headless: bool,
+    shot: bool,
+) -> Result<(Option<PathBuf>, PathBuf, Option<PathBuf>), String> {
+    let notes = given.remove("notes").map(PathBuf::from);
+    if headless && notes.is_some() {
+        return Err("--notes is for the window".into());
+    }
+    let (catalog, lists) = (given.remove("catalog"), given.remove("lists"));
+    if shot && (catalog.is_some() || lists.is_some()) {
+        return Err("--catalog and --lists are for the window and the viewer".into());
+    }
+    let catalog = catalog.unwrap_or_else(|| crate::catalog::DEFAULT_DIR.to_owned());
+    Ok((notes, PathBuf::from(catalog), lists.map(PathBuf::from)))
 }
 
 fn map(given: &mut BTreeMap<String, String>) -> Result<Map, String> {

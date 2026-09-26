@@ -5,6 +5,7 @@ mod command;
 mod coverage;
 mod cut;
 mod hands;
+mod palette;
 #[cfg(test)]
 mod pictures;
 
@@ -94,6 +95,7 @@ enum Step {
     },
     Capturing(Box<Capture>),
     Handling(Box<hands::Handling>),
+    Palette(Box<palette::Asking>),
 }
 
 struct Capture {
@@ -161,7 +163,13 @@ impl Plugin for ViewerPlugin {
             )
             .add_systems(First, wait_for_commands)
             .add_systems(Update, (finish, capture).chain())
-            .add_systems(Last, (arrive_and_age, leave_out_the_running_cut).chain());
+            .add_systems(
+                Last,
+                (
+                    (arrive_and_age, leave_out_the_running_cut).chain(),
+                    palette::answer,
+                ),
+            );
     }
 }
 
@@ -276,6 +284,10 @@ fn wait_for_commands(
                 viewer.step = Step::Handling(Box::new(hands::Handling::new(ask)));
                 return;
             }
+            Ok(Command::Palette(ask)) => {
+                viewer.step = Step::Palette(Box::new(palette::Asking::new(ask)));
+                return;
+            }
             Ok(Command::Shot(ask)) => {
                 let size = ask.size.unwrap_or(viewer.size);
                 if let Some(target) = viewer.shot.resize(&mut images, size) {
@@ -385,6 +397,7 @@ fn capture(
     residency: Res<'_, Residency>,
     pipelines: Res<'_, Pipelines>,
     answers: Option<Res<'_, Answers>>,
+    palette: Option<Res<'_, crate::palette::Settled>>,
 ) {
     let viewer = &mut *viewer;
     let Step::Capturing(capture) = &mut viewer.step else {
@@ -404,7 +417,12 @@ fn capture(
         viewer.step = Step::Idle;
         return;
     }
-    if capture.waiting || !residency.settled() || !pipelines.built.load(Ordering::Relaxed) {
+    let palette_settled = palette.is_none_or(|p| p.0);
+    if capture.waiting
+        || !residency.settled()
+        || !pipelines.built.load(Ordering::Relaxed)
+        || !palette_settled
+    {
         return;
     }
     capture.waiting = true;

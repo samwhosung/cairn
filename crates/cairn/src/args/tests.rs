@@ -340,3 +340,22 @@ fn mistakes_are_refused() {
         assert!(parsed(line).is_err(), "{line}");
     }
 }
+
+#[test]
+fn the_palette_reads_the_catalog_and_the_lists_it_is_told() {
+    let args = parsed("").expect("parses");
+    assert_eq!((args.catalog, args.lists), (PathBuf::from("catalog"), None));
+    let args = parsed("view --catalog c --lists l").expect("parses");
+    assert_eq!(
+        (args.catalog, args.lists),
+        (PathBuf::from("c"), Some(PathBuf::from("l")))
+    );
+    for wrong in [
+        "shot --catalog c --out a.png",
+        "shot --lists l --out a.png",
+        "--catalog",
+        "--lists l --lists m",
+    ] {
+        assert!(parsed(wrong).is_err(), "{wrong}");
+    }
+}
