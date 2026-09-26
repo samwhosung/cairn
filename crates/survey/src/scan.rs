@@ -11,6 +11,7 @@ use crate::WetCells;
 
 const MAP_DBC: &str = "DBFilesClient\\Map.dbc";
 const MAP_FIELDS: usize = 42;
+const CHUNKS_A_SIDE: u32 = 16;
 pub(crate) const TEXELS_PER_CHUNK: usize = (ALPHA_MAP_SIZE * ALPHA_MAP_SIZE) as usize;
 
 pub(crate) struct MapTiles {
@@ -106,7 +107,7 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
                 .read(&format!("World\\Maps\\{dir}\\{dir}_{x}_{y}.adt"))
                 .ok()?;
             let mesh = terrain::adt_to_tile_mesh(&bytes).ok()?;
-            let area_here = |p: [f32; 3]| terrain::area_id_at(&mesh.chunks, p);
+            let area_here = |p: [f32; 3]| area_under(&mesh.chunks, (x, y), p);
             let doodads = mesh
                 .doodads
                 .iter()
@@ -132,6 +133,18 @@ pub(crate) fn tiles(chain: &Chain, maps: &[MapTiles]) -> Vec<TileSummary> {
             })
         })
         .collect()
+}
+
+/// A point on the edge between two chunks lies in the one south or east of it, as `world_to_chunk`
+/// places it.
+fn area_under(chunks: &[ChunkMesh], (tile_x, tile_y): (u32, u32), p: [f32; 3]) -> Option<u32> {
+    let (chunk_x, chunk_y) = wdt::world_to_chunk(p[0], p[1]);
+    let column = chunk_x.checked_sub(tile_x * CHUNKS_A_SIDE)?;
+    let row = chunk_y.checked_sub(tile_y * CHUNKS_A_SIDE)?;
+    chunks
+        .iter()
+        .find(|c| c.index_x == column && c.index_y == row)
+        .map(|c| c.area_id)
 }
 
 fn chunk(c: &ChunkMesh) -> ChunkSummary {
@@ -167,5 +180,51 @@ fn chunk(c: &ChunkMesh) -> ChunkSummary {
         area: c.area_id,
         paint,
         wet_cells,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use terrain::TILE_SIZE;
+
+    use super::*;
+
+    fn chunk(row: u32, column: u32, area: u32) -> ChunkMesh {
+        ChunkMesh {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            uvs: Vec::new(),
+            indices: Vec::new(),
+            holes: 0,
+            base_texture: None,
+            layer_textures: Vec::new(),
+            layer_effect_ids: Vec::new(),
+            alpha_map: None,
+            shadow: None,
+            pred_tex: [0; 64],
+            no_effect_doodad: [false; 64],
+            index_x: column,
+            index_y: row,
+            area_id: area,
+            impassable: false,
+            liquids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_point_on_an_edge_lies_in_the_chunk_south_of_it() {
+        let chunks = [chunk(0, 0, 1), chunk(1, 0, 2)];
+        let tile = (32, 32);
+        let north_edge = 32.0 * TILE_SIZE - 32.0 * TILE_SIZE;
+        let edge = north_edge - TILE_SIZE / 16.0;
+        let y = -1.0;
+        assert_eq!(area_under(&chunks, tile, [edge + 1.0, y, 0.0]), Some(1));
+        assert_eq!(area_under(&chunks, tile, [edge, y, 0.0]), Some(2));
+        assert_eq!(area_under(&chunks, tile, [edge - 1.0, y, 0.0]), Some(2));
+        assert_eq!(
+            area_under(&chunks, (31, 32), [edge, y, 0.0]),
+            None,
+            "another tile's"
+        );
     }
 }
