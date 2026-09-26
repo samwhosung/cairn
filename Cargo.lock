@@ -1462,6 +1462,7 @@ dependencies = [
  "bevy",
  "catalog",
  "dbc",
+ "document",
  "fits",
  "game",
  "image",

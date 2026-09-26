@@ -31,7 +31,7 @@ shots, and more.
 - [`atlas`](crates/atlas) — Draws a zone from above
 - [`blp`](crates/blp) — Decodes WoW 1.12.1 BLP textures
 - [`bots`](crates/bots) — Bots that load the server, and scripted scenarios with a verdict
-- [`cairn`](crates/cairn) — The client: the game window, shots, the viewer, the atlas and the asset catalog
+- [`cairn`](crates/cairn) — The client: the game window, shots, the viewer, the atlas, the asset catalog and the zone verbs
 - [`catalog`](crates/catalog) — The games cairn can run, by name
 - [`character`](crates/character) — Characters and creatures: their looks, skins and gear
 - [`dbc`](crates/dbc) — Reads WoW 1.12.1 DBC tables

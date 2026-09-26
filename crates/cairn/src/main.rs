@@ -1,4 +1,4 @@
-//! The cairn client: walks a window through a WoW 1.12.1 install, renders shots of it to PNG files, alone or from a viewer that stays open, draws a zone of it from above, or writes a catalog of its assets.
+//! The cairn client: walks a window through a WoW 1.12.1 install, renders shots of it to PNG files, alone or from a viewer that stays open, draws a zone of it from above, writes a catalog of its assets, or builds a zone of its own from the command line.
 #![allow(
     clippy::needless_pass_by_value,
     reason = "Bevy hands systems their parameters by value"
@@ -34,6 +34,15 @@ static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 fn main() -> AppExit {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().is_some_and(|arg| arg == "zone") {
+        return match document::cli::main(&argv[1..]) {
+            Ok(()) => AppExit::Success,
+            Err(e) => {
+                eprintln!("cairn zone: {e}");
+                AppExit::error()
+            }
+        };
+    }
     if argv.iter().any(|arg| arg == "-h" || arg == "--help") {
         println!("{}", args::USAGE);
         return AppExit::Success;

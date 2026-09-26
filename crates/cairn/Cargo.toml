@@ -1,6 +1,6 @@
 [package]
 name = "cairn"
-description = "The client: the game window, shots, the viewer, the atlas and the asset catalog"
+description = "The client: the game window, shots, the viewer, the atlas, the asset catalog and the zone verbs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,7 @@ avian3d.workspace = true
 bevy.workspace = true
 catalog = { path = "../catalog" }
 dbc = { path = "../dbc" }
+document = { path = "../document" }
 fits = { path = "../fits" }
 light = { path = "../light" }
 protocol = { path = "../protocol" }

@@ -72,6 +72,10 @@ usage: cairn [CAMERA] [--map MAP | --zone DIR] [--time HH:MM] [--size WxH] [--no
          replay a zone's history, one change a line (`place ID X,Y PATH`, `move ID X,Y`,
          `remove ID ...`), ranking every model before each placement from what the zone held
          then, and say where each list order put the model placed
+       cairn zone VERB ZONE ...
+         build a zone of its own without a window: raise, paint, place and scatter in it, undo
+         and redo each author's own steps, and write the files --zone opens into ZONE/build;
+         `cairn zone help` has every verb
 
 MAP is a Map.dbc id or directory name, Azeroth by default; --time is the game time
 of day the world is lit for, 12:00 by default. --no-glow leaves out the client's
