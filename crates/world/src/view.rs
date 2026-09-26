@@ -4,7 +4,7 @@ use bevy::camera::{CameraOutputMode, PerspectiveProjection, Projection};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use bevy::render::extract_component::ExtractComponent;
-use bevy::render::view::{Hdr, Msaa};
+use bevy::render::view::{Hdr, Msaa, NoIndirectDrawing};
 
 /// How far the detailed world is drawn, in yards of view depth: the client's default `farclip`.
 pub const FARCLIP: f32 = 350.0;
@@ -29,7 +29,8 @@ pub struct WorldCamera;
 
 /// A world camera at `transform`. Its frame holds gamma-space colour, as the client's framebuffer
 /// does, without multisampling, like the client by default; the world's decode pass writes it to
-/// the target.
+/// the target. The camera draws a batch's instances in the order they were queued; drawn
+/// indirectly, they would take their places in the order the GPU's threads reach them.
 pub fn world_camera(transform: Transform) -> impl Bundle {
     (
         Camera3d::default(),
@@ -47,6 +48,7 @@ pub fn world_camera(transform: Transform) -> impl Bundle {
         Hdr,
         Tonemapping::None,
         Msaa::Off,
+        NoIndirectDrawing,
         transform,
     )
 }
