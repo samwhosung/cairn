@@ -57,6 +57,7 @@ mod wmo;
 mod wmo_areas;
 
 use bevy::asset::AssetApp;
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
 use bevy::prelude::*;
 
@@ -183,9 +184,12 @@ impl Plugin for WorldPlugin {
         )
         .add_systems(
             PostUpdate,
-            billboard::face_billboards
-                .after(rig::RigFinalize)
-                .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+            (
+                billboard::face_billboards
+                    .after(rig::RigFinalize)
+                    .before(VisibilitySystems::CheckVisibility),
+                draw_order::visible_in_id_order.after(VisibilitySystems::CheckVisibility),
+            ),
         );
         mat_anim_table::plugin(app);
     }

@@ -1,6 +1,7 @@
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+use bevy::camera::visibility::VisibleEntities;
 use bevy::ecs::system::StaticSystemParam;
 use bevy::pbr::Material;
 use bevy::prelude::*;
@@ -81,4 +82,15 @@ fn bind_groups_in_id_order<M: Material>(
 /// one material's batches by slab.
 fn slabs_in_id_order(mut extracted: ResMut<'_, NewMeshes<RenderMesh>>) {
     extracted.extracted.sort_unstable_by_key(|(id, _)| *id);
+}
+
+/// Bevy lists a view's visible entities thread by thread, in an order that follows which thread
+/// checked which entity, and numbers the pipelines it builds for them, fills its bins and breaks
+/// its sort ties in that order.
+pub(crate) fn visible_in_id_order(mut views: Query<'_, '_, &mut VisibleEntities>) {
+    for mut visible in &mut views {
+        for entities in visible.entities.values_mut() {
+            entities.sort_unstable();
+        }
+    }
 }
