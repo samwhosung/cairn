@@ -227,6 +227,18 @@ impl Cast {
         })
     }
 
+    /// Where the ray meets the terrain, through every model in front of it.
+    pub fn ground(&self) -> Option<Sighting> {
+        self.terrain
+            .as_ref()
+            .map(|(distance, seen, tile)| Sighting {
+                point: self.origin + self.dir * *distance,
+                distance: *distance,
+                seen: seen.clone(),
+                tile: *tile,
+            })
+    }
+
     /// Every model batch the ray meets short of `distance`, as [`Cast::first`] meets them, and
     /// whether the terrain comes first.
     pub fn nearer(self, distance: f32) -> Nearer {

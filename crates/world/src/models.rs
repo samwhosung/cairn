@@ -1,3 +1,4 @@
+mod ghost;
 mod props;
 
 use std::collections::{BTreeMap, HashMap};
@@ -33,6 +34,7 @@ use crate::sight::{Meetable, Seen, install_path};
 use crate::stream::Streamer;
 use crate::visibility::{DoodadFade, ModelPart, alpha_bits, probe_bits};
 use crate::wmo::WmoModel;
+pub(crate) use ghost::{GhostBatches, GhostSpawner};
 use props::{Prop, PropLight, PropSite, resolve_props};
 
 enum ModelHandle {

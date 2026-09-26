@@ -16,7 +16,9 @@ use model::{FogPolicy, ModelBlend, WmoBatchClass};
 
 use crate::draw_order::OrderedMaterialPlugin;
 use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
-use crate::sky_order::{BAND_DROP, CLUTTER_DEPTH_SORT_RUNG, CLUTTER_SORT_RUNG, FAR_SIDE_SORT_RUNG};
+use crate::sky_order::{
+    BAND_DROP, CLUTTER_DEPTH_SORT_RUNG, CLUTTER_SORT_RUNG, FAR_SIDE_SORT_RUNG, GHOST_SORT_RUNG,
+};
 
 pub type ModelMaterial = ExtendedMaterial<StandardMaterial, ModelExtension>;
 
@@ -31,19 +33,24 @@ const BATCH_ORDER_SORT_CAP: f32 = 0.9;
 const DEPTH_PRIME_SORT_BIAS: f32 = -8.0;
 const CLUTTER_FADE_START_SHARE: f32 = 0.75;
 
-const NO_DEPTH_WRITE: u16 = 1;
-const NO_DEPTH_TEST: u16 = 1 << 1;
-const ADDITIVE: u16 = 1 << 2;
-const OPAQUE_INTENT: u16 = 1 << 3;
-const FOG_SHIFT: u16 = 4;
-const MODULATE: u16 = 1 << 7;
-const MODULATE_2X: u16 = 1 << 8;
-const DEPTH_PRIME: u16 = 1 << 9;
-const TWIN_CUTOUT: u16 = 1 << 10;
-const FAR_SIDE: u16 = 1 << 11;
-const ENV_MAP: u16 = 1 << 12;
-const SKY_DEPTH: u16 = 1 << 13;
-const SIGHT: u16 = 1 << 14;
+type Markers = u32;
+const NO_DEPTH_WRITE: Markers = 1;
+const NO_DEPTH_TEST: Markers = 1 << 1;
+const ADDITIVE: Markers = 1 << 2;
+const OPAQUE_INTENT: Markers = 1 << 3;
+const FOG_SHIFT: u32 = 4;
+const MODULATE: Markers = 1 << 7;
+const MODULATE_2X: Markers = 1 << 8;
+const DEPTH_PRIME: Markers = 1 << 9;
+const TWIN_CUTOUT: Markers = 1 << 10;
+const FAR_SIDE: Markers = 1 << 11;
+const ENV_MAP: Markers = 1 << 12;
+const SKY_DEPTH: Markers = 1 << 13;
+const SIGHT: Markers = 1 << 14;
+const SELECTED: Markers = 1 << 15;
+const GHOST: Markers = 1 << 16;
+const _: () = assert!(GHOST < 1 << f32::MANTISSA_DIGITS);
+const SELECTED_SORT_BIAS: f32 = 0.5;
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,12 +65,14 @@ pub struct ModelKey {
     sky_depth: bool,
     far_side: bool,
     sight: bool,
+    selected: bool,
+    ghost: bool,
     clutter: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
     fn from(e: &ModelExtension) -> Self {
-        let markers = e.clutter_fade.z as u16;
+        let markers = markers_of(e);
         Self {
             clutter: e.is_clutter(),
             fade: e.model_flags.y > 0.5,
@@ -76,6 +85,8 @@ impl From<&ModelExtension> for ModelKey {
             sky_depth: markers & SKY_DEPTH != 0,
             far_side: markers & FAR_SIDE != 0,
             sight: markers & SIGHT != 0,
+            selected: markers & SELECTED != 0,
+            ghost: markers & GHOST != 0,
         }
     }
 }
@@ -154,7 +165,7 @@ impl MaterialExtension for ModelExtension {
                 ds.depth_compare = CompareFunction::Always;
             }
         }
-        if key.far_side || key.clutter {
+        if key.far_side || key.clutter || key.selected || key.ghost {
             crate::sky_order::sort_only(descriptor);
         }
         if key.sky_depth {
@@ -213,9 +224,27 @@ impl MaterialExtension for ModelExtension {
             }
             if let Some(fragment) = descriptor.fragment.as_mut() {
                 fragment.shader_defs.push("WOW_SIGHT".into());
+                fragment.shader_defs.push("WOW_SOLID_ONLY".into());
             }
         }
+        if key.selected {
+            tint_over(descriptor);
+        }
         Ok(())
+    }
+}
+
+fn tint_over(descriptor: &mut RenderPipelineDescriptor) {
+    if let Some(ds) = descriptor.depth_stencil.as_mut() {
+        ds.depth_write_enabled = false;
+    }
+    if let Some(fragment) = descriptor.fragment.as_mut() {
+        fragment.shader_defs.push("WOW_SELECTED".into());
+        fragment.shader_defs.push("WOW_SOLID_ONLY".into());
+        if let Some(Some(target)) = fragment.targets.get_mut(0) {
+            target.blend = Some(BlendState::ALPHA_BLENDING);
+            target.write_mask = ColorWrites::COLOR;
+        }
     }
 }
 
@@ -385,16 +414,16 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
     let opaque_intent = matches!(blend, ModelBlend::Opaque | ModelBlend::AlphaTest)
         && !fade_variant
         && !look.additive;
-    let markers = (u16::from(look.no_depth_write) * NO_DEPTH_WRITE)
-        | (u16::from(look.no_depth_test) * NO_DEPTH_TEST)
-        | (u16::from(look.additive) * ADDITIVE)
-        | (u16::from(opaque_intent) * OPAQUE_INTENT)
-        | ((look.fog_policy as u16) << FOG_SHIFT)
-        | (u16::from(blend == ModelBlend::Mod) * MODULATE)
-        | (u16::from(blend == ModelBlend::Mod2x) * MODULATE_2X)
-        | (u16::from(fade_variant && source_cutout) * TWIN_CUTOUT)
-        | (u16::from(look.env_map) * ENV_MAP)
-        | (u16::from(look.skybox) * SKY_DEPTH);
+    let markers = (Markers::from(look.no_depth_write) * NO_DEPTH_WRITE)
+        | (Markers::from(look.no_depth_test) * NO_DEPTH_TEST)
+        | (Markers::from(look.additive) * ADDITIVE)
+        | (Markers::from(opaque_intent) * OPAQUE_INTENT)
+        | ((look.fog_policy as Markers) << FOG_SHIFT)
+        | (Markers::from(blend == ModelBlend::Mod) * MODULATE)
+        | (Markers::from(blend == ModelBlend::Mod2x) * MODULATE_2X)
+        | (Markers::from(fade_variant && source_cutout) * TWIN_CUTOUT)
+        | (Markers::from(look.env_map) * ENV_MAP)
+        | (Markers::from(look.skybox) * SKY_DEPTH);
     let flag = |on: bool| if on { 1.0 } else { 0.0 };
     let unlit =
         look.emissive || (!look.is_wmo && matches!(blend, ModelBlend::Mod | ModelBlend::Mod2x));
@@ -424,7 +453,7 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
             ..StandardMaterial::default()
         },
         extension: ModelExtension {
-            clutter_fade: Vec4::new(0.0, 0.0, f32::from(markers), 0.0),
+            clutter_fade: Vec4::new(0.0, 0.0, markers as f32, 0.0),
             model_flags: Vec4::new(
                 flag(look.is_wmo),
                 flag(fade_variant),
@@ -450,16 +479,43 @@ fn build(look: &BatchLook, variant: Variant, light: &Buffer) -> ModelMaterial {
     }
 }
 
+fn markers_of(e: &ModelExtension) -> Markers {
+    e.clutter_fade.z as Markers
+}
+
+fn add_markers(e: &mut ModelExtension, markers: Markers) {
+    e.clutter_fade.z = (markers_of(e) | markers) as f32;
+}
+
 pub(crate) fn sight_twin_of(drawn: &ModelMaterial) -> ModelMaterial {
     let mut sight = drawn.clone();
-    sight.extension.clutter_fade.z = f32::from(sight.extension.clutter_fade.z as u16 | SIGHT);
+    add_markers(&mut sight.extension, SIGHT);
     sight
+}
+
+pub(crate) fn selected_twin_of(drawn: &ModelMaterial) -> ModelMaterial {
+    let mut twin = drawn.clone();
+    let cutout = matches!(drawn.base.alpha_mode, AlphaMode::Mask(_));
+    add_markers(
+        &mut twin.extension,
+        SELECTED | (Markers::from(cutout) * TWIN_CUTOUT),
+    );
+    twin.base.alpha_mode = AlphaMode::Blend;
+    twin.base.depth_bias += SELECTED_SORT_BIAS;
+    twin
+}
+
+pub(crate) fn ghost_twin_of(drawn: &ModelMaterial) -> ModelMaterial {
+    let mut ghost = drawn.clone();
+    add_markers(&mut ghost.extension, GHOST);
+    ghost.base.depth_bias += GHOST_SORT_RUNG;
+    ghost
 }
 
 pub(crate) fn far_twin_of(near: &ModelMaterial) -> ModelMaterial {
     let mut far = near.clone();
     far.base.depth_bias += FAR_SIDE_SORT_RUNG - BAND_DROP;
-    far.extension.clutter_fade.z = f32::from(far.extension.clutter_fade.z as u16 | FAR_SIDE);
+    add_markers(&mut far.extension, FAR_SIDE);
     far
 }
 
@@ -483,7 +539,7 @@ fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
             clutter_fade: Vec4::new(
                 0.0,
                 0.0,
-                f32::from(DEPTH_PRIME | if cutout { TWIN_CUTOUT } else { 0 }),
+                (DEPTH_PRIME | if cutout { TWIN_CUTOUT } else { 0 }) as f32,
                 0.0,
             ),
             model_flags: Vec4::ZERO,
@@ -504,7 +560,7 @@ pub(crate) fn clutter_materials(
     fade_far: f32,
     light: &Buffer,
 ) -> [ModelMaterial; 2] {
-    let pass = |markers: u16, rung: f32| ExtendedMaterial {
+    let pass = |markers: Markers, rung: f32| ExtendedMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: texture.clone(),
@@ -518,7 +574,7 @@ pub(crate) fn clutter_materials(
             clutter_fade: Vec4::new(
                 fade_far * CLUTTER_FADE_START_SHARE,
                 fade_far,
-                f32::from(markers),
+                markers as f32,
                 1.0,
             ),
             model_flags: Vec4::ZERO,

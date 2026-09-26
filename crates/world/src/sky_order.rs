@@ -22,6 +22,8 @@ pub(crate) const WATER_SORT_RUNG: f32 = -2.0e4;
 pub(crate) const FOAM_SORT_RUNG: f32 = -1.0e4;
 pub(crate) const DRIFT_SORT_RUNG: f32 = 1.4e4;
 pub(crate) const GLARE_SORT_RUNG: f32 = 2.0e4;
+pub(crate) const GHOST_SORT_RUNG: f32 = 3.0e4;
+pub(crate) const SCREEN_MARKS_SORT_RUNG: f32 = 4.0e4;
 
 /// The rasterizer's depth bias on every ground decal: its vertices, cut and placed on the CPU, lie
 /// on the drawn ground only to within rounding.
@@ -72,6 +74,8 @@ const _: () = {
         world,
         DRIFT_SORT_RUNG,
         GLARE_SORT_RUNG,
+        GHOST_SORT_RUNG,
+        SCREEN_MARKS_SORT_RUNG,
     ];
     let mut i = 1;
     while i < rungs.len() {

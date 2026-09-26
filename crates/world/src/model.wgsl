@@ -345,9 +345,16 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
     return out;
 }
 
-#ifdef WOW_SIGHT
-const SIGHT_MIN_ALPHA: f32 = 0.5;
+#ifdef WOW_SOLID_ONLY
+const SOLID_MIN_ALPHA: f32 = 0.5;
+#endif
 
+#ifdef WOW_SELECTED
+const SELECTED_AMBER: vec3<f32> = vec3<f32>(1.0, 0.6, 0.08);
+const SELECTED_TINT_ALPHA: f32 = 0.33;
+#endif
+
+#ifdef WOW_SIGHT
 fn sight_index(tag: u32) -> u32 {
     let low = (tag >> TAG_SHADE_SHIFT) & TAG_PROBE_MASK;
     let high = tag >> countTrailingZeros(TAG_INTERIOR_FOG);
@@ -463,10 +470,10 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     }
     let faded_alpha = base_color.a * obj_fade;
     let base = alpha_discard(pbr_input.material, base_color);
-#ifdef WOW_SIGHT
+#ifdef WOW_SOLID_ONLY
     let lights_or_shades = has_marker(ADDITIVE_BIT) || has_marker(MODULATE_BIT)
         || has_marker(MODULATE_2X_BIT);
-    if (lights_or_shades || (!has_marker(OPAQUE_INTENT_BIT) && faded_alpha < SIGHT_MIN_ALPHA)) {
+    if (lights_or_shades || (!has_marker(OPAQUE_INTENT_BIT) && faded_alpha < SOLID_MIN_ALPHA)) {
         discard;
     }
 #endif
@@ -640,6 +647,9 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     out.color = vec4<f32>(out_rgb, select(faded_alpha, 1.0, opaque_intent));
 #ifdef WOW_SIGHT
     out.color = vec4<f32>(sight_colour(sight_index(raw_tag)), 1.0);
+#endif
+#ifdef WOW_SELECTED
+    out.color = vec4<f32>(SELECTED_AMBER, SELECTED_TINT_ALPHA);
 #endif
     return out;
 }

@@ -20,6 +20,7 @@ mod draw_order;
 pub mod effects;
 mod glow;
 mod ground;
+pub mod hands;
 mod horizon;
 pub mod interior;
 mod layers;
