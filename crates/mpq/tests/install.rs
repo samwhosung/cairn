@@ -92,7 +92,7 @@ fn a_patch_directory_is_read_in_place_of_the_install() {
     std::fs::write(maps.join("AZEROTH_32_48.ADT"), b"patched").expect("write the patch");
     let install = Chain::open(&data).expect("open the chain");
     let patched = Chain::open(&data)
-        .and_then(|chain| chain.with_patch(&dir))
+        .and_then(|chain| chain.with_patch_dir(&dir))
         .expect("lay the patch");
     let (tile, beside) = (
         "World\\Maps\\Azeroth\\Azeroth_32_48.adt",

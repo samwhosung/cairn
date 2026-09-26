@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::archive::{Archive, BlockEntry};
 use crate::crypto::canonical;
 use crate::error::ChainError;
-use crate::patch::Patch;
+use crate::patch::PatchDir;
 
 /// The base archives, lowest priority first. `base.MPQ` and `backup.MPQ` are not in the client's
 /// chain.
@@ -27,14 +27,14 @@ pub struct ChainEntry {
     pub size: u64,
 }
 
-/// The archives the client mounts, lowest priority first, and a patch directory over them all. A
-/// file in a later archive replaces the same path in earlier ones, and a delete marker hides it.
+/// The archives the client mounts, lowest priority first, and any patch directory laid over them.
+/// A file in a later archive replaces the same path in earlier ones, and a delete marker hides it.
 /// Reads open their own file handles, so threads can read through one shared chain in parallel.
 /// The default chain mounts nothing.
 #[derive(Default)]
 pub struct Chain {
     archives: Vec<Archive>,
-    patch: Option<Patch>,
+    patch_dir: Option<PatchDir>,
 }
 
 impl Chain {
@@ -49,7 +49,7 @@ impl Chain {
             })?;
             return Ok(Self {
                 archives: vec![archive],
-                patch: None,
+                patch_dir: None,
             });
         }
         let listing = std::fs::read_dir(path).map_err(|source| ChainError::List {
@@ -74,15 +74,15 @@ impl Chain {
         }
         Ok(Self {
             archives,
-            patch: None,
+            patch_dir: None,
         })
     }
 
     /// Lays the directory `dir` over every archive, as one more patch archive would be: a file in
     /// it at the path the archives name a file by is read in place of theirs. The directory is
     /// read at each lookup, so a file written into it later is read as it is then.
-    pub fn with_patch(mut self, dir: impl AsRef<Path>) -> Result<Self, ChainError> {
-        self.patch = Some(Patch::open(dir.as_ref())?);
+    pub fn with_patch_dir(mut self, dir: impl AsRef<Path>) -> Result<Self, ChainError> {
+        self.patch_dir = Some(PatchDir::open(dir.as_ref())?);
         Ok(self)
     }
 
@@ -104,7 +104,7 @@ impl Chain {
     /// Reads `name` from the patch directory, or else from the archive whose entry for it wins.
     pub fn read(&self, name: &str) -> Result<Vec<u8>, ChainError> {
         if let Some(path) = self.patched(name)? {
-            return std::fs::read(&path).map_err(|source| ChainError::Patch { path, source });
+            return std::fs::read(&path).map_err(|source| ChainError::PatchDir { path, source });
         }
         let (archive, entry) = self
             .resolve(name)
@@ -154,9 +154,9 @@ impl Chain {
     }
 
     fn patched(&self, name: &str) -> Result<Option<PathBuf>, ChainError> {
-        self.patch
+        self.patch_dir
             .as_ref()
-            .map_or(Ok(None), |patch| patch.find(name))
+            .map_or(Ok(None), |dir| dir.find(name))
     }
 
     fn resolve(&self, name: &str) -> Option<(&Archive, BlockEntry)> {
@@ -337,7 +337,7 @@ mod tests {
         let bare = Chain::open(data.path()).expect("open the chain");
         assert_eq!(bare.read("world/replaced.txt").expect("read"), b"base");
         assert!(!bare.contains("world/new.txt"));
-        let chain = bare.with_patch(patch.path()).expect("lay the patch");
+        let chain = bare.with_patch_dir(patch.path()).expect("lay the patch");
         for name in [
             "World\\replaced.txt",
             "world/REPLACED.txt",
@@ -359,7 +359,7 @@ mod tests {
     fn no_name_leads_out_of_the_patch_directory() {
         let (data, patch) = base_and_patch();
         let chain = Chain::open(data.path())
-            .and_then(|chain| chain.with_patch(patch.path()))
+            .and_then(|chain| chain.with_patch_dir(patch.path()))
             .expect("lay the patch");
         let absolute = data.path().join("outside.txt").display().to_string();
         let data_dir = data.path().file_name().expect("a name").display();
@@ -391,7 +391,7 @@ mod tests {
         }
         patch.write("world/other.txt", b"lower");
         let chain = Chain::open(data.path())
-            .and_then(|chain| chain.with_patch(patch.path()))
+            .and_then(|chain| chain.with_patch_dir(patch.path()))
             .expect("lay the patch");
         assert_eq!(chain.read("World\\Other.txt").expect("read"), b"lower");
         assert_eq!(chain.read("world/replaced.txt").expect("read"), b"patched");
@@ -408,9 +408,9 @@ mod tests {
         let missing = patch.path().join("missing");
         let file = patch.path().join("WORLD/new.txt");
         for dir in [missing, file] {
-            let refused = Chain::open(data.path()).and_then(|chain| chain.with_patch(&dir));
+            let refused = Chain::open(data.path()).and_then(|chain| chain.with_patch_dir(&dir));
             assert!(
-                matches!(refused, Err(ChainError::Patch { ref path, .. }) if *path == dir),
+                matches!(refused, Err(ChainError::PatchDir { ref path, .. }) if *path == dir),
                 "{}",
                 dir.display()
             );

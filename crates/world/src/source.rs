@@ -29,7 +29,7 @@ impl Install {
 
     /// Opens the patch chain in `data` with the directory `patch` laid over it.
     pub fn open_patched(data: &Path, patch: &Path) -> Result<Self, ChainError> {
-        Ok(Self(Arc::new(Chain::open(data)?.with_patch(patch)?)))
+        Ok(Self(Arc::new(Chain::open(data)?.with_patch_dir(patch)?)))
     }
 }
 
