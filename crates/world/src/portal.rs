@@ -63,8 +63,8 @@ impl WmoPortalInstance {
     }
 }
 
-/// Every group of every building drawn, whatever its portals let the camera see, as a model viewer
-/// shows it: a dungeon, which has no outside, shows its rooms from without.
+/// With `true`, every group of every building is drawn, whatever its portals let the camera see:
+/// a dungeon, which has no outside, shows its rooms from without.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WholeBuildings(pub bool);
 

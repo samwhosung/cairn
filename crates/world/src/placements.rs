@@ -121,7 +121,7 @@ impl Placements {
         });
     }
 
-    /// Takes away what [`Self::place`] put under `id`.
+    /// Undoes one [`Self::place`] under `id`; what is there goes once nothing holds it.
     pub fn lift(&mut self, id: u32) {
         self.release(id);
     }
