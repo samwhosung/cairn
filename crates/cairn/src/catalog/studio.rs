@@ -58,9 +58,8 @@ pub struct Drawn {
     pub trouble: Option<String>,
 }
 
-/// In the model's own yards, its origin on the stage.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Framing {
+pub(crate) struct ModelFraming {
     pub target: Vec3,
     pub dist: f32,
     pub yards_across: f32,
@@ -69,23 +68,22 @@ pub(crate) struct Framing {
     pub stage_scale: f32,
 }
 
-/// In WoW's axes.
-struct ViewAxes {
+struct WowViewAxes {
     right: Vec3,
     up: Vec3,
     forward: Vec3,
 }
 
-fn view_axes() -> ViewAxes {
+fn wow_view_axes() -> WowViewAxes {
     let pose = Pose::orbit(Vec3::ZERO, AZIMUTH, ELEVATION, 1.0);
     let forward = (pose.target - pose.eye).normalize();
     let right = forward.cross(Vec3::Z).normalize();
     let up = right.cross(forward);
-    ViewAxes { right, up, forward }
+    WowViewAxes { right, up, forward }
 }
 
-pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
-    let ViewAxes { right, up, forward } = view_axes();
+pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> ModelFraming {
+    let WowViewAxes { right, up, forward } = wow_view_axes();
     let [lo, hi] = bounds.map(Vec3::from_array);
     let corners = (0..8).map(|i| {
         Vec3::new(
@@ -125,7 +123,7 @@ pub(crate) fn frame(bounds: [[f32; 3]; 2]) -> Framing {
         .fold(0.0, f32::max)
         .max(0.1);
     let depth = all_middle.dot(forward);
-    Framing {
+    ModelFraming {
         target: right * f32::midpoint(u0, u1) + up * f32::midpoint(v0, v1) + forward * depth,
         dist: radius + 1.0,
         yards_across,
@@ -249,7 +247,7 @@ fn spawn_figure(
         });
 }
 
-fn stage_point(framing: &Framing, local: Vec3) -> Vec3 {
+fn stage_point(framing: &ModelFraming, local: Vec3) -> Vec3 {
     wow_to_bevy((STAGE + local * framing.stage_scale).to_array())
 }
 
@@ -426,7 +424,7 @@ mod tests {
     #[test]
     fn the_figure_stands_to_the_left_on_the_ground_and_both_fit() {
         let lamp = frame([[-0.11, -0.57, -0.01], [0.29, 1.71, 4.09]]);
-        let ViewAxes { right, up, .. } = view_axes();
+        let WowViewAxes { right, up, .. } = wow_view_axes();
         assert!(lamp.figure_feet.z.abs() < 1e-6, "on the ground");
         let figure_u = lamp.figure_feet.dot(right);
         let lamp_left = [-0.11f32, 0.29]
