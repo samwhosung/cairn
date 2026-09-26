@@ -78,7 +78,11 @@ type Part<'a> = (
 );
 
 fn takes_a_side(material: Option<&ModelMaterial>) -> bool {
-    material.is_some_and(|m| matches!(m.base.alpha_mode, AlphaMode::Blend) && !m.extension.is_wmo())
+    material.is_some_and(|m| {
+        matches!(m.base.alpha_mode, AlphaMode::Blend)
+            && !m.extension.is_wmo()
+            && !m.extension.is_clutter()
+    })
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]

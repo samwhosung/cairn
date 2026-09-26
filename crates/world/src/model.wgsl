@@ -56,6 +56,7 @@ struct WowLight {
 @group(#{MATERIAL_BIND_GROUP}) @binding(90) var<storage, read> wow_light: WowLight;
 
 const VANILLA_ALPHA_KEY: f32 = 0.8784314;
+const DETAIL_DOODAD_ALPHA_KEY: f32 = 0.5019608;
 const DETAIL_DOODAD_MIP_BIAS: f32 = 0.25;
 const F32_EPSILON: f32 = 1.1920929e-7;
 const SKY_FAR_CLIP_Z: f32 = 0.0;
@@ -435,6 +436,9 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         let u = (z_eye - m.clutter_fade.x) / max(m.clutter_fade.y - m.clutter_fade.x, 0.001);
         let ramp = clamp((254.0 - 256.0 * u) / 255.0, 0.0, 252.0 / 255.0);
         base_color.a = base_color.a * ramp;
+        if (base_color.a < DETAIL_DOODAD_ALPHA_KEY) {
+            discard;
+        }
     }
 
     let interior_prop = is_interior() && !is_wmo();

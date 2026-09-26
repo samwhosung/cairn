@@ -9,6 +9,7 @@ mod atmosphere;
 mod billboard;
 mod celestial;
 mod clouds;
+mod clutter;
 pub mod collision;
 pub mod coords;
 mod dbc_table;
@@ -139,6 +140,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<Residency>()
         .init_resource::<LeftOut>()
         .init_resource::<stream::Streamer>()
+        .init_resource::<clutter::Clutter>()
         .init_resource::<Placements>()
         .init_resource::<models::Furnished>()
         .init_resource::<room::CameraRoom>()
@@ -153,7 +155,14 @@ impl Plugin for WorldPlugin {
         .init_resource::<portal::ExteriorWindows>()
         .add_message::<rig_events::AnimEvent>()
         .add_message::<unit::UnitAttack>()
-        .add_systems(Startup, (atmosphere::load_catalog, wmo_areas::load))
+        .add_systems(
+            Startup,
+            (
+                atmosphere::load_catalog,
+                wmo_areas::load,
+                clutter::load_effects,
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -165,6 +174,7 @@ impl Plugin for WorldPlugin {
                 (
                     placements::track_placements,
                     models::furnish,
+                    clutter::stream_clutter,
                     portal::compute_wmo_pvs,
                     visibility::apply_model_visibility,
                     interior::bump_wmo_generation,
@@ -228,19 +238,21 @@ impl TimeOfDay {
 }
 
 /// Whether everything around the camera has arrived: every terrain tile the far clip reaches is
-/// drawn or known to be missing, every model it places is drawn with its textures, the horizon
-/// ring is up, and a painted sky a building shows is built or known to be missing.
+/// drawn or known to be missing, every model it places is drawn with its textures, the ground
+/// clutter near it is built, the horizon ring is up, and a painted sky a building shows is built
+/// or known to be missing.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Resource, Default, Debug)]
 pub struct Residency {
     terrain: bool,
     models: bool,
+    clutter: bool,
     horizon: bool,
     skybox_pending: bool,
 }
 
 impl Residency {
     pub fn settled(&self) -> bool {
-        self.terrain && self.models && self.horizon && !self.skybox_pending
+        self.terrain && self.models && self.clutter && self.horizon && !self.skybox_pending
     }
 }

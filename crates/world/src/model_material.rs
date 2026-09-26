@@ -16,7 +16,7 @@ use model::{FogPolicy, ModelBlend, WmoBatchClass};
 
 use crate::draw_order::OrderedMaterialPlugin;
 use crate::model::{ATTRIBUTE_WOW_JOINT_INDEX, ATTRIBUTE_WOW_JOINT_WEIGHT};
-use crate::sky_order::{BAND_DROP, FAR_SIDE_SORT_RUNG};
+use crate::sky_order::{BAND_DROP, CLUTTER_SORT_RUNG, FAR_SIDE_SORT_RUNG};
 
 pub type ModelMaterial = ExtendedMaterial<StandardMaterial, ModelExtension>;
 
@@ -29,6 +29,8 @@ const BATCH_ORDER_SORT_CAP: f32 = 0.9;
 /// A depth-prime twin sorts this many yards ahead of its model's colour batches, so a fading body
 /// primes its whole depth before any of it blends.
 const DEPTH_PRIME_SORT_BIAS: f32 = -8.0;
+/// Ground clutter's fade by view depth starts at this share of where it ends.
+const CLUTTER_FADE_START: f32 = 0.75;
 
 const NO_DEPTH_WRITE: u16 = 1;
 const NO_DEPTH_TEST: u16 = 1 << 1;
@@ -57,12 +59,14 @@ pub struct ModelKey {
     sky_depth: bool,
     far_side: bool,
     sight: bool,
+    clutter: bool,
 }
 
 impl From<&ModelExtension> for ModelKey {
     fn from(e: &ModelExtension) -> Self {
         let markers = e.clutter_fade.z as u16;
         Self {
+            clutter: e.is_clutter(),
             fade: e.model_flags.y > 0.5,
             additive: markers & ADDITIVE != 0,
             no_depth_write: markers & NO_DEPTH_WRITE != 0,
@@ -101,6 +105,10 @@ pub struct ModelExtension {
 impl ModelExtension {
     pub(crate) fn is_wmo(&self) -> bool {
         self.model_flags.x > 0.5
+    }
+
+    pub(crate) fn is_clutter(&self) -> bool {
+        self.clutter_fade.w > 0.5
     }
 }
 
@@ -147,7 +155,7 @@ impl MaterialExtension for ModelExtension {
                 ds.depth_compare = CompareFunction::Always;
             }
         }
-        if key.far_side {
+        if key.far_side || key.clutter {
             crate::sky_order::sort_only(descriptor);
         }
         if key.sky_depth {
@@ -482,6 +490,36 @@ fn depth_prime(look: &BatchLook, light: &Buffer) -> ModelMaterial {
             model_flags: Vec4::ZERO,
             sun_scale: Vec4::new(GroundShade::Entity.selector(), 0.0, 0.0, 0.0),
             tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            sidn: Vec4::ZERO,
+            anim_slots: Vec4::ZERO,
+            light: light.clone(),
+        },
+    }
+}
+
+/// Ground clutter as the client draws it: both faces, writing depth, cut out and blended, faded
+/// out by view depth up to `fade_far`. It sorts on a rung of its own, since which draws come
+/// before a blended one is part of its picture.
+pub(crate) fn clutter_material(
+    texture: Option<Handle<Image>>,
+    fade_far: f32,
+    light: &Buffer,
+) -> ModelMaterial {
+    ExtendedMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: texture,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            cull_mode: None,
+            depth_bias: CLUTTER_SORT_RUNG,
+            ..StandardMaterial::default()
+        },
+        extension: ModelExtension {
+            clutter_fade: Vec4::new(fade_far * CLUTTER_FADE_START, fade_far, 0.0, 1.0),
+            model_flags: Vec4::ZERO,
+            sun_scale: Vec4::new(GroundShade::Entity.selector(), 0.0, 0.0, 0.0),
+            tint: Vec4::ONE,
             sidn: Vec4::ZERO,
             anim_slots: Vec4::ZERO,
             light: light.clone(),
