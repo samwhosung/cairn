@@ -92,6 +92,9 @@ impl McshChunk {
 /// The MCNK header flag that bars movers from the chunk.
 pub const MCNK_IMPASSABLE: u32 = 0x2;
 
+/// The MCNK header flag of a chunk under ocean.
+pub const MCNK_OCEAN: u32 = 0x8;
+
 /// The MCNK header flag that marks the chunk's alpha maps as authored at 64×64: without it the
 /// client copies their last row and column from their neighbours.
 pub const MCNK_DO_NOT_FIX_ALPHA: u32 = 0x8000;

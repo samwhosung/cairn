@@ -10,7 +10,7 @@ pub use alpha::CombinedAlphaMap;
 pub use error::Error;
 pub use liquid::{LiquidVertex, MclqChunk};
 pub use mcnk::{
-    MCNK_DO_NOT_FIX_ALPHA, MCNK_IMPASSABLE, McalChunk, MclyChunk, MclyFlags, MclyLayer, McnkChunk,
-    McnkHeader, McnrChunk, McshChunk, McvtChunk, VertexNormal,
+    MCNK_DO_NOT_FIX_ALPHA, MCNK_IMPASSABLE, MCNK_OCEAN, McalChunk, MclyChunk, MclyFlags, MclyLayer,
+    McnkChunk, McnkHeader, McnrChunk, McshChunk, McvtChunk, VertexNormal,
 };
 pub use root::{DoodadPlacement, RootAdt, WmoPlacement, parse_adt};
